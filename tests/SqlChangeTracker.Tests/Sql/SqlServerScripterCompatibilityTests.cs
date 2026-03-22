@@ -1,0 +1,255 @@
+using SqlChangeTracker.Sql;
+using Xunit;
+
+namespace SqlChangeTracker.Tests.Sql;
+
+public sealed class SqlServerScripterCompatibilityTests
+{
+    [Fact]
+    public void TrimOuterBlankLines_RemovesLeadingAndTrailingBlankLines()
+    {
+        var text = "\r\n\r\nCREATE VIEW [dbo].[Sample]\r\nAS\r\nSELECT 1;\r\n\r\n";
+
+        var trimmed = SqlServerScripter.TrimOuterBlankLines(text);
+
+        Assert.Equal($"CREATE VIEW [dbo].[Sample]{Environment.NewLine}AS{Environment.NewLine}SELECT 1;", trimmed);
+    }
+
+    [Fact]
+    public void GetModuleFormat_ReadsReferenceSpacing_WhenSetOptionsAreOff()
+    {
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            string.Empty,
+            "CREATE PROCEDURE [dbo].[Sample]",
+            "AS",
+            "SELECT 1",
+            string.Empty,
+            "GO"
+        };
+
+        var format = SqlServerScripter.GetModuleFormat(referenceLines);
+
+        Assert.NotNull(format);
+        Assert.Equal(1, format!.LeadingBlankLines);
+        Assert.Equal(1, format.BlankLineBeforeGo);
+        Assert.True(format.HasGoAfterDefinition);
+    }
+
+    [Fact]
+    public void BuildReferenceTableColumnTypeMap_ReadsCompatibleTypeTokens()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [dbo].[DatabaseLog]",
+            "(",
+            "[DatabaseLogID] [int] NOT NULL,",
+            "[DatabaseUser] [sys].[sysname] NOT NULL,",
+            "[TSQL] [nvarchar] (max) NOT NULL,",
+            "[XmlEvent] [xml] (CONTENT [dbo].[DatabaseLogSchema]) NOT NULL",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibilityMap = SqlServerScripter.BuildReferenceTableColumnTypeMap(referenceLines);
+
+        Assert.NotNull(compatibilityMap);
+        Assert.Equal("[sys].[sysname]", compatibilityMap!["DatabaseUser"]);
+        Assert.Equal("[nvarchar] (max)", compatibilityMap["TSQL"]);
+        Assert.Equal("[xml] (CONTENT [dbo].[DatabaseLogSchema])", compatibilityMap["XmlEvent"]);
+    }
+
+    [Fact]
+    public void GetCompatibleTypeToken_PreservesEquivalentBuiltInAndSystemTokens()
+    {
+        IReadOnlyDictionary<string, string> compatibilityMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["DatabaseUser"] = "[sys].[sysname]",
+            ["TSQL"] = "[nvarchar] (max)"
+        };
+
+        var sysnameType = SqlServerScripter.GetCompatibleTypeToken("[sysname]", compatibilityMap, "DatabaseUser");
+        var nvarcharType = SqlServerScripter.GetCompatibleTypeToken("[nvarchar] (MAX)", compatibilityMap, "TSQL");
+
+        Assert.Equal("[sys].[sysname]", sysnameType);
+        Assert.Equal("[nvarchar] (max)", nvarcharType);
+    }
+
+    [Theory]
+    [InlineData(false, "[xml] (CONTENT [Person].[AdditionalContactInfoSchemaCollection])")]
+    [InlineData(true, "[xml] (DOCUMENT [dbo].[DocumentSchema])")]
+    public void ApplyXmlSchemaBinding_AppendsBindingClause(bool isDocument, string expected)
+    {
+        var type = SqlServerScripter.ApplyXmlSchemaBinding(
+            "[xml]",
+            "xml",
+            isUserDefined: false,
+            isDocument,
+            isDocument ? "dbo" : "Person",
+            isDocument ? "DocumentSchema" : "AdditionalContactInfoSchemaCollection");
+
+        Assert.Equal(expected, type);
+    }
+
+    [Fact]
+    public void TryGetCompatibleReferenceCreateTableBlock_RejectsXmlSchemaBindingMismatches()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [Person].[Person]",
+            "(",
+            "[AdditionalContactInfo] [xml] (CONTENT [Person].[AdditionalContactInfoSchemaCollection]) NULL",
+            ") ON [PRIMARY]"
+        };
+
+        var generatedCreateBlock = new List<string>
+        {
+            "CREATE TABLE [Person].[Person]",
+            "(",
+            "[AdditionalContactInfo] [xml] NULL",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibleBlock = SqlServerScripter.TryGetCompatibleReferenceCreateTableBlock(referenceLines, generatedCreateBlock);
+
+        Assert.Null(compatibleBlock);
+    }
+
+    [Fact]
+    public void TryGetCompatibleReferenceCreateTableBlock_RejectsIdentityNotForReplicationMismatches()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [Person].[Address]",
+            "(",
+            "[AddressID] [int] NOT NULL IDENTITY(1, 1) NOT FOR REPLICATION",
+            ") ON [PRIMARY]"
+        };
+
+        var generatedCreateBlock = new List<string>
+        {
+            "CREATE TABLE [Person].[Address]",
+            "(",
+            "[AddressID] [int] NOT NULL IDENTITY(1, 1)",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibleBlock = SqlServerScripter.TryGetCompatibleReferenceCreateTableBlock(referenceLines, generatedCreateBlock);
+
+        Assert.Null(compatibleBlock);
+    }
+
+    [Fact]
+    public void TryGetCompatibleReferenceCreateTableBlock_RejectsSemanticMismatches()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [dbo].[Employee]",
+            "(",
+            "[BusinessEntityID] [int] NOT NULL,",
+            "[rowguid] [uniqueidentifier] NOT NULL ROWGUIDCOL",
+            ") ON [PRIMARY]"
+        };
+
+        var generatedCreateBlock = new List<string>
+        {
+            "CREATE TABLE [dbo].[Employee]",
+            "(",
+            "[BusinessEntityID] [int] NOT NULL,",
+            "[rowguid] [uniqueidentifier] NOT NULL",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibleBlock = SqlServerScripter.TryGetCompatibleReferenceCreateTableBlock(referenceLines, generatedCreateBlock);
+
+        Assert.Null(compatibleBlock);
+    }
+
+    [Fact]
+    public void TryGetCompatibleReferenceCreateTableBlock_PreservesEquivalentComputedColumnConvertTokens()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [Sales].[SalesOrderHeader]",
+            "(",
+            "[SalesOrderNumber] AS (isnull(N'SO'+CONVERT([nvarchar](23),[SalesOrderID],(0)),N'*** ERROR ***'))",
+            ") ON [PRIMARY]"
+        };
+
+        var generatedCreateBlock = new List<string>
+        {
+            "CREATE TABLE [Sales].[SalesOrderHeader]",
+            "(",
+            "[SalesOrderNumber] AS (isnull(N'SO'+CONVERT([nvarchar](23),[SalesOrderID]),N'*** ERROR ***'))",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibleBlock = SqlServerScripter.TryGetCompatibleReferenceCreateTableBlock(referenceLines, generatedCreateBlock);
+
+        Assert.NotNull(compatibleBlock);
+        Assert.Equal(referenceLines, compatibleBlock);
+    }
+
+    [Fact]
+    public void ReorderTableKeyAndIndexStatements_UsesCompatibleReferenceOrder()
+    {
+        var referenceLines = new[]
+        {
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [CK_Document_Status] CHECK (([Status]>=(1) AND [Status]<=(3)))",
+            "GO",
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [PK_Document_DocumentNode] PRIMARY KEY CLUSTERED ([DocumentNode]) ON [PRIMARY]",
+            "GO",
+            "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_DocumentLevel_DocumentNode] ON [Production].[Document] ([DocumentLevel], [DocumentNode]) ON [PRIMARY]",
+            "GO",
+            "CREATE NONCLUSTERED INDEX [IX_Document_FileName_Revision] ON [Production].[Document] ([FileName], [Revision]) ON [PRIMARY]",
+            "GO",
+            "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_rowguid] ON [Production].[Document] ([rowguid]) ON [PRIMARY]",
+            "GO",
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [UQ__Document__F73921F7C81C642F] UNIQUE NONCLUSTERED ([rowguid]) ON [PRIMARY]",
+            "GO",
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [FK_Document_Employee_Owner] FOREIGN KEY ([Owner]) REFERENCES [HumanResources].[Employee] ([BusinessEntityID])",
+            "GO"
+        };
+
+        var keyConstraintLines = new List<string>
+        {
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [PK_Document_DocumentNode] PRIMARY KEY CLUSTERED ([DocumentNode]) ON [PRIMARY]",
+            "GO",
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [UQ__Document__F73921F7C81C642F] UNIQUE NONCLUSTERED ([rowguid]) ON [PRIMARY]",
+            "GO"
+        };
+
+        var nonConstraintIndexLines = new List<string>
+        {
+            "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_DocumentLevel_DocumentNode] ON [Production].[Document] ([DocumentLevel], [DocumentNode]) ON [PRIMARY]",
+            "GO",
+            "CREATE NONCLUSTERED INDEX [IX_Document_FileName_Revision] ON [Production].[Document] ([FileName], [Revision]) ON [PRIMARY]",
+            "GO",
+            "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_rowguid] ON [Production].[Document] ([rowguid]) ON [PRIMARY]",
+            "GO"
+        };
+
+        var reordered = SqlServerScripter.ReorderTableKeyAndIndexStatements(
+            referenceLines,
+            keyConstraintLines,
+            nonConstraintIndexLines,
+            Array.Empty<string>());
+
+        Assert.Equal(new[]
+        {
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [PK_Document_DocumentNode] PRIMARY KEY CLUSTERED ([DocumentNode]) ON [PRIMARY]",
+            "GO",
+            "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_DocumentLevel_DocumentNode] ON [Production].[Document] ([DocumentLevel], [DocumentNode]) ON [PRIMARY]",
+            "GO",
+            "CREATE NONCLUSTERED INDEX [IX_Document_FileName_Revision] ON [Production].[Document] ([FileName], [Revision]) ON [PRIMARY]",
+            "GO",
+            "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_rowguid] ON [Production].[Document] ([rowguid]) ON [PRIMARY]",
+            "GO",
+            "ALTER TABLE [Production].[Document] ADD CONSTRAINT [UQ__Document__F73921F7C81C642F] UNIQUE NONCLUSTERED ([rowguid]) ON [PRIMARY]",
+            "GO"
+        }, reordered);
+    }
+}
