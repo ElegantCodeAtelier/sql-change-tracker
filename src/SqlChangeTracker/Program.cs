@@ -1,3 +1,4 @@
+using System.Reflection;
 using Spectre.Console.Cli;
 using SqlChangeTracker.Commands;
 
@@ -7,6 +8,18 @@ internal static class Program
 {
     public static int Main(string[] args)
     {
+        if (args.Any(arg =>
+            string.Equals(arg, "--version", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(arg, "-v", StringComparison.OrdinalIgnoreCase)))
+        {
+            var raw = typeof(Program).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion ?? "unknown";
+            var plus = raw.IndexOf('+');
+            Console.WriteLine(plus >= 0 ? raw[..plus] : raw);
+            return Config.ExitCodes.Success;
+        }
+
         if (args.Any(arg =>
             string.Equals(arg, "--config", StringComparison.OrdinalIgnoreCase)
             || arg.StartsWith("--config=", StringComparison.OrdinalIgnoreCase)))

@@ -1,15 +1,27 @@
 # CLI
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-03-24
 
 ## Command Overview
 Binary: sqlct.
 
 Global flags:
+- --version, -v: print the installed sqlct semantic version and exit.
 - --project-dir <path>: project directory location (default current working directory).
 - --verbose.
 - --json: machine-readable output.
+
+## Version Flag
+`
+sqlct --version
+sqlct -v
+`
+Behavior:
+- Prints the installed semantic version string (e.g. `0.1.0`) to stdout and exits with code 0.
+- Works without any project files or initialization.
+- Output is stable and suitable for scripting/CI use.
+- No JSON output is produced for this flag.
 
 ## CLI Shape (Selected)
 Use git-style verbs: short, task-oriented commands with clear intent.
