@@ -2,6 +2,7 @@ using Spectre.Console.Cli;
 using System.Threading;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Output;
+using SqlChangeTracker.Progress;
 using SqlChangeTracker.Sync;
 
 namespace SqlChangeTracker.Commands;
@@ -13,7 +14,8 @@ internal sealed class PullCommand : Command<PullCommandSettings>
     public override int Execute(CommandContext context, PullCommandSettings settings, CancellationToken cancellationToken)
     {
         var output = new OutputFormatter(settings.Json);
-        var result = SyncService.RunPull(settings.ProjectDir);
+        var showProgress = !settings.Json && !settings.NoProgress;
+        var result = ProgressRunner.Run("Running pull...", showProgress, () => SyncService.RunPull(settings.ProjectDir));
         if (!result.Success)
         {
             output.WriteError(new ErrorResult("pull", result.Error!));

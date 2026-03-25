@@ -10,6 +10,14 @@ Last updated: 2026-03-11
 - Do not list optional compatibility input files as output entities.
 - `status`, `diff`, and `pull` may include warnings for skipped unsupported object types or invalid script names.
 
+## Progress Spinner
+- `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running.
+- The spinner is cleared before results are printed; it does not appear in final output.
+- The spinner is suppressed when:
+  - `--json` is used (machine-readable mode must not include spinner characters).
+  - `--no-progress` is explicitly passed.
+  - The output is not an interactive terminal (e.g., redirected stdout, CI environments without TTY).
+
 ### Example: status
 ```text
 Status: target=db

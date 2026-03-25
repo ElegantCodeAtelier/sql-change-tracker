@@ -2,6 +2,7 @@ using Spectre.Console.Cli;
 using System.Threading;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Output;
+using SqlChangeTracker.Progress;
 using SqlChangeTracker.Sync;
 
 namespace SqlChangeTracker.Commands;
@@ -13,7 +14,8 @@ internal sealed class StatusCommand : Command<StatusCommandSettings>
     public override int Execute(CommandContext context, StatusCommandSettings settings, CancellationToken cancellationToken)
     {
         var output = new OutputFormatter(settings.Json);
-        var result = SyncService.RunStatus(settings.ProjectDir, settings.Target);
+        var showProgress = !settings.Json && !settings.NoProgress;
+        var result = ProgressRunner.Run("Running status...", showProgress, () => SyncService.RunStatus(settings.ProjectDir, settings.Target));
         if (!result.Success)
         {
             output.WriteError(new ErrorResult("status", result.Error!));
