@@ -11,6 +11,7 @@ Global flags:
 - --project-dir <path>: project directory location (default current working directory).
 - --verbose.
 - --json: machine-readable output.
+- --no-progress: disable the progress spinner (see Flag Semantics).
 
 ## Version Flag
 `
@@ -56,6 +57,14 @@ Common flag behavior across commands.
 ### --object <schema.name>
 - Identifies a single object for diff output (`schema.name` format).
 - Must be unique across object types; if ambiguous, return an error.
+
+### --no-progress
+- Disables the progress spinner for `status`, `diff`, and `pull`.
+- The progress spinner is enabled by default in interactive terminals.
+- The progress spinner is automatically suppressed when:
+  - `--json` is used.
+  - `--no-progress` is used.
+  - The output is not an interactive terminal (e.g., redirected output, CI pipelines).
 
 ### init
 Initialize project configuration and schema folder structure.

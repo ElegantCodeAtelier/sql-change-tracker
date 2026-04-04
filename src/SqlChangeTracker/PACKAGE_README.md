@@ -19,9 +19,9 @@ It focuses on deterministic output and schema-folder workflows that are Git and 
 ```text
 sqlct init [--project-dir <path>]
 sqlct config [--project-dir <path>]
-sqlct status [--project-dir <path>] [--target <db|folder>]
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <schema.name>]
-sqlct pull [--project-dir <path>]
+sqlct status [--project-dir <path>] [--target <db|folder>] [--no-progress]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <schema.name>] [--no-progress]
+sqlct pull [--project-dir <path>] [--no-progress]
 ```
 
 Current v1 runtime scope for `status`, `diff`, and `pull` covers:

@@ -9,6 +9,9 @@ internal abstract class GlobalSettings : CommandSettings
 
     [CommandOption("--verbose")]
     public bool Verbose { get; set; }
+
+    [CommandOption("--no-progress")]
+    public bool NoProgress { get; set; }
 }
 
 internal class ProjectCommandSettings : GlobalSettings

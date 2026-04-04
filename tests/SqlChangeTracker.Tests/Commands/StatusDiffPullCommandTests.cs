@@ -192,6 +192,136 @@ public sealed class StatusDiffPullCommandTests
         Assert.Equal(ExitCodes.ConnectionFailure, exitCode);
     }
 
+    [Fact]
+    public void StatusCommand_WithNoProgressFlag_ReturnsSuccess()
+    {
+        var stub = new StubSyncCommandService
+        {
+            StatusResult = CommandExecutionResult<StatusResult>.Ok(
+                new StatusResult(
+                    "status",
+                    ".\\schema",
+                    "db",
+                    new StatusSummary(0, 0, 0),
+                    [],
+                    []),
+                ExitCodes.Success)
+        };
+
+        var command = new StatusCommand { SyncService = stub };
+        var exitCode = command.Execute(CreateContext("status"), new StatusCommandSettings { Target = "db", NoProgress = true }, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
+    [Fact]
+    public void StatusCommand_WithJsonFlag_SuppressesProgressAndReturnsSuccess()
+    {
+        var stub = new StubSyncCommandService
+        {
+            StatusResult = CommandExecutionResult<StatusResult>.Ok(
+                new StatusResult(
+                    "status",
+                    ".\\schema",
+                    "db",
+                    new StatusSummary(0, 0, 0),
+                    [],
+                    []),
+                ExitCodes.Success)
+        };
+
+        var command = new StatusCommand { SyncService = stub };
+        var exitCode = command.Execute(CreateContext("status"), new StatusCommandSettings { Target = "db", Json = true }, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
+    [Fact]
+    public void DiffCommand_WithNoProgressFlag_ReturnsSuccess()
+    {
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Ok(
+                new DiffResult(
+                    "diff",
+                    ".\\schema",
+                    "db",
+                    null,
+                    string.Empty,
+                    []),
+                ExitCodes.Success)
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var exitCode = command.Execute(CreateContext("diff"), new DiffCommandSettings { NoProgress = true }, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
+    [Fact]
+    public void DiffCommand_WithJsonFlag_SuppressesProgressAndReturnsSuccess()
+    {
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Ok(
+                new DiffResult(
+                    "diff",
+                    ".\\schema",
+                    "db",
+                    null,
+                    string.Empty,
+                    []),
+                ExitCodes.Success)
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var exitCode = command.Execute(CreateContext("diff"), new DiffCommandSettings { Json = true }, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
+    [Fact]
+    public void PullCommand_WithNoProgressFlag_ReturnsSuccess()
+    {
+        var stub = new StubSyncCommandService
+        {
+            PullResult = CommandExecutionResult<PullResult>.Ok(
+                new PullResult(
+                    "pull",
+                    ".\\schema",
+                    new PullSummary(0, 0, 0, 1),
+                    [],
+                    []),
+                ExitCodes.Success)
+        };
+
+        var command = new PullCommand { SyncService = stub };
+        var exitCode = command.Execute(CreateContext("pull"), new PullCommandSettings { NoProgress = true }, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
+    [Fact]
+    public void PullCommand_WithJsonFlag_SuppressesProgressAndReturnsSuccess()
+    {
+        var stub = new StubSyncCommandService
+        {
+            PullResult = CommandExecutionResult<PullResult>.Ok(
+                new PullResult(
+                    "pull",
+                    ".\\schema",
+                    new PullSummary(0, 0, 0, 1),
+                    [],
+                    []),
+                ExitCodes.Success)
+        };
+
+        var command = new PullCommand { SyncService = stub };
+        var exitCode = command.Execute(CreateContext("pull"), new PullCommandSettings { Json = true }, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
     private static CommandContext CreateContext(string name)
         => new([], new EmptyRemainingArguments(), name, null!);
 
@@ -214,13 +344,13 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
-        public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target)
+        public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
-        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName)
+        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
             => DiffResult;
 
-        public CommandExecutionResult<PullResult> RunPull(string? projectDir)
+        public CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null)
             => PullResult;
     }
 }
