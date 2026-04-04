@@ -1,3 +1,4 @@
+using System.Reflection;
 using Spectre.Console.Cli;
 using SqlChangeTracker.Commands;
 
@@ -19,6 +20,7 @@ internal static class Program
         app.Configure(config =>
         {
             config.SetApplicationName("sqlct");
+            config.SetApplicationVersion(GetCleanVersion());
             config.AddCommand<InitCommand>("init")
                 .WithDescription("Initialize project configuration and schema folder structure.");
             config.AddCommand<ConfigCommand>("config")
@@ -32,5 +34,14 @@ internal static class Program
         });
 
         return app.Run(args);
+    }
+
+    private static string GetCleanVersion()
+    {
+        var raw = typeof(Program).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
+        var plus = raw.IndexOf('+');
+        return plus >= 0 ? raw[..plus] : raw;
     }
 }

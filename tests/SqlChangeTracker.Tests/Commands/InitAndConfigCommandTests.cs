@@ -6,6 +6,16 @@ namespace SqlChangeTracker.Tests.Commands;
 
 public sealed class InitAndConfigCommandTests
 {
+    [Theory]
+    [InlineData("--version")]
+    [InlineData("-v")]
+    public void Version_ReturnsSuccess(string flag)
+    {
+        var exitCode = Program.Main([flag]);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+    }
+
     [Fact]
     public void Init_WithProjectDir_CreatesProjectStructureAndConfig()
     {
