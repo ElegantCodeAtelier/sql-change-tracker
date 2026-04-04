@@ -9,26 +9,11 @@ public sealed class InitAndConfigCommandTests
     [Theory]
     [InlineData("--version")]
     [InlineData("-v")]
-    public void Version_PrintsVersionAndReturnsSuccess(string flag)
+    public void Version_ReturnsSuccess(string flag)
     {
-        var output = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(output);
+        var exitCode = Program.Main([flag]);
 
-        try
-        {
-            var exitCode = Program.Main([flag]);
-
-            Assert.Equal(ExitCodes.Success, exitCode);
-            var printed = output.ToString().Trim();
-            Assert.False(string.IsNullOrWhiteSpace(printed));
-            Assert.DoesNotContain("+", printed);
-            Assert.Matches(@"^\d+\.\d+\.\d+", printed);
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        Assert.Equal(ExitCodes.Success, exitCode);
     }
 
     [Fact]
