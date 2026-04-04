@@ -8,11 +8,11 @@ namespace SqlChangeTracker.Sync;
 
 internal interface ISyncCommandService
 {
-    CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target);
+    CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null);
 
-    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName);
+    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null);
 
-    CommandExecutionResult<PullResult> RunPull(string? projectDir);
+    CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null);
 }
 
 internal sealed record CommandExecutionResult<T>(
@@ -87,7 +87,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         _mapper = mapper;
     }
 
-    public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target)
+    public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
     {
         if (!TryParseTarget(target, out var comparisonTarget))
         {
@@ -105,7 +105,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<StatusResult>.Failure(projectResult.Error!, projectResult.ExitCode);
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!);
+        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
         if (!snapshotResult.Success)
         {
             return CommandExecutionResult<StatusResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
@@ -132,7 +132,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<StatusResult>.Ok(status, exitCode);
     }
 
-    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName)
+    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
     {
         if (!TryParseTarget(target, out var comparisonTarget))
         {
@@ -150,7 +150,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<DiffResult>.Failure(projectResult.Error!, projectResult.ExitCode);
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!);
+        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
         if (!snapshotResult.Success)
         {
             return CommandExecutionResult<DiffResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
@@ -209,7 +209,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             string.IsNullOrWhiteSpace(combinedDiff) ? ExitCodes.Success : ExitCodes.DiffExists);
     }
 
-    public CommandExecutionResult<PullResult> RunPull(string? projectDir)
+    public CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null)
     {
         var projectResult = LoadProject(projectDir);
         if (!projectResult.Success)
@@ -217,7 +217,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<PullResult>.Failure(projectResult.Error!, projectResult.ExitCode);
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!);
+        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
         if (!snapshotResult.Success)
         {
             return CommandExecutionResult<PullResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
@@ -239,11 +239,16 @@ internal sealed class SyncCommandService : ISyncCommandService
         var updated = 0;
         var deleted = 0;
         var unchanged = 0;
+        var writeIndex = 0;
+        var writeTotal = keys.Length;
 
         foreach (var key in keys)
         {
+            writeIndex++;
             snapshot.DbObjects.TryGetValue(key, out var dbObject);
             snapshot.FolderObjects.TryGetValue(key, out var folderObject);
+            var displayName = (dbObject ?? folderObject)?.DisplayName ?? key;
+            progress?.Invoke($"Writing objects ({writeIndex}/{writeTotal}): {displayName}");
 
             if (dbObject is not null && folderObject is null)
             {
@@ -397,15 +402,16 @@ internal sealed class SyncCommandService : ISyncCommandService
             ExitCodes.Success);
     }
 
-    private CommandExecutionResult<ComparisonSnapshot> BuildSnapshot(ProjectContext context)
+    private CommandExecutionResult<ComparisonSnapshot> BuildSnapshot(ProjectContext context, Action<string>? progress = null)
     {
+        progress?.Invoke("Scanning schema folder...");
         var folderResult = ScanFolder(context.ProjectDir);
         if (!folderResult.Success)
         {
             return CommandExecutionResult<ComparisonSnapshot>.Failure(folderResult.Error!, folderResult.ExitCode);
         }
 
-        var dbResult = ScanDatabase(context);
+        var dbResult = ScanDatabase(context, progress);
         if (!dbResult.Success)
         {
             return CommandExecutionResult<ComparisonSnapshot>.Failure(dbResult.Error!, dbResult.ExitCode);
@@ -510,8 +516,9 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, warnings), ExitCodes.Success);
     }
 
-    private CommandExecutionResult<ScanResult> ScanDatabase(ProjectContext context)
+    private CommandExecutionResult<ScanResult> ScanDatabase(ProjectContext context, Action<string>? progress = null)
     {
+        progress?.Invoke("Connecting to database...");
         IReadOnlyList<DbObjectInfo> listedObjects;
         try
         {
@@ -530,13 +537,20 @@ internal sealed class SyncCommandService : ISyncCommandService
             .Select(item => new CommandWarning("unsupported_object_type", $"skipped unsupported object type '{item}'."))
             .ToList();
 
+        var activeObjects = listedObjects
+            .Where(item => CoreObjectTypes.Contains(item.ObjectType, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var total = activeObjects.Length;
+        var scriptIndex = 0;
         var objects = new Dictionary<string, InternalObject>(StringComparer.OrdinalIgnoreCase);
-        foreach (var dbObject in listedObjects
-                     .Where(item => CoreObjectTypes.Contains(item.ObjectType, StringComparer.OrdinalIgnoreCase))
-                     .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase))
+        foreach (var dbObject in activeObjects)
         {
+            scriptIndex++;
+            progress?.Invoke($"Scripting objects ({scriptIndex}/{total}): {dbObject.Schema}.{dbObject.Name}");
             string relativePath;
             try
             {

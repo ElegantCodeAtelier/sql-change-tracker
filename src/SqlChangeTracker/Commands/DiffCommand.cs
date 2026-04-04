@@ -15,7 +15,8 @@ internal sealed class DiffCommand : Command<DiffCommandSettings>
     {
         var output = new OutputFormatter(settings.Json);
         var showProgress = !settings.Json && !settings.NoProgress;
-        var result = ProgressRunner.Run("Running diff...", showProgress, () => SyncService.RunDiff(settings.ProjectDir, settings.Target, settings.ObjectName));
+        var result = ProgressRunner.Run("Running diff...", showProgress,
+            progress => SyncService.RunDiff(settings.ProjectDir, settings.Target, settings.ObjectName, progress));
         if (!result.Success)
         {
             output.WriteError(new ErrorResult("diff", result.Error!));

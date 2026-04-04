@@ -11,7 +11,7 @@ Last updated: 2026-03-11
 - `status`, `diff`, and `pull` may include warnings for skipped unsupported object types or invalid script names.
 
 ## Progress Spinner
-- `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running.
+- `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running, with per-step status updates (e.g. "Scripting objects (3/42): dbo.Customer").
 - The spinner is cleared before results are printed; it does not appear in final output.
 - The spinner is suppressed when:
   - `--json` is used (machine-readable mode must not include spinner characters).

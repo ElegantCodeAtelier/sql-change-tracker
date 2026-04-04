@@ -15,7 +15,8 @@ internal sealed class PullCommand : Command<PullCommandSettings>
     {
         var output = new OutputFormatter(settings.Json);
         var showProgress = !settings.Json && !settings.NoProgress;
-        var result = ProgressRunner.Run("Running pull...", showProgress, () => SyncService.RunPull(settings.ProjectDir));
+        var result = ProgressRunner.Run("Running pull...", showProgress,
+            progress => SyncService.RunPull(settings.ProjectDir, progress));
         if (!result.Success)
         {
             output.WriteError(new ErrorResult("pull", result.Error!));

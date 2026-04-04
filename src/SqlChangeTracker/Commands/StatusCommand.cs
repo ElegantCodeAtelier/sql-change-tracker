@@ -15,7 +15,8 @@ internal sealed class StatusCommand : Command<StatusCommandSettings>
     {
         var output = new OutputFormatter(settings.Json);
         var showProgress = !settings.Json && !settings.NoProgress;
-        var result = ProgressRunner.Run("Running status...", showProgress, () => SyncService.RunStatus(settings.ProjectDir, settings.Target));
+        var result = ProgressRunner.Run("Running status...", showProgress,
+            progress => SyncService.RunStatus(settings.ProjectDir, settings.Target, progress));
         if (!result.Success)
         {
             output.WriteError(new ErrorResult("status", result.Error!));

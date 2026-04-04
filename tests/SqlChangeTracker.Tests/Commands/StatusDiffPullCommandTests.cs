@@ -344,13 +344,13 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
-        public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target)
+        public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
-        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName)
+        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
             => DiffResult;
 
-        public CommandExecutionResult<PullResult> RunPull(string? projectDir)
+        public CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null)
             => PullResult;
     }
 }
