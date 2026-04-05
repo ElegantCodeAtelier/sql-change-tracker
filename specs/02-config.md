@@ -25,7 +25,8 @@ Current draft shape:
     "trustServerCertificate": false
   },
   "options": {
-    "orderByDependencies": true
+    "orderByDependencies": true,
+    "parallelism": 0
   }
 }
 ```
@@ -57,6 +58,7 @@ Deprecated runtime fields removed from v1 contract:
 - Plaintext passwords are acceptable for MVP; future integration with OS secret store.
 - Config versioning planned for migrations.
 - `trustServerCertificate` mirrors TLS environments with self-signed certs.
+- `options.parallelism`: maximum number of concurrent SQL connections used during catalog discovery and per-object scripting. `0` (default) resolves to `Environment.ProcessorCount`. Set a positive integer to cap DOP on shared SQL Server instances.
 - Include/exclude filters and comparison ignore options are deferred to vNext.
 
 ## External interoperability
