@@ -33,11 +33,11 @@ public sealed class SchemaFolderMapperTests
     }
 
     [Theory]
-    [InlineData("Schema", "Security\\Schemas", "CAD")]
-    [InlineData("Role", "Security\\Roles", "corep_datareader")]
-    [InlineData("User", "Security\\Users", "ReadonlyUser")]
-    [InlineData("PartitionFunction", "Storage\\Partition Functions", "DATA_Loadset_PF")]
-    [InlineData("PartitionScheme", "Storage\\Partition Schemes", "DATA_Loadset_PS")]
+    [InlineData("Schema", "Security\\Schemas", "AppSecurity")]
+    [InlineData("Role", "Security\\Roles", "AppReader")]
+    [InlineData("User", "Security\\Users", "ServiceUser")]
+    [InlineData("PartitionFunction", "Storage\\Partition Functions", "FiscalYear_PF")]
+    [InlineData("PartitionScheme", "Storage\\Partition Schemes", "FiscalYear_PS")]
     public void Formats_SchemaLessObjects(string objectType, string folder, string name)
     {
         var mapper = new SchemaFolderMapper(BuildFolderMap(), dataWriteAllFilesInOneDirectory: true);
@@ -46,6 +46,19 @@ public sealed class SchemaFolderMapperTests
         var path = mapper.GetObjectPath(objectType, identifier, false);
 
         Assert.Equal(Path.Combine(folder, $"{name}.sql"), path);
+    }
+
+    [Theory]
+    [InlineData("Synonym", "Synonyms", "Reporting", "CurrentSales")]
+    [InlineData("UserDefinedType", "Types\\User-defined Data Types", "dbo", "PhoneNumber")]
+    public void Formats_SchemaScopedAdditionalObjects(string objectType, string folder, string schema, string name)
+    {
+        var mapper = new SchemaFolderMapper(BuildFolderMap(), dataWriteAllFilesInOneDirectory: true);
+        var identifier = new ObjectIdentifier(schema, name);
+
+        var path = mapper.GetObjectPath(objectType, identifier, false);
+
+        Assert.Equal(Path.Combine(folder, $"{schema}.{name}.sql"), path);
     }
 
     [Fact]
@@ -75,6 +88,8 @@ public sealed class SchemaFolderMapperTests
             new FolderMapEntry("User", @"Security\Users"),
             new FolderMapEntry("PartitionFunction", @"Storage\Partition Functions"),
             new FolderMapEntry("PartitionScheme", @"Storage\Partition Schemes"),
+            new FolderMapEntry("Synonym", "Synonyms"),
+            new FolderMapEntry("UserDefinedType", @"Types\User-defined Data Types"),
             new FolderMapEntry("MessageType", @"Service Broker\Message Types"),
             new FolderMapEntry("Data", "Data")
         };

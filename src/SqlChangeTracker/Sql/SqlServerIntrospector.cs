@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using SqlChangeTracker.Schema;
 
 namespace SqlChangeTracker.Sql;
 
@@ -26,7 +27,20 @@ ORDER BY s.name, seq.name;", MapObjectType));
         results.AddRange(QueryObjects(connection, @"
 SELECT s.name AS schema_name, s.name AS object_name, 'SC' AS type
 FROM sys.schemas s
-WHERE s.name NOT IN ('sys','INFORMATION_SCHEMA')
+WHERE s.name NOT IN (
+    'dbo',
+    'guest',
+    'sys',
+    'INFORMATION_SCHEMA',
+    'db_accessadmin',
+    'db_backupoperator',
+    'db_datareader',
+    'db_datawriter',
+    'db_ddladmin',
+    'db_denydatareader',
+    'db_denydatawriter',
+    'db_owner',
+    'db_securityadmin')
 ORDER BY s.name;", MapObjectType));
 
         results.AddRange(QueryObjects(connection, @"
@@ -147,13 +161,24 @@ FROM sys.asymmetric_keys ak
 ORDER BY ak.name;", MapObjectType));
 
         results.AddRange(QueryObjects(connection, @"
-SELECT dp.name AS schema_name, dp.name AS object_name, 'ROLE' AS type
+SELECT '' AS schema_name, dp.name AS object_name, 'ROLE' AS type
 FROM sys.database_principals dp
-WHERE dp.type = 'R' AND dp.is_fixed_role = 0
+WHERE dp.type = 'R'
+  AND dp.name <> 'public'
+  AND (
+    dp.is_fixed_role = 0
+    OR EXISTS (
+      SELECT 1
+      FROM sys.database_role_members drm
+      JOIN sys.database_principals member_principal ON member_principal.principal_id = drm.member_principal_id
+      WHERE drm.role_principal_id = dp.principal_id
+        AND member_principal.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys')
+    )
+  )
 ORDER BY dp.name;", MapObjectType));
 
         results.AddRange(QueryObjects(connection, @"
-SELECT dp.default_schema_name AS schema_name, dp.name AS object_name, 'USR' AS type
+SELECT '' AS schema_name, dp.name AS object_name, 'USR' AS type
 FROM sys.database_principals dp
 WHERE dp.type IN ('S','U','G','E','X','C','K')
   AND dp.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys')
@@ -198,10 +223,20 @@ ORDER BY ps.name;", MapObjectType));
 
         while (reader.Read())
         {
-            var schema = reader.IsDBNull(0) ? "dbo" : reader.GetString(0);
+            var schema = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
             var name = reader.GetString(1);
             var type = reader.GetString(2);
-            yield return new DbObjectInfo(schema, name, typeMapper(type));
+            var objectType = typeMapper(type);
+            if (SupportedSqlObjectTypes.IsSchemaLess(objectType))
+            {
+                schema = string.Empty;
+            }
+            else if (string.IsNullOrWhiteSpace(schema))
+            {
+                schema = "dbo";
+            }
+
+            yield return new DbObjectInfo(schema, name, objectType);
         }
     }
 

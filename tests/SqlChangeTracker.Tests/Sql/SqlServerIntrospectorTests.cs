@@ -20,6 +20,43 @@ public sealed class SqlServerIntrospectorTests
         Assert.NotNull(results);
     }
 
+    [Fact]
+    public void ListObjects_NormalizesSchemaLessActiveTypes_WhenConfigured()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var introspector = new SqlServerIntrospector();
+        var results = introspector.ListObjects(options);
+
+        foreach (var objectInfo in results.Where(item =>
+                     item.ObjectType is "Schema" or "Role" or "User" or "PartitionFunction" or "PartitionScheme"))
+        {
+            Assert.Equal(string.Empty, objectInfo.Schema);
+        }
+    }
+
+    [Fact]
+    public void ListObjects_KeepsSchemaForSchemaScopedAdditionalTypes_WhenConfigured()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var introspector = new SqlServerIntrospector();
+        var results = introspector.ListObjects(options);
+
+        foreach (var objectInfo in results.Where(item => item.ObjectType is "Synonym" or "UserDefinedType"))
+        {
+            Assert.False(string.IsNullOrWhiteSpace(objectInfo.Schema));
+        }
+    }
+
     private static SqlConnectionOptions? GetOptions()
     {
         var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");

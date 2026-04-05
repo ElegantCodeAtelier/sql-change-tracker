@@ -36,34 +36,7 @@ internal enum ComparisonTarget
 
 internal sealed class SyncCommandService : ISyncCommandService
 {
-    private static readonly IReadOnlyList<FolderMapEntry> CoreFolderMap =
-    [
-        new("Table", "Tables"),
-        new("View", "Views"),
-        new("StoredProcedure", "Stored Procedures"),
-        new("Function", "Functions"),
-        new("Sequence", "Sequences"),
-        new("Default", "Other")
-    ];
-
-    private static readonly IReadOnlyList<string> CoreObjectTypes =
-    [
-        "Function",
-        "Sequence",
-        "StoredProcedure",
-        "Table",
-        "View"
-    ];
-
-    private static readonly IReadOnlyDictionary<string, string> CoreTypeFolders =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Table"] = "Tables",
-            ["View"] = "Views",
-            ["StoredProcedure"] = "Stored Procedures",
-            ["Function"] = "Functions",
-            ["Sequence"] = "Sequences"
-        };
+    private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
     private readonly SqlServerIntrospector _introspector;
@@ -71,7 +44,11 @@ internal sealed class SyncCommandService : ISyncCommandService
     private readonly SchemaFolderMapper _mapper;
 
     public SyncCommandService()
-        : this(new SqlctConfigReader(), new SqlServerIntrospector(), new SqlServerScripter(), new SchemaFolderMapper(CoreFolderMap, dataWriteAllFilesInOneDirectory: true))
+        : this(
+            new SqlctConfigReader(),
+            new SqlServerIntrospector(),
+            new SqlServerScripter(),
+            new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true))
     {
     }
 
@@ -168,7 +145,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 return CommandExecutionResult<DiffResult>.Failure(parsedObject.Error!, parsedObject.ExitCode);
             }
 
-            var selected = SelectObject(snapshotResult.Payload!, parsedObject.Payload!.Schema, parsedObject.Payload.Name);
+            var selected = SelectObject(snapshotResult.Payload!, parsedObject.Payload!);
             if (!selected.Success)
             {
                 return CommandExecutionResult<DiffResult>.Failure(selected.Error!, selected.ExitCode);
@@ -432,10 +409,10 @@ internal sealed class SyncCommandService : ISyncCommandService
         var warnings = new List<CommandWarning>();
         var scannedSqlFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var entry in CoreTypeFolders.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+        foreach (var entry in ActiveObjectTypes)
         {
-            var objectType = entry.Key;
-            var folder = entry.Value;
+            var objectType = entry.ObjectType;
+            var folder = entry.RelativeFolder;
             var fullFolderPath = Path.Combine(projectDir, folder);
             if (!Directory.Exists(fullFolderPath))
             {
@@ -462,19 +439,21 @@ internal sealed class SyncCommandService : ISyncCommandService
                 scannedSqlFiles.Add(normalizedFilePath);
 
                 var fileName = Path.GetFileNameWithoutExtension(file);
-                if (!TryParseSchemaAndName(fileName, out var schema, out var name))
+                if (!TryParseObjectFileName(fileName, entry.IsSchemaLess, out var schema, out var name))
                 {
                     warnings.Add(new CommandWarning(
                         "invalid_script_name",
-                        $"skipped '{Path.Combine(folder, Path.GetFileName(file))}' because it does not match 'Schema.Object.sql'."));
+                        $"skipped '{Path.Combine(folder, Path.GetFileName(file))}' because it does not match '{GetExpectedFileNamePattern(entry.IsSchemaLess)}'."));
                     continue;
                 }
+
                 var key = BuildObjectKey(objectType, schema, name);
                 if (objects.ContainsKey(key))
                 {
+                    var displayName = FormatDisplayName(schema, name);
                     warnings.Add(new CommandWarning(
                         "duplicate_script",
-                        $"skipped duplicate folder object '{schema}.{name}' of type '{objectType}'."));
+                        $"skipped duplicate folder object '{displayName}' of type '{objectType}'."));
                     continue;
                 }
 
@@ -530,7 +509,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         var warnings = listedObjects
-            .Where(item => !CoreObjectTypes.Contains(item.ObjectType, StringComparer.OrdinalIgnoreCase))
+            .Where(item => !SupportedSqlObjectTypes.IsActiveInSync(item.ObjectType))
             .Select(item => item.ObjectType)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
@@ -538,7 +517,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             .ToList();
 
         var activeObjects = listedObjects
-            .Where(item => CoreObjectTypes.Contains(item.ObjectType, StringComparer.OrdinalIgnoreCase))
+            .Where(item => SupportedSqlObjectTypes.IsActiveInSync(item.ObjectType))
             .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
@@ -550,7 +529,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         foreach (var dbObject in activeObjects)
         {
             scriptIndex++;
-            progress?.Invoke($"Scripting objects ({scriptIndex}/{total}): {dbObject.Schema}.{dbObject.Name}");
+            progress?.Invoke($"Scripting objects ({scriptIndex}/{total}): {FormatDisplayName(dbObject.Schema, dbObject.Name)}");
             string relativePath;
             try
             {
@@ -667,33 +646,81 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<bool>.Ok(true, ExitCodes.Success);
     }
 
-    private static CommandExecutionResult<(string Schema, string Name)> ParseObjectSelector(string selector)
+    internal static CommandExecutionResult<ObjectSelector> ParseObjectSelector(string selector)
     {
-        var dotIndex = selector.IndexOf('.', StringComparison.Ordinal);
-        if (dotIndex <= 0 || dotIndex >= selector.Length - 1)
+        var trimmed = selector.Trim();
+        if (trimmed.Length == 0)
         {
-            return CommandExecutionResult<(string Schema, string Name)>.Failure(
-                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: schema.name"),
+            return CommandExecutionResult<ObjectSelector>.Failure(
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: schema.name, name, type:name, or type:schema.name"),
                 ExitCodes.InvalidConfig);
         }
 
-        var schema = selector[..dotIndex].Trim();
-        var name = selector[(dotIndex + 1)..].Trim();
-        if (schema.Length == 0 || name.Length == 0)
+        var typeSeparatorIndex = trimmed.IndexOf(':', StringComparison.Ordinal);
+        if (typeSeparatorIndex >= 0)
         {
-            return CommandExecutionResult<(string Schema, string Name)>.Failure(
-                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: schema.name"),
+            var objectTypeToken = trimmed[..typeSeparatorIndex].Trim();
+            var nameToken = trimmed[(typeSeparatorIndex + 1)..].Trim();
+            if (objectTypeToken.Length == 0 || nameToken.Length == 0)
+            {
+                return CommandExecutionResult<ObjectSelector>.Failure(
+                    new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: schema.name, name, type:name, or type:schema.name"),
+                    ExitCodes.InvalidConfig);
+            }
+
+            if (!SupportedSqlObjectTypes.TryGet(objectTypeToken, out var entry))
+            {
+                return CommandExecutionResult<ObjectSelector>.Failure(
+                    new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: $"unsupported object type '{objectTypeToken}'."),
+                    ExitCodes.InvalidConfig);
+            }
+
+            if (!TryParseObjectFileName(nameToken, entry.IsSchemaLess, out var schema, out var name))
+            {
+                var expectedFormat = entry.IsSchemaLess
+                    ? $"expected format: {entry.ObjectType}:name"
+                    : $"expected format: {entry.ObjectType}:schema.name";
+                return CommandExecutionResult<ObjectSelector>.Failure(
+                    new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: expectedFormat),
+                    ExitCodes.InvalidConfig);
+            }
+
+            return CommandExecutionResult<ObjectSelector>.Ok(
+                new ObjectSelector(entry.ObjectType, schema, name, entry.IsSchemaLess, trimmed),
+                ExitCodes.Success);
+        }
+
+        if (trimmed.Contains('.', StringComparison.Ordinal))
+        {
+            if (TryParseSchemaAndName(trimmed, out var parsedSchema, out var parsedName))
+            {
+                return CommandExecutionResult<ObjectSelector>.Ok(
+                    new ObjectSelector(null, parsedSchema, parsedName, false, trimmed),
+                    ExitCodes.Success);
+            }
+
+            return CommandExecutionResult<ObjectSelector>.Failure(
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: schema.name, name, type:name, or type:schema.name"),
                 ExitCodes.InvalidConfig);
         }
 
-        return CommandExecutionResult<(string Schema, string Name)>.Ok((schema, name), ExitCodes.Success);
+        if (TryParseObjectFileName(trimmed, isSchemaLess: true, out _, out var bareName))
+        {
+            return CommandExecutionResult<ObjectSelector>.Ok(
+                new ObjectSelector(null, string.Empty, bareName, true, trimmed),
+                ExitCodes.Success);
+        }
+
+        return CommandExecutionResult<ObjectSelector>.Failure(
+            new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: schema.name, name, type:name, or type:schema.name"),
+            ExitCodes.InvalidConfig);
     }
-    private static CommandExecutionResult<InternalObject> SelectObject(ComparisonSnapshot snapshot, string schema, string name)
+
+    private static CommandExecutionResult<InternalObject> SelectObject(ComparisonSnapshot snapshot, ObjectSelector selector)
     {
         var matches = snapshot.DbObjects.Values
             .Concat(snapshot.FolderObjects.Values)
-            .Where(item => string.Equals(item.Schema, schema, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase))
+            .Where(item => MatchesSelector(item.ObjectType, item.Schema, item.Name, selector))
             .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
@@ -702,18 +729,52 @@ internal sealed class SyncCommandService : ISyncCommandService
         if (matches.Length == 0)
         {
             return CommandExecutionResult<InternalObject>.Failure(
-                new ErrorInfo(ErrorCodes.InvalidConfig, "object not found for diff.", Detail: $"no object named '{schema}.{name}' exists in db/folder comparison set."),
+                new ErrorInfo(ErrorCodes.InvalidConfig, "object not found for diff.", Detail: $"no object matching '{selector.Raw}' exists in db/folder comparison set."),
                 ExitCodes.InvalidConfig);
         }
 
         if (matches.Length > 1)
         {
+            var disambiguationHint = selector.IsSchemaLess
+                ? "use a type-qualified selector such as type:name."
+                : "use a type-qualified selector such as type:schema.name.";
             return CommandExecutionResult<InternalObject>.Failure(
-                new ErrorInfo(ErrorCodes.InvalidConfig, "object selector is ambiguous.", Detail: $"'{schema}.{name}' matches multiple object types."),
+                new ErrorInfo(ErrorCodes.InvalidConfig, "object selector is ambiguous.", Detail: $"'{selector.Raw}' matches multiple object types; {disambiguationHint}"),
                 ExitCodes.InvalidConfig);
         }
 
         return CommandExecutionResult<InternalObject>.Ok(matches[0], ExitCodes.Success);
+    }
+
+    internal static bool MatchesSelector(string objectType, string schema, string name, ObjectSelector selector)
+    {
+        if (selector.ObjectType is not null &&
+            !string.Equals(selector.ObjectType, objectType, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (selector.ObjectType is null)
+        {
+            if (selector.IsSchemaLess && !SupportedSqlObjectTypes.IsSchemaLess(objectType))
+            {
+                return false;
+            }
+
+            if (!selector.IsSchemaLess && SupportedSqlObjectTypes.IsSchemaLess(objectType))
+            {
+                return false;
+            }
+        }
+
+        if (selector.IsSchemaLess)
+        {
+            return string.IsNullOrWhiteSpace(schema)
+                && string.Equals(name, selector.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(schema, selector.Schema, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(name, selector.Name, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<ChangeEntry> ComputeChanges(ComparisonSnapshot snapshot, ComparisonTarget target)
@@ -859,6 +920,12 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static string BuildObjectKey(string objectType, string schema, string name)
         => $"{objectType}|{schema}|{name}";
 
+    private static string GetExpectedFileNamePattern(bool isSchemaLess)
+        => isSchemaLess ? "Name.sql" : "Schema.Object.sql";
+
+    private static string FormatDisplayName(string schema, string name)
+        => string.IsNullOrWhiteSpace(schema) ? name : $"{schema}.{name}";
+
     internal static IReadOnlyList<CommandWarning> CollectUnsupportedFolderWarnings(
         string projectDir,
         IReadOnlyCollection<string> supportedSqlFiles)
@@ -881,6 +948,18 @@ internal sealed class SyncCommandService : ISyncCommandService
                 "unsupported_folder_entry",
                 $"skipped unsupported folder entry '{path}'."))
             .ToArray();
+    }
+
+    internal static bool TryParseObjectFileName(string fileNameWithoutExtension, bool isSchemaLess, out string schema, out string name)
+    {
+        if (isSchemaLess)
+        {
+            schema = string.Empty;
+            name = fileNameWithoutExtension.Trim();
+            return name.Length > 0;
+        }
+
+        return TryParseSchemaAndName(fileNameWithoutExtension, out schema, out name);
     }
 
     internal static bool TryParseSchemaAndName(string fileNameWithoutExtension, out string schema, out string name)
@@ -1067,6 +1146,13 @@ internal sealed class SyncCommandService : ISyncCommandService
         IReadOnlyDictionary<string, InternalObject> FolderObjects,
         IReadOnlyList<CommandWarning> Warnings);
 
+    internal sealed record ObjectSelector(
+        string? ObjectType,
+        string Schema,
+        string Name,
+        bool IsSchemaLess,
+        string Raw);
+
     private sealed record InternalObject(
         string Key,
         string Schema,
@@ -1076,7 +1162,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         string RelativePath,
         string FullPath)
     {
-        public string DisplayName => $"{Schema}.{Name}";
+        public string DisplayName => FormatDisplayName(Schema, Name);
     }
 
     private sealed record ChangeEntry(

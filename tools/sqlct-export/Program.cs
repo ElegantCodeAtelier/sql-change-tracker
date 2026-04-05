@@ -1,4 +1,5 @@
 using SqlChangeTracker.Config;
+using SqlChangeTracker.Schema;
 
 var argsMap = ParseArgs(args);
 if (!argsMap.TryGetValue("--server", out var server) ||
@@ -37,7 +38,7 @@ var stageRoot = Path.Combine(Path.GetTempPath(), $"sqlct-export-stage-{Guid.NewG
 try
 {
     Directory.CreateDirectory(stageRoot);
-    SeedCoreCompatibilityFiles(compatDir, stageRoot);
+    SeedActiveCompatibilityFiles(compatDir, stageRoot);
 
     var config = SqlctConfigWriter.CreateDefault();
     config.Database.Server = server;
@@ -63,7 +64,7 @@ try
     }
 
     ResetDirectory(outputRoot);
-    CopyCoreOutput(stageRoot, outputRoot);
+    CopyActiveOutput(stageRoot, outputRoot);
     return 0;
 }
 finally
@@ -98,14 +99,14 @@ static Dictionary<string, string> ParseArgs(string[] args)
     return map;
 }
 
-static void SeedCoreCompatibilityFiles(string? compatDir, string stageRoot)
+static void SeedActiveCompatibilityFiles(string? compatDir, string stageRoot)
 {
     if (string.IsNullOrWhiteSpace(compatDir) || !Directory.Exists(compatDir))
     {
         return;
     }
 
-    foreach (var folder in GetCoreObjectFolders())
+    foreach (var folder in SupportedSqlObjectTypes.ActiveSyncFolders)
     {
         var sourceFolder = Path.Combine(compatDir, folder);
         if (!Directory.Exists(sourceFolder))
@@ -124,9 +125,9 @@ static void SeedCoreCompatibilityFiles(string? compatDir, string stageRoot)
     }
 }
 
-static void CopyCoreOutput(string stageRoot, string outputRoot)
+static void CopyActiveOutput(string stageRoot, string outputRoot)
 {
-    foreach (var folder in GetCoreObjectFolders())
+    foreach (var folder in SupportedSqlObjectTypes.ActiveSyncFolders)
     {
         var sourceFolder = Path.Combine(stageRoot, folder);
         if (!Directory.Exists(sourceFolder))
@@ -171,13 +172,3 @@ static void TryDeleteDirectory(string path)
     {
     }
 }
-
-static IReadOnlyList<string> GetCoreObjectFolders()
-    =>
-    [
-        "Tables",
-        "Views",
-        "Stored Procedures",
-        "Functions",
-        "Sequences"
-    ];

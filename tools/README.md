@@ -67,8 +67,20 @@ dotnet run --project tools/sqlct-export/Sqlct.Export.csproj -- `
   --trust-server-certificate
 ```
 
-- This helper now stages the reference core object files and invokes the real `sqlct pull` command path.
-- Scope therefore matches `pull` v1 behavior: `Tables`, `Views`, `Stored Procedures`, `Functions`, and `Sequences`.
+- This helper now stages the reference active object files and invokes the real `sqlct pull` command path.
+- Scope therefore matches `pull` v1 behavior:
+  - `Tables`
+  - `Views`
+  - `Stored Procedures`
+  - `Functions`
+  - `Sequences`
+  - `Security/Schemas`
+  - `Security/Roles`
+  - `Security/Users`
+  - `Synonyms`
+  - `Types/User-defined Data Types`
+  - `Storage/Partition Functions`
+  - `Storage/Partition Schemes`
 
 ```
 powershell -File tools/compat-harness.ps1 `

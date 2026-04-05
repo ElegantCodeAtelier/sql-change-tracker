@@ -1,7 +1,7 @@
 # Scripting
 
 Status: draft
-Last updated: 2026-03-15
+Last updated: 2026-04-04
 
 ## 1. Purpose and Normative Intent
 This specification defines normative scripting rules for `sqlct`.
@@ -41,6 +41,8 @@ This specification defines normative scripting rules for `sqlct`.
 - Discovery MUST ignore system objects by default.
 - Discovery SHOULD preserve compatibility with projects that include security and storage object groups.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
+- `Schema` discovery covers user-defined schemas and excludes `dbo`, `sys`, and `INFORMATION_SCHEMA`.
+- `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
 - Discovery MUST gracefully skip feature-specific metadata paths not available on the current SQL Server edition/version (for example external/full-text/security-policy catalogs) without failing whole-run scripting.
 - Discovery MUST include permissions and extended properties needed by scripting rules.
 - Discovery order MUST be deterministic.
@@ -53,15 +55,19 @@ This specification defines normative scripting rules for `sqlct`.
 - Stored Procedures
 - Functions (`FN`, `TF`, `IF`)
 - Sequences
+- Schema
+- Role
+- User
+- Synonym
+- UserDefinedType
+- PartitionFunction
+- PartitionScheme
 
 ### 5.2 Planned Coverage (Normative Minimum)
 The following types are planned and not fully implemented in the current SQL scripting engine. For each type, implementation MUST define deterministic discovery, deterministic output shape, and batch framing:
 
-- Schema, Role, User
-- Synonym
-- UserDefinedType, TableType, XmlSchemaCollection
+- TableType, XmlSchemaCollection
 - Standalone Trigger (excluding table-scoped DML triggers already emitted inline with tables), DdlTrigger, Rule
-- PartitionFunction, PartitionScheme
 - Certificate, SymmetricKey, AsymmetricKey
 - FullTextCatalog, FullTextStoplist, SearchPropertyList
 - SecurityPolicy
@@ -163,7 +169,8 @@ The following types are planned and not fully implemented in the current SQL scr
 #### 8.1.2 Storage and Compression
 - Table close line MUST include storage target when available:
   - `ON [<data_space>]`
-  - `TEXTIMAGE_ON [<lob_data_space>]` when distinct and present.
+  - `ON [<data_space>] ([<partition_column>])` when the table storage target is a partition scheme and the partitioning column is available from catalog metadata.
+  - `TEXTIMAGE_ON [<lob_data_space>]` when present.
 - Table compression MUST be omitted when `NONE`.
 - For `PAGE`/`ROW`, compression block MUST be:
   - `WITH`
@@ -209,8 +216,12 @@ Each emitted statement MUST be followed by `GO`.
   - index type contains `CLUSTERED` -> `CLUSTERED`
   - otherwise -> `NONCLUSTERED`
 - Key columns MUST be ordered by `key_ordinal` and include `DESC` on descending keys.
-- Constraint-level `WITH (DATA_COMPRESSION = PAGE)` MUST be emitted only when `PAGE`.
+- Constraint-level `WITH` options MUST include `STATISTICS_INCREMENTAL=ON` when the backing index statistics are incremental.
+- Constraint-level `WITH` options MUST include `DATA_COMPRESSION = <PAGE|ROW>` when compression is not `NONE`.
+- When both constraint-level options are present, they MUST be emitted in this order:
+  - `WITH (STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = <PAGE|ROW>)`
 - `ON [data_space]` MUST be emitted when available.
+- `ON [data_space] ([partition_column])` MUST be emitted when the backing index is partitioned and the partitioning column is available from catalog metadata.
 
 #### 8.1.7 Non-Constraint Indexes
 - Include only indexes where:
@@ -222,8 +233,12 @@ Each emitted statement MUST be followed by `GO`.
 - Key columns MUST be ordered by `key_ordinal`, then `index_column_id`.
 - Included columns MUST be emitted in `INCLUDE (...)` when present.
 - Filtered index predicate MUST be emitted as `WHERE <filter_definition>` when present.
-- Index compression MUST emit `WITH (DATA_COMPRESSION = <PAGE|ROW>)` when not `NONE`.
+- Index `WITH` options MUST include `STATISTICS_INCREMENTAL=ON` when the backing index statistics are incremental.
+- Index compression MUST emit `DATA_COMPRESSION = <PAGE|ROW>` when not `NONE`.
+- When both index-level options are present, they MUST be emitted in this order:
+  - `WITH (STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = <PAGE|ROW>)`
 - `ON [data_space]` MUST be emitted when available.
+- `ON [data_space] ([partition_column])` MUST be emitted when the index is partitioned and the partitioning column is available from catalog metadata.
 
 #### 8.1.8 XML Indexes
 - XML indexes MUST be sourced from `sys.xml_indexes` together with column metadata.
@@ -343,6 +358,54 @@ Each emitted statement MUST be followed by `GO`.
   - if cached with explicit size: `CACHE <size>`,
   - if cached without explicit size: `CACHE ` (trailing space preserved),
   - if not cached: `NO CACHE`.
+
+### 8.6 Schemas
+- Schema scripts MUST emit one `CREATE SCHEMA [name]` statement for each user-defined schema that is in scope.
+- `dbo`, `sys`, and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
+- When schema ownership metadata is present, `AUTHORIZATION [owner]` MUST be emitted on the following line.
+- Schema scripts MUST end with `GO`.
+
+### 8.7 Roles
+- User-defined roles MUST emit `CREATE ROLE [name]` and optional `AUTHORIZATION [owner]`, followed by `GO`.
+- Fixed roles are in scope only when they have non-system members that are tracked through role membership metadata.
+- Role membership statements MUST be emitted after the base role DDL, ordered by member name.
+- Role membership statements MUST use:
+  - `EXEC sp_addrolemember N'<role>', N'<member>'`
+- System-principal memberships for `dbo`, `guest`, `INFORMATION_SCHEMA`, and `sys` MUST NOT be emitted.
+
+### 8.8 Users
+- User scripts MUST emit one `CREATE USER` statement and end with `GO`.
+- Supported user-authentication shapes are:
+  - `WITHOUT LOGIN`
+  - `FOR LOGIN [login]`
+  - `FROM EXTERNAL PROVIDER`
+  - `FOR CERTIFICATE [certificate]`
+  - `FOR ASYMMETRIC KEY [key]`
+- `WITH DEFAULT_SCHEMA=[schema]` MUST be emitted only when a non-empty, non-`dbo` default schema applies to the emitted user shape.
+- Contained database users that require `WITH PASSWORD` remain unsupported in the current scripting engine and MUST fail explicitly rather than emit lossy output.
+
+### 8.9 Synonyms
+- Synonym scripts MUST emit:
+  - `CREATE SYNONYM [schema].[name] FOR <base_object_name>`
+  - `GO`
+- Base-object text MUST come from synonym metadata and MUST NOT be schema-normalized or re-quoted beyond what SQL Server returns.
+
+### 8.10 UserDefinedType
+- Alias user-defined type scripts MUST emit:
+  - `CREATE TYPE [schema].[name] FROM <base_type> <NULL|NOT NULL>`
+  - `GO`
+- Base-type formatting MUST reuse the general type-formatting rules from Section 6.5.
+- Table types remain out of scope for this subsection and continue to follow the planned-coverage rules.
+
+### 8.11 Partition Functions
+- Partition-function metadata MUST come from `sys.partition_functions`, `sys.partition_parameters`, `sys.types`, and `sys.partition_range_values`.
+- Output MUST emit one `CREATE PARTITION FUNCTION` statement with deterministic boundary ordering and end with `GO`.
+- System base types MAY be emitted bracketed or unbracketed only when compatibility reconciliation preserves the reference spelling; otherwise canonical output remains deterministic per the implementation.
+
+### 8.12 Partition Schemes
+- Partition-scheme metadata MUST come from `sys.partition_schemes`, `sys.partition_functions`, and destination data-space metadata.
+- Output MUST emit one `CREATE PARTITION SCHEME` statement that references the target partition function and ordered destination filegroups, followed by `GO`.
+- Empty or missing destination lists MUST still emit a valid `TO (...)` clause shape consistent with discovered metadata.
 
 ## 9. Compatibility-Guided Reconciliation
 When compatibility reference files are available, `sqlct` MAY apply reconciliation per object after script generation and before writing files.

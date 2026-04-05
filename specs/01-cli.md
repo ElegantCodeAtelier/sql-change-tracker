@@ -1,7 +1,7 @@
 # CLI
 
 Status: draft
-Last updated: 2026-03-24
+Last updated: 2026-04-04
 
 ## Command Overview
 Binary: sqlct.
@@ -35,7 +35,7 @@ Use git-style verbs: short, task-oriented commands with clear intent.
 - pull
 
 ## v1 Scope
-- Active object types: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`.
+- Active object types: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
 - `status`, `diff`, and `pull` process only the active object types.
 - Unsupported object types discovered in DB introspection are skipped with warnings.
 - Include/exclude filters are deferred to vNext.
@@ -54,9 +54,15 @@ Common flag behavior across commands.
 - `folder`: compare folder against DB; results show what would be committed in folder state.
 - Default: `db`.
 
-### --object <schema.name>
-- Identifies a single object for diff output (`schema.name` format).
-- Must be unique across object types; if ambiguous, return an error.
+### --object <selector>
+- Identifies a single object for diff output.
+- Supported selector forms:
+  - `schema.name` for schema-scoped active object types.
+  - `name` for schema-less active object types.
+  - `type:name` for explicit schema-less selection.
+  - `type:schema.name` for explicit schema-scoped selection.
+- Bare `name` selectors search only schema-less active object types.
+- Bare-name or `schema.name` collisions across object types return an error that instructs the user to use the type-qualified form.
 
 ### --no-progress
 - Disables the progress spinner for `status`, `diff`, and `pull`.
@@ -110,7 +116,7 @@ Behavior:
 ### diff
 Show textual diffs.
 `
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <schema.name>]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>]
 `
 Behavior:
 - Compare object script from DB vs folder.
@@ -167,6 +173,8 @@ Result:
 `
 sqlct status --project-dir ./schema
 sqlct diff --project-dir ./schema --object dbo.Customer
+sqlct diff --project-dir ./schema --object ServiceUser
+sqlct diff --project-dir ./schema --object Role:AppReader
 `
 Result:
 - Status shows add/change/delete counts.

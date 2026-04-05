@@ -1,12 +1,12 @@
 # Roadmap
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-04-04
 
 ## MVP
 - init, config, status, diff, pull
 - `sqlct.config.json` schema and baseline schema folder layout
-- Core object types only for status/diff/pull: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`
+- Active object types for status/diff/pull: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`
 - Warnings for skipped unsupported object types
 
 ## vNext (not-planned yet)

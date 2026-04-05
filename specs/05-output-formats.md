@@ -1,7 +1,7 @@
 # Output Formats
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-04-04
 
 ## Human Output
 - Concise summaries with change lists.
@@ -9,9 +9,10 @@ Last updated: 2026-03-11
 - Report only `sqlct` project state (`sqlct.config.json`, schema folder state, DB comparison results).
 - Do not list optional compatibility input files as output entities.
 - `status`, `diff`, and `pull` may include warnings for skipped unsupported object types or invalid script names.
+- Schema-less active object types use bare names in human and JSON payloads (for example `ServiceUser`, `AppReader`, `Years_PF`).
 
 ## Progress Spinner
-- `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running, with per-step status updates (e.g. "Scripting objects (3/42): dbo.Customer").
+- `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running, with per-step status updates (e.g. "Scripting objects (3/42): dbo.Customer" or "Scripting objects (7/42): ServiceUser").
 - The spinner is cleared before results are printed; it does not appear in final output.
 - The spinner is suppressed when:
   - `--json` is used (machine-readable mode must not include spinner characters).
@@ -38,6 +39,17 @@ Diff: dbo.Customer
 @@
 -ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL;
 +ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL CONSTRAINT [DF_Customer_IsActive] DEFAULT (1);
+```
+
+### Example: diff (single schema-less object)
+```text
+Diff: AppReader
+--- db
++++ folder
+@@
+-EXEC sp_addrolemember N'AppReader', N'ServiceUser'
++EXEC sp_addrolemember N'AppReader', N'ServiceUser'
++EXEC sp_addrolemember N'AppReader', N'AuditUser'
 ```
 
 ### Example: diff (all objects)
@@ -95,6 +107,10 @@ Diff fields:
 - `object` (string, nullable)
 - `diff` (string, for `diff`)
 
+Notes:
+- `name` and `object` values use `schema.name` for schema-scoped objects and bare names for schema-less objects.
+- `type` remains the discriminator for selectors and JSON consumers; no additional schema-less marker field is added.
+
 Pull fields:
 - `summary` (object with `created`, `updated`, `deleted`, `unchanged`)
 - `objects` (array of `{ name, type, change, path }`)
@@ -133,6 +149,20 @@ Error fields:
   "target": "db",
   "object": "dbo.Customer",
   "diff": "--- db\\n+++ folder\\n@@\\n-ALTER TABLE...\\n+ALTER TABLE...",
+  "warnings": []
+}
+```
+
+### Example: status (schema-less object)
+```json
+{
+  "command": "status",
+  "projectDir": ".\\schema",
+  "target": "db",
+  "summary": { "added": 1, "changed": 0, "deleted": 0 },
+  "objects": [
+    { "name": "ServiceUser", "type": "User", "change": "added" }
+  ],
   "warnings": []
 }
 ```

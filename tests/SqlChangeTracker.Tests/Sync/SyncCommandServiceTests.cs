@@ -1,3 +1,4 @@
+using SqlChangeTracker.Config;
 using SqlChangeTracker.Sync;
 using System.Text;
 using Xunit;
@@ -18,6 +19,78 @@ public sealed class SyncCommandServiceTests
         Assert.Equal(expected, success);
         Assert.Equal(expectedSchema, schema);
         Assert.Equal(expectedName, name);
+    }
+
+    [Theory]
+    [InlineData("ServiceUser", true, "", "ServiceUser")]
+    [InlineData("Security.Reader", true, "", "Security.Reader")]
+    [InlineData("", false, "", "")]
+    [InlineData("   ", false, "", "")]
+    public void TryParseObjectFileName_SupportsSchemaLessNames(string fileName, bool expected, string expectedSchema, string expectedName)
+    {
+        var success = SyncCommandService.TryParseObjectFileName(fileName, isSchemaLess: true, out var schema, out var name);
+
+        Assert.Equal(expected, success);
+        Assert.Equal(expectedSchema, schema);
+        Assert.Equal(expectedName, name);
+    }
+
+    [Theory]
+    [InlineData("dbo.Customer", null, "dbo", "Customer", false)]
+    [InlineData("ServiceUser", null, "", "ServiceUser", true)]
+    [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
+    [InlineData("Synonym:Reporting.CurrentSales", "Synonym", "Reporting", "CurrentSales", false)]
+    [InlineData("UserDefinedType:dbo.PhoneNumber", "UserDefinedType", "dbo", "PhoneNumber", false)]
+    public void ParseObjectSelector_AcceptsSchemaScopedSchemaLessAndTypedSelectors(
+        string selector,
+        string? expectedType,
+        string expectedSchema,
+        string expectedName,
+        bool expectedSchemaLess)
+    {
+        var result = SyncCommandService.ParseObjectSelector(selector);
+
+        Assert.True(result.Success);
+        Assert.Equal(expectedType, result.Payload!.ObjectType);
+        Assert.Equal(expectedSchema, result.Payload.Schema);
+        Assert.Equal(expectedName, result.Payload.Name);
+        Assert.Equal(expectedSchemaLess, result.Payload.IsSchemaLess);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("dbo.")]
+    [InlineData(".Customer")]
+    [InlineData("UnknownType:dbo.Customer")]
+    [InlineData("Synonym:CurrentSales")]
+    public void ParseObjectSelector_RejectsInvalidSelectors(string selector)
+    {
+        var result = SyncCommandService.ParseObjectSelector(selector);
+
+        Assert.False(result.Success);
+        Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+    }
+
+    [Fact]
+    public void MatchesSelector_UsesSchemaLessAndTypeQualifiedRules()
+    {
+        var bareRole = SyncCommandService.ParseObjectSelector("Sales");
+        var typedRole = SyncCommandService.ParseObjectSelector("Role:Sales");
+        var schemaScoped = SyncCommandService.ParseObjectSelector("dbo.Sales");
+
+        Assert.True(bareRole.Success);
+        Assert.True(typedRole.Success);
+        Assert.True(schemaScoped.Success);
+
+        Assert.True(SyncCommandService.MatchesSelector("Role", "", "Sales", bareRole.Payload!));
+        Assert.True(SyncCommandService.MatchesSelector("User", "", "Sales", bareRole.Payload!));
+        Assert.False(SyncCommandService.MatchesSelector("Table", "dbo", "Sales", bareRole.Payload!));
+
+        Assert.True(SyncCommandService.MatchesSelector("Role", "", "Sales", typedRole.Payload!));
+        Assert.False(SyncCommandService.MatchesSelector("User", "", "Sales", typedRole.Payload!));
+
+        Assert.True(SyncCommandService.MatchesSelector("Table", "dbo", "Sales", schemaScoped.Payload!));
+        Assert.False(SyncCommandService.MatchesSelector("Role", "", "Sales", schemaScoped.Payload!));
     }
 
     [Fact]
@@ -104,12 +177,16 @@ public sealed class SyncCommandServiceTests
         try
         {
             var supported = CreateFile(tempDir, Path.Combine("Tables", "dbo.Customer.sql"), "CREATE TABLE dbo.Customer;");
+            var supportedRole = CreateFile(tempDir, Path.Combine("Security", "Roles", "AppReader.sql"), "EXEC sp_addrolemember N'AppReader', N'ServiceUser'");
+            var supportedPartitionFunction = CreateFile(tempDir, Path.Combine("Storage", "Partition Functions", "FiscalYear_PF.sql"), "CREATE PARTITION FUNCTION [FiscalYear_PF]...");
+            var supportedSynonym = CreateFile(tempDir, Path.Combine("Synonyms", "dbo.LegacyCustomer.sql"), "CREATE SYNONYM [dbo].[LegacyCustomer] FOR [dbo].[Customer]");
+            var supportedUserDefinedType = CreateFile(tempDir, Path.Combine("Types", "User-defined Data Types", "dbo.PhoneNumber.sql"), "CREATE TYPE [dbo].[PhoneNumber] FROM [nvarchar] (20) NOT NULL");
             CreateFile(tempDir, Path.Combine("Data", "dbo.Customer_Data.sql"), "SELECT 1;");
-            CreateFile(tempDir, Path.Combine("Security", "Roles", "db_datareader.sql"), "CREATE ROLE [db_datareader];");
-            CreateFile(tempDir, Path.Combine("Storage", "Partition Functions", "DATA_Loadset_PF.sql"), "CREATE PARTITION FUNCTION [DATA_Loadset_PF]...");
             CreateFile(tempDir, Path.Combine("Custom", "dbo.Legacy.sql"), "SELECT 1;");
 
-            var warnings = SyncCommandService.CollectUnsupportedFolderWarnings(tempDir, [supported]);
+            var warnings = SyncCommandService.CollectUnsupportedFolderWarnings(
+                tempDir,
+                [supported, supportedRole, supportedPartitionFunction, supportedSynonym, supportedUserDefinedType]);
 
             Assert.Collection(warnings,
                 warning =>
@@ -121,16 +198,6 @@ public sealed class SyncCommandServiceTests
                 {
                     Assert.Equal("unsupported_folder_entry", warning.Code);
                     Assert.Contains(Path.Combine("Data", "dbo.Customer_Data.sql"), warning.Message);
-                },
-                warning =>
-                {
-                    Assert.Equal("unsupported_folder_entry", warning.Code);
-                    Assert.Contains(Path.Combine("Security", "Roles", "db_datareader.sql"), warning.Message);
-                },
-                warning =>
-                {
-                    Assert.Equal("unsupported_folder_entry", warning.Code);
-                    Assert.Contains(Path.Combine("Storage", "Partition Functions", "DATA_Loadset_PF.sql"), warning.Message);
                 });
         }
         finally

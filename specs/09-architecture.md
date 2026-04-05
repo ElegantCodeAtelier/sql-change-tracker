@@ -1,7 +1,7 @@
 # Architecture
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-04-04
 
 ## Goals
 - Deterministic, reproducible scripting.
@@ -47,8 +47,8 @@ Last updated: 2026-03-11
   - Internal orchestration for `status`, `diff`, and `pull`.
   - Responsibilities:
     - load project/config and validate DB config
-    - scan core schema folders (`Tables`, `Views`, `Stored Procedures`, `Functions`, `Sequences`)
-    - snapshot DB objects for the same core types
+    - scan active schema folders (`Tables`, `Views`, `Stored Procedures`, `Functions`, `Sequences`, `Security/Schemas`, `Security/Roles`, `Security/Users`, `Synonyms`, `Types/User-defined Data Types`, `Storage/Partition Functions`, `Storage/Partition Schemes`)
+    - snapshot DB objects for the same active types
     - classify objects (`added`, `changed`, `deleted`) in deterministic order
     - render unified diff text for single-object and aggregate modes
     - reconcile pull writes/deletes with idempotent update behavior
@@ -64,7 +64,7 @@ Last updated: 2026-03-11
 - SQL Server (SqlClient) handles connectivity, metadata discovery, and scripting. It returns raw scripts and metadata for downstream normalization and persistence.
 - Normalization and formatting follow `specs/04-scripting.md` and v1 runtime constraints.
 - Sync runtime compares normalized scripts between DB and folder sources, producing structured status/diff/pull results.
-- Active v1 comparison scope is core object types only: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`.
+- Active v1 comparison scope is: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
 - Include/exclude filters and comparison ignore options are deferred to vNext.
 
 ## Data Flow (MVP)
@@ -98,7 +98,7 @@ Last updated: 2026-03-11
 - Unit tests:
   - Config parsing and normalization for `sqlct.config.json`.
   - Folder mapping and object naming rules.
-  - Diff normalization and ordering for core object types.
+  - Diff normalization, selector parsing, and ordering for active object types.
   - Encoding/newline style detection and preservation for pull updates.
 - Integration tests (local-only):
   - `config` parsing/normalization against baseline config.

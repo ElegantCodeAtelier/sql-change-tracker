@@ -1,24 +1,9 @@
+using SqlChangeTracker.Schema;
+
 namespace SqlChangeTracker.Config;
 
 internal sealed class BaselineProjectSeeder
 {
-    private static readonly string[] RequiredFolders =
-    {
-        "Data",
-        "Functions",
-        "Security",
-        Path.Combine("Security", "Roles"),
-        Path.Combine("Security", "Schemas"),
-        Path.Combine("Security", "Users"),
-        "Sequences",
-        "Storage",
-        Path.Combine("Storage", "Partition Functions"),
-        Path.Combine("Storage", "Partition Schemes"),
-        "Stored Procedures",
-        "Tables",
-        "Views"
-    };
-
     public SeedResult Seed(string projectDir)
     {
         try
@@ -27,7 +12,7 @@ internal sealed class BaselineProjectSeeder
             var created = new List<string>();
             var skipped = new List<string>();
 
-            foreach (var relativePath in RequiredFolders)
+            foreach (var relativePath in SupportedSqlObjectTypes.RequiredProjectFolders)
             {
                 var fullPath = Path.Combine(projectDir, relativePath);
                 if (Directory.Exists(fullPath))
