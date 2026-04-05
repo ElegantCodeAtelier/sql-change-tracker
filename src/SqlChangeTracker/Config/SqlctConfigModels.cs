@@ -25,4 +25,10 @@ internal sealed class DatabaseConfig
 internal sealed class OptionsConfig
 {
     public bool OrderByDependencies { get; set; } = true;
+
+    /// <summary>
+    /// Maximum number of concurrent database connections used during scripting and discovery.
+    /// 0 (default) resolves to <see cref="Environment.ProcessorCount"/>.
+    /// </summary>
+    public int Parallelism { get; set; } = 0;
 }
