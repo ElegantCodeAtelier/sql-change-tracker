@@ -20,7 +20,7 @@ It focuses on deterministic output and schema-folder workflows that are Git and 
 sqlct init [--project-dir <path>]
 sqlct config [--project-dir <path>]
 sqlct status [--project-dir <path>] [--target <db|folder>] [--no-progress]
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <schema.name>] [--no-progress]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--no-progress]
 sqlct pull [--project-dir <path>] [--no-progress]
 ```
 
@@ -30,6 +30,18 @@ Current v1 runtime scope for `status`, `diff`, and `pull` covers:
 - `StoredProcedure`
 - `Function`
 - `Sequence`
+- `Schema`
+- `Role`
+- `User`
+- `Synonym`
+- `UserDefinedType`
+- `PartitionFunction`
+- `PartitionScheme`
+
+`--object` selectors support:
+- `schema.name` for schema-scoped objects
+- `name` for schema-less objects
+- `type:name` and `type:schema.name` for explicit selection
 
 ## Install
 Global:

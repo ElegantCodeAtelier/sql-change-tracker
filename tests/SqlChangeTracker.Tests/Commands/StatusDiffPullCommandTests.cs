@@ -124,7 +124,7 @@ public sealed class StatusDiffPullCommandTests
                     "db",
                     null,
                     string.Empty,
-                    [new CommandWarning("unsupported_folder_entry", "skipped unsupported folder entry 'Security\\Roles\\db_datareader.sql'.")]),
+                    [new CommandWarning("unsupported_folder_entry", "skipped unsupported folder entry 'Custom\\dbo.Legacy.sql'.")]),
                 ExitCodes.Success)
         };
 
@@ -166,7 +166,7 @@ public sealed class StatusDiffPullCommandTests
                     ".\\schema",
                     new PullSummary(0, 0, 0, 1),
                     [],
-                    [new CommandWarning("unsupported_folder_entry", "skipped unsupported folder entry 'Storage\\Partition Functions\\DATA_Loadset_PF.sql'.")]),
+                    [new CommandWarning("unsupported_folder_entry", "skipped unsupported folder entry 'Data\\dbo.Customer_Data.sql'.")]),
                 ExitCodes.Success)
         };
 

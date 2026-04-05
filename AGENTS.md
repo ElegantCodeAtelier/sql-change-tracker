@@ -19,6 +19,8 @@ This file defines how automation and AI agents should operate in this repository
 ## Local-Only Data
 - Do not commit production database exports or artifacts.
 - Keep local files under `local/fixtures/outputs/` and `local/fixtures.local.json` out of Git.
+- Do not hardcode object names discovered from local compatibility or validation databases into tracked code, tests, docs, or specs.
+- In tracked tests and docs, use neutral placeholder names or runtime discovery instead of names copied from local-only databases.
 
 ## POC and Validation Workflows
 - Use local-only outputs for compatibility and POC runs.

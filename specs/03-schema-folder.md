@@ -1,7 +1,7 @@
 # Schema Folder
 
 Status: draft
-Last updated: 2026-03-08
+Last updated: 2026-04-04
 
 ## Scope
 Defines the baseline `sqlct` schema-folder structure and naming rules.
@@ -29,12 +29,15 @@ Defines the baseline `sqlct` schema-folder structure and naming rules.
     Partition Functions/
     Partition Schemes/
   Stored Procedures/
+  Synonyms/
   Tables/
+  Types/
+    User-defined Data Types/
   Views/
 ```
 
 ## Naming Rules
-- Object scripts use `Schema.Object.sql`.
+- Schema-scoped object scripts use `Schema.Object.sql` in their object-type folder (for example `Tables/`, `Views/`, `Functions/`, `Stored Procedures/`, `Sequences/`, `Synonyms/`, and `Types/User-defined Data Types/`).
 - Data scripts use `Schema.Object_Data.sql` in `Data/`.
 - Schema-less objects omit the schema prefix (e.g., `Security/Schemas/CORE.sql`, `Security/Roles/datareader.sql`, `Storage/Partition Functions/Years_PF.sql`).
 - Replace invalid file name characters in `Schema` or `Object` with percent-encoded hex (e.g., `:` -> `%3A`, `/` -> `%2F`).

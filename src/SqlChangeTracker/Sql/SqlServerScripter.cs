@@ -29,6 +29,16 @@ internal sealed class SqlServerScripter
         string Name,
         List<string> Lines);
 
+    private readonly record struct TableStorageInfo(
+        string? DataSpace,
+        string? PartitionColumn,
+        string? LobDataSpace);
+
+    private readonly record struct IndexScriptingOptions(
+        string Compression,
+        string? PartitionColumn,
+        bool StatisticsIncremental);
+
     public string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj)
     {
         return ScriptObject(options, obj, null);
@@ -321,13 +331,13 @@ WHERE s.name = @schema AND seq.name = @name";
 SELECT s.name, dp.name AS owner_name
 FROM sys.schemas s
 LEFT JOIN sys.database_principals dp ON dp.principal_id = s.principal_id
-WHERE s.name = @schema";
-        command.Parameters.AddWithValue("@schema", obj.Schema);
+WHERE s.name = @name";
+        command.Parameters.AddWithValue("@name", obj.Name);
 
         using var reader = command.ExecuteReader();
         if (!reader.Read())
         {
-            throw new InvalidOperationException($"Schema not found: [{obj.Schema}].");
+            throw new InvalidOperationException($"Schema not found: [{obj.Name}].");
         }
 
         var schemaName = reader.GetString(0);
@@ -345,7 +355,7 @@ WHERE s.name = @schema";
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT dp.name, owner.name AS owner_name
+SELECT dp.name, owner.name AS owner_name, dp.is_fixed_role
 FROM sys.database_principals dp
 LEFT JOIN sys.database_principals owner ON owner.principal_id = dp.owning_principal_id
 WHERE dp.type = 'R' AND dp.name = @name";
@@ -359,12 +369,27 @@ WHERE dp.type = 'R' AND dp.name = @name";
 
         var roleName = reader.GetString(0);
         var ownerName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-        var lines = new List<string> { $"CREATE ROLE [{roleName}]" };
-        if (!string.IsNullOrWhiteSpace(ownerName))
+        var isFixedRole = reader.GetBoolean(2);
+        reader.Close();
+
+        var lines = new List<string>();
+        if (!isFixedRole)
         {
-            lines.Add($"AUTHORIZATION [{ownerName}]");
+            lines.Add($"CREATE ROLE [{roleName}]");
+            if (!string.IsNullOrWhiteSpace(ownerName))
+            {
+                lines.Add($"AUTHORIZATION [{ownerName}]");
+            }
+
+            lines.Add("GO");
         }
-        lines.Add("GO");
+
+        lines.AddRange(ReadRoleMembershipStatements(connection, roleName));
+        if (lines.Count == 0)
+        {
+            throw new InvalidOperationException($"Role has no scriptable definition: [{roleName}].");
+        }
+
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -372,8 +397,17 @@ WHERE dp.type = 'R' AND dp.name = @name";
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT dp.name, dp.default_schema_name, dp.authentication_type_desc
+SELECT dp.name,
+       dp.default_schema_name,
+       dp.authentication_type_desc,
+       dp.type_desc,
+       login_principal.name AS login_name,
+       cert.name AS certificate_name,
+       asym_key.name AS asymmetric_key_name
 FROM sys.database_principals dp
+LEFT JOIN sys.server_principals login_principal ON login_principal.sid = dp.sid
+LEFT JOIN sys.certificates cert ON cert.sid = dp.sid
+LEFT JOIN sys.asymmetric_keys asym_key ON asym_key.sid = dp.sid
 WHERE dp.name = @name";
         command.Parameters.AddWithValue("@name", obj.Name);
 
@@ -386,24 +420,88 @@ WHERE dp.name = @name";
         var userName = reader.GetString(0);
         var defaultSchema = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
         var authType = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
-        if (string.Equals(authType, "NONE", StringComparison.OrdinalIgnoreCase))
+        var typeDesc = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+        var loginName = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
+        var certificateName = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
+        var asymmetricKeyName = reader.IsDBNull(6) ? string.Empty : reader.GetString(6);
+        var defaultSchemaClause = BuildUserDefaultSchemaClause(defaultSchema);
+
+        if (string.Equals(typeDesc, "CERTIFICATE_MAPPED_USER", StringComparison.OrdinalIgnoreCase))
         {
-            return $"CREATE USER [{userName}] WITHOUT LOGIN{Environment.NewLine}GO";
+            if (string.IsNullOrWhiteSpace(certificateName))
+            {
+                throw new InvalidOperationException($"Certificate-mapped user is missing certificate metadata: [{userName}].");
+            }
+
+            return $"CREATE USER [{userName}] FOR CERTIFICATE [{certificateName}]{Environment.NewLine}GO";
         }
 
-        var withClause = string.IsNullOrWhiteSpace(defaultSchema) ||
-            string.Equals(defaultSchema, "dbo", StringComparison.OrdinalIgnoreCase)
+        if (string.Equals(typeDesc, "ASYMMETRIC_KEY_MAPPED_USER", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(asymmetricKeyName))
+            {
+                throw new InvalidOperationException($"Asymmetric-key-mapped user is missing asymmetric key metadata: [{userName}].");
+            }
+
+            return $"CREATE USER [{userName}] FOR ASYMMETRIC KEY [{asymmetricKeyName}]{Environment.NewLine}GO";
+        }
+
+        if (string.Equals(authType, "NONE", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}{Environment.NewLine}GO";
+        }
+
+        if (string.Equals(authType, "EXTERNAL", StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(loginName))
+        {
+            return $"CREATE USER [{userName}] FROM EXTERNAL PROVIDER{defaultSchemaClause}{Environment.NewLine}GO";
+        }
+
+        if (string.Equals(authType, "DATABASE", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Contained database users with password metadata are not supported: [{userName}].");
+        }
+
+        var effectiveLoginName = string.IsNullOrWhiteSpace(loginName) ? userName : loginName;
+        return $"CREATE USER [{userName}] FOR LOGIN [{effectiveLoginName}]{defaultSchemaClause}{Environment.NewLine}GO";
+    }
+
+    private static IEnumerable<string> ReadRoleMembershipStatements(SqlConnection connection, string roleName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT member_principal.name
+FROM sys.database_role_members drm
+JOIN sys.database_principals role_principal ON role_principal.principal_id = drm.role_principal_id
+JOIN sys.database_principals member_principal ON member_principal.principal_id = drm.member_principal_id
+WHERE role_principal.name = @roleName
+  AND member_principal.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys')
+ORDER BY member_principal.name;";
+        command.Parameters.AddWithValue("@roleName", roleName);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var memberName = reader.GetString(0);
+            lines.Add($"EXEC sp_addrolemember N'{EscapeSqlStringLiteral(roleName)}', N'{EscapeSqlStringLiteral(memberName)}'");
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static string BuildUserDefaultSchemaClause(string defaultSchema)
+        => string.IsNullOrWhiteSpace(defaultSchema) ||
+           string.Equals(defaultSchema, "dbo", StringComparison.OrdinalIgnoreCase)
             ? string.Empty
             : $" WITH DEFAULT_SCHEMA=[{defaultSchema}]";
-
-        return $"CREATE USER [{userName}] FOR LOGIN [{userName}]{withClause}{Environment.NewLine}GO";
-    }
 
     private static string ScriptPartitionFunction(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT pf.name, pf.boundary_value_on_right, t.name AS type_name, ts.name AS type_schema, t.is_user_defined
+SELECT pf.name, pf.function_id, pf.boundary_value_on_right, t.name AS type_name, ts.name AS type_schema, t.is_user_defined
 FROM sys.partition_functions pf
 JOIN sys.partition_parameters pp ON pp.function_id = pf.function_id AND pp.parameter_id = 1
 JOIN sys.types t ON t.user_type_id = pp.user_type_id
@@ -418,10 +516,11 @@ WHERE pf.name = @name";
         }
 
         var name = reader.GetString(0);
-        var boundaryRight = reader.GetBoolean(1);
-        var typeNameRaw = reader.GetString(2);
-        var typeSchema = reader.GetString(3);
-        var isUserDefined = reader.GetBoolean(4);
+        var functionId = reader.GetInt32(1);
+        var boundaryRight = reader.GetBoolean(2);
+        var typeNameRaw = reader.GetString(3);
+        var typeSchema = reader.GetString(4);
+        var isUserDefined = reader.GetBoolean(5);
         reader.Close();
 
         var format = GetPartitionFunctionFormat(referenceLines);
@@ -434,10 +533,10 @@ WHERE pf.name = @name";
         command.CommandText = @"
 SELECT value
 FROM sys.partition_range_values rv
-WHERE rv.function_id = OBJECT_ID(@pfName)
+WHERE rv.function_id = @functionId
 ORDER BY rv.boundary_id";
         command.Parameters.Clear();
-        command.Parameters.AddWithValue("@pfName", name);
+        command.Parameters.AddWithValue("@functionId", functionId);
 
         var values = new List<string>();
         using var valueReader = command.ExecuteReader();
@@ -1442,7 +1541,7 @@ WHERE name = @name;";
     private static List<string> BuildTableCreateBlock(
         string fullName,
         IReadOnlyList<string> columns,
-        (string? DataSpace, string? LobDataSpace) storage,
+        TableStorageInfo storage,
         string[]? referenceLines)
     {
         var lines = new List<string>
@@ -1457,20 +1556,57 @@ WHERE name = @name;";
             lines.Add(columns[i] + suffix);
         }
 
-        var onLine = ")";
-        if (!string.IsNullOrWhiteSpace(storage.DataSpace))
-        {
-            onLine += $" ON [{storage.DataSpace}]";
-            if (!string.IsNullOrWhiteSpace(storage.LobDataSpace) &&
-                !string.Equals(storage.LobDataSpace, storage.DataSpace, StringComparison.OrdinalIgnoreCase))
-            {
-                onLine += $" TEXTIMAGE_ON [{storage.LobDataSpace}]";
-            }
-        }
+        var onLine = BuildTableStorageLine(storage.DataSpace, storage.PartitionColumn, storage.LobDataSpace);
 
         var referenceOnLine = TryGetCompatibleReferenceTableOnLine(referenceLines, onLine);
         lines.Add(referenceOnLine ?? onLine);
         return lines;
+    }
+
+    internal static string BuildTableStorageLine(string? dataSpace, string? partitionColumn, string? lobDataSpace)
+    {
+        var line = ")" + BuildIndexOnClause(dataSpace, partitionColumn);
+        if (!string.IsNullOrWhiteSpace(lobDataSpace))
+        {
+            line += $" TEXTIMAGE_ON [{lobDataSpace}]";
+        }
+
+        return line;
+    }
+
+    internal static string BuildIndexOnClause(string? dataSpace, string? partitionColumn)
+    {
+        if (string.IsNullOrWhiteSpace(dataSpace))
+        {
+            return string.Empty;
+        }
+
+        var clause = $" ON [{dataSpace}]";
+        if (!string.IsNullOrWhiteSpace(partitionColumn))
+        {
+            clause += $" ([{partitionColumn}])";
+        }
+
+        return clause;
+    }
+
+    internal static string BuildIndexWithClause(string compression, bool statisticsIncremental)
+    {
+        var options = new List<string>();
+        if (statisticsIncremental)
+        {
+            options.Add("STATISTICS_INCREMENTAL=ON");
+        }
+
+        if (!string.IsNullOrWhiteSpace(compression) &&
+            !string.Equals(compression, "NONE", StringComparison.OrdinalIgnoreCase))
+        {
+            options.Add($"DATA_COMPRESSION = {compression}");
+        }
+
+        return options.Count == 0
+            ? string.Empty
+            : $" WITH ({string.Join(", ", options)})";
     }
 
     private static string? TryGetCompatibleReferenceTableOnLine(string[]? referenceLines, string generatedOnLine)
@@ -1499,7 +1635,9 @@ WHERE name = @name;";
         foreach (var line in referenceLines)
         {
             var trimmed = line.TrimStart();
-            if (trimmed.StartsWith(") ON", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(trimmed, ")", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith(") ON", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith(") TEXTIMAGE_ON", StringComparison.OrdinalIgnoreCase))
             {
                 return line;
             }
@@ -2075,17 +2213,34 @@ ORDER BY c.column_id;";
         return normalized.ToLowerInvariant();
     }
 
-    private static (string? DataSpace, string? LobDataSpace) ReadTableStorage(SqlConnection connection, string fullName)
+    private static TableStorageInfo ReadTableStorage(SqlConnection connection, string fullName)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT TOP 1 ds.name AS data_space_name
+SELECT TOP 1 ds.name AS data_space_name,
+       partition_col.name AS partition_column_name
 FROM sys.indexes i
 JOIN sys.data_spaces ds ON ds.data_space_id = i.data_space_id
+LEFT JOIN sys.index_columns ic
+    ON ic.object_id = i.object_id
+   AND ic.index_id = i.index_id
+   AND ic.partition_ordinal = 1
+LEFT JOIN sys.columns partition_col
+    ON partition_col.object_id = ic.object_id
+   AND partition_col.column_id = ic.column_id
 WHERE i.object_id = OBJECT_ID(@full) AND i.index_id IN (0,1)
 ORDER BY i.index_id DESC;";
         command.Parameters.AddWithValue("@full", fullName);
-        var dataSpace = command.ExecuteScalar() as string;
+        string? dataSpace = null;
+        string? partitionColumn = null;
+        using (var reader = command.ExecuteReader())
+        {
+            if (reader.Read())
+            {
+                dataSpace = reader.IsDBNull(0) ? null : reader.GetString(0);
+                partitionColumn = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+        }
 
         command.CommandText = @"
 SELECT ds.name AS lob_data_space_name
@@ -2094,7 +2249,7 @@ LEFT JOIN sys.data_spaces ds ON ds.data_space_id = t.lob_data_space_id
 WHERE t.object_id = OBJECT_ID(@full);";
         var lobSpace = command.ExecuteScalar() as string;
 
-        return (dataSpace, lobSpace);
+        return new TableStorageInfo(dataSpace, partitionColumn, lobSpace);
     }
 
     private static string ReadTableCompression(SqlConnection connection, string fullName)
@@ -2209,9 +2364,9 @@ ORDER BY name;";
         using var command = connection.CreateCommand();
         command.CommandText = @"
 SELECT kc.name, kc.type_desc, i.type_desc AS index_type_desc,
+       i.object_id,
        i.index_id,
        ds.name AS data_space_name,
-       MAX(p.data_compression_desc) AS data_compression_desc,
        STUFF((
          SELECT ', ' + QUOTENAME(c.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
          FROM sys.index_columns ic
@@ -2222,32 +2377,46 @@ SELECT kc.name, kc.type_desc, i.type_desc AS index_type_desc,
 FROM sys.key_constraints kc
 JOIN sys.indexes i ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id
 JOIN sys.data_spaces ds ON ds.data_space_id = i.data_space_id
-JOIN sys.partitions p ON p.object_id = i.object_id AND p.index_id = i.index_id
 WHERE kc.parent_object_id = OBJECT_ID(@full)
-GROUP BY kc.name, kc.type_desc, i.type_desc, i.index_id, i.object_id, ds.name
+GROUP BY kc.name, kc.type_desc, i.type_desc, i.object_id, i.index_id, ds.name
 ORDER BY i.index_id, kc.name;";
         command.Parameters.AddWithValue("@full", fullName);
 
         var keyLineMap = BuildKeyConstraintLineMap(referenceLines);
-        var lines = new List<string>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        var constraints = new List<(string Name, string TypeDesc, string IndexType, int ObjectId, int IndexId, string DataSpace, string Columns)>();
+        using (var reader = command.ExecuteReader())
         {
-            var name = reader.GetString(0);
-            var typeDesc = reader.GetString(1);
-            var indexType = reader.GetString(2);
-            var dataSpace = reader.GetString(4);
-            var compression = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
-            var columns = reader.GetString(6);
+            while (reader.Read())
+            {
+                constraints.Add((
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetInt32(3),
+                    reader.GetInt32(4),
+                    reader.GetString(5),
+                    reader.GetString(6)));
+            }
+        }
+
+        var lines = new List<string>();
+        foreach (var constraint in constraints)
+        {
+            var name = constraint.Name;
+            var typeDesc = constraint.TypeDesc;
+            var indexType = constraint.IndexType;
+            var objectId = constraint.ObjectId;
+            var indexId = constraint.IndexId;
+            var dataSpace = constraint.DataSpace;
+            var columns = constraint.Columns;
 
             var constraintType = typeDesc == "PRIMARY_KEY_CONSTRAINT" ? "PRIMARY KEY" : "UNIQUE";
             var clustered = string.Equals(indexType, "CLUSTERED", StringComparison.OrdinalIgnoreCase)
                 ? "CLUSTERED"
                 : "NONCLUSTERED";
-            var withCompression = string.Equals(compression, "PAGE", StringComparison.OrdinalIgnoreCase)
-                ? " WITH (DATA_COMPRESSION = PAGE)"
-                : string.Empty;
-            var onClause = string.IsNullOrWhiteSpace(dataSpace) ? string.Empty : $" ON [{dataSpace}]";
+            var indexOptions = ReadIndexScriptingOptions(connection, objectId, indexId);
+            var withClause = BuildIndexWithClause(indexOptions.Compression, indexOptions.StatisticsIncremental);
+            var onClause = BuildIndexOnClause(dataSpace, indexOptions.PartitionColumn);
 
             if (keyLineMap != null && keyLineMap.TryGetValue(name, out var line))
             {
@@ -2255,7 +2424,7 @@ ORDER BY i.index_id, kc.name;";
             }
             else
             {
-                lines.Add($"ALTER TABLE {fullName} ADD CONSTRAINT [{name}] {constraintType} {clustered} ({columns}){withCompression}{onClause}");
+                lines.Add($"ALTER TABLE {fullName} ADD CONSTRAINT [{name}] {constraintType} {clustered} ({columns}){withClause}{onClause}");
             }
             lines.Add("GO");
         }
@@ -2351,6 +2520,7 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
             }
 
             var isColumnstore = index.TypeDesc.IndexOf("COLUMNSTORE", StringComparison.OrdinalIgnoreCase) >= 0;
+            var indexOptions = ReadIndexScriptingOptions(connection, index.ObjectId, index.IndexId);
             if (isColumnstore)
             {
                 if (indexLineMap != null && indexLineMap.TryGetValue(index.Name, out var line))
@@ -2363,14 +2533,10 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
                 var columnstoreType = index.TypeDesc.StartsWith("CLUSTERED", StringComparison.OrdinalIgnoreCase)
                     ? "CLUSTERED COLUMNSTORE"
                     : "NONCLUSTERED COLUMNSTORE";
-                var partitionColumn = ReadIndexPartitionColumn(connection, fullName, index.IndexId);
-                var columnstoreOnClause = string.IsNullOrWhiteSpace(index.DataSpace) ? string.Empty : $" ON [{index.DataSpace}]";
-                if (!string.IsNullOrWhiteSpace(partitionColumn))
-                {
-                    columnstoreOnClause += $" ([{partitionColumn}])";
-                }
+                var columnstoreWithClause = BuildIndexWithClause("NONE", indexOptions.StatisticsIncremental);
+                var columnstoreOnClause = BuildIndexOnClause(index.DataSpace, indexOptions.PartitionColumn);
 
-                lines.Add($"CREATE {columnstoreType} INDEX [{index.Name}] ON {fullName}{columnstoreOnClause}");
+                lines.Add($"CREATE {columnstoreType} INDEX [{index.Name}] ON {fullName}{columnstoreWithClause}{columnstoreOnClause}");
                 lines.Add("GO");
                 continue;
             }
@@ -2384,9 +2550,8 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
             var type = string.Equals(index.TypeDesc, "CLUSTERED", StringComparison.OrdinalIgnoreCase) ? "CLUSTERED" : "NONCLUSTERED";
             var includeClause = includes.Count > 0 ? $" INCLUDE ({string.Join(", ", includes)})" : string.Empty;
             var filterClause = string.IsNullOrWhiteSpace(index.Filter) ? string.Empty : $" WHERE {index.Filter}";
-            var compression = ReadIndexCompression(connection, index.ObjectId, index.IndexId);
-            var withCompression = compression == "NONE" ? string.Empty : $" WITH (DATA_COMPRESSION = {compression})";
-            var onClause = string.IsNullOrWhiteSpace(index.DataSpace) ? string.Empty : $" ON [{index.DataSpace}]";
+            var withClause = BuildIndexWithClause(indexOptions.Compression, indexOptions.StatisticsIncremental);
+            var onClause = BuildIndexOnClause(index.DataSpace, indexOptions.PartitionColumn);
 
             if (indexLineMap != null && indexLineMap.TryGetValue(index.Name, out var lineNonColumnstore))
             {
@@ -2394,12 +2559,20 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
             }
             else
             {
-                lines.Add($"CREATE {unique}{type} INDEX [{index.Name}] ON {fullName} ({string.Join(", ", keys)}){includeClause}{filterClause}{withCompression}{onClause}");
+                lines.Add($"CREATE {unique}{type} INDEX [{index.Name}] ON {fullName} ({string.Join(", ", keys)}){includeClause}{filterClause}{withClause}{onClause}");
             }
             lines.Add("GO");
         }
 
         return lines;
+    }
+
+    private static IndexScriptingOptions ReadIndexScriptingOptions(SqlConnection connection, int objectId, int indexId)
+    {
+        return new IndexScriptingOptions(
+            ReadIndexCompression(connection, objectId, indexId),
+            ReadIndexPartitionColumn(connection, objectId, indexId),
+            ReadIndexStatisticsIncremental(connection, objectId, indexId));
     }
 
     private static string ReadIndexCompression(SqlConnection connection, int objectId, int indexId)
@@ -2435,17 +2608,30 @@ WHERE p.object_id = @obj AND p.index_id = @idx;";
         return "NONE";
     }
 
-    private static string? ReadIndexPartitionColumn(SqlConnection connection, string fullName, int indexId)
+    private static string? ReadIndexPartitionColumn(SqlConnection connection, int objectId, int indexId)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
 SELECT c.name
 FROM sys.index_columns ic
 JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-WHERE ic.object_id = OBJECT_ID(@full) AND ic.index_id = @idx AND ic.partition_ordinal = 1;";
-        command.Parameters.AddWithValue("@full", fullName);
+WHERE ic.object_id = @obj AND ic.index_id = @idx AND ic.partition_ordinal = 1;";
+        command.Parameters.AddWithValue("@obj", objectId);
         command.Parameters.AddWithValue("@idx", indexId);
         return command.ExecuteScalar() as string;
+    }
+
+    private static bool ReadIndexStatisticsIncremental(SqlConnection connection, int objectId, int indexId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT s.is_incremental
+FROM sys.stats s
+WHERE s.object_id = @obj AND s.stats_id = @idx;";
+        command.Parameters.AddWithValue("@obj", objectId);
+        command.Parameters.AddWithValue("@idx", indexId);
+
+        return command.ExecuteScalar() is bool isIncremental && isIncremental;
     }
 
     private static IEnumerable<string> ReadTableForeignKeys(SqlConnection connection, string fullName)
@@ -4598,4 +4784,7 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             _ => baseName
         };
     }
+
+    private static string EscapeSqlStringLiteral(string value)
+        => value.Replace("'", "''", StringComparison.Ordinal);
 }

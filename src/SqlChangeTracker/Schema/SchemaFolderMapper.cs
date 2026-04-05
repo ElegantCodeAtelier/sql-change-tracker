@@ -8,14 +8,6 @@ internal sealed class SchemaFolderMapper
 {
     private readonly Dictionary<string, string> _folderMap;
     private readonly bool _dataWriteAllFilesInOneDirectory;
-    private static readonly HashSet<string> SchemaLessTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Schema",
-        "Role",
-        "User",
-        "PartitionFunction",
-        "PartitionScheme"
-    };
 
     public SchemaFolderMapper(IReadOnlyList<Config.FolderMapEntry> folderMap, bool? dataWriteAllFilesInOneDirectory)
     {
@@ -56,7 +48,7 @@ internal sealed class SchemaFolderMapper
             throw new InvalidOperationException($"No folder mapping defined for object type '{objectType}'.");
         }
 
-        var includeSchema = !SchemaLessTypes.Contains(objectType);
+        var includeSchema = !SupportedSqlObjectTypes.IsSchemaLess(objectType);
         return Path.Combine(folder, FormatFileName(identifier, false, includeSchema));
     }
 

@@ -252,4 +252,28 @@ public sealed class SqlServerScripterCompatibilityTests
             "GO"
         }, reordered);
     }
+
+    [Fact]
+    public void BuildTableStorageLine_EmitsPartitionColumnAndTextImageOn_WhenPresent()
+    {
+        var line = SqlServerScripter.BuildTableStorageLine("ExamplePartitionScheme", "PartitionKeyId", "PRIMARY");
+
+        Assert.Equal(") ON [ExamplePartitionScheme] ([PartitionKeyId]) TEXTIMAGE_ON [PRIMARY]", line);
+    }
+
+    [Fact]
+    public void BuildIndexWithClause_EmitsStatisticsIncrementalBeforeCompression_WhenBothPresent()
+    {
+        var clause = SqlServerScripter.BuildIndexWithClause("PAGE", statisticsIncremental: true);
+
+        Assert.Equal(" WITH (STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = PAGE)", clause);
+    }
+
+    [Fact]
+    public void BuildIndexOnClause_EmitsPartitionColumn_WhenPresent()
+    {
+        var clause = SqlServerScripter.BuildIndexOnClause("ExamplePartitionScheme", "PartitionKeyId");
+
+        Assert.Equal(" ON [ExamplePartitionScheme] ([PartitionKeyId])", clause);
+    }
 }

@@ -31,6 +31,10 @@ public sealed class InitAndConfigCommandTests
             Assert.True(File.Exists(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName)));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Tables")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Stored Procedures")));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Synonyms")));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Types", "User-defined Data Types")));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Security", "Roles")));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Storage", "Partition Functions")));
         }
         finally
         {

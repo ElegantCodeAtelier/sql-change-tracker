@@ -1,14 +1,14 @@
 # Project Plan
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-04-04
 
 This plan reflects the current repository state and defines execution order to reach v1.
 
 ## Current State Summary
 - CLI entrypoint exists with commands: `init`, `config`, `status`, `diff`, `pull`.
 - `init`, `config`, `status`, `diff`, and `pull` are implemented.
-- `status`, `diff`, and `pull` are active for core object types only: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`.
+- `status`, `diff`, and `pull` are active for: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
 - Config runtime contract is simplified to:
   - `database` (existing fields)
   - `options.orderByDependencies`
@@ -26,9 +26,9 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 | --- | --- | --- | --- |
 | S1 | CLI foundation and command wiring | done | Command registration and global settings are in place. |
 | S2 | Config and init flows | done | `sqlct.config.json` read/write and project seeding are functional. |
-| S3 | SQL adapter and schema mapping | done | Core services are integrated into command runtime. |
-| S4 | Status/diff engine | done | End-to-end behavior implemented for core object types. |
-| S5 | Pull workflow | done | End-to-end reconciliation implemented for core object types. |
+| S3 | SQL adapter and schema mapping | done | Active object-type services are integrated into command runtime. |
+| S4 | Status/diff engine | done | End-to-end behavior implemented for active object types. |
+| S5 | Pull workflow | done | End-to-end reconciliation implemented for active object types. |
 | S6 | Test and quality hardening | in_progress | Fast unit tests added; DB-backed local-only coverage still to expand. |
 | S7 | Packaging and release readiness | in_progress | Packaging baseline exists; release gates need completion. |
 
@@ -47,7 +47,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - `specs/09-architecture.md`
 
 ### Tasks
-- Implemented folder scan model for core schema folders.
+- Implemented folder scan model for active schema folders.
 - Implemented DB-vs-folder comparison/classification (`added`, `changed`, `deleted`) with deterministic ordering.
 - Implemented script normalization hooks for line-ending/trailing-newline stability.
 - Implemented `status` command output (human + JSON).
@@ -55,7 +55,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - Implemented exit code behavior (`0` no diffs, `1` diffs, `2/3/4` failures).
 
 ### Acceptance Criteria
-- `sqlct status` reports added/changed/deleted consistently for core object types.
+- `sqlct status` reports added/changed/deleted consistently for active object types.
 - `sqlct diff` shows deterministic unified diffs (single object and aggregate modes).
 - JSON output contracts are stable and aligned with `specs/05-output-formats.md`.
 
@@ -77,7 +77,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - Produced pull summary output (human + JSON).
 
 ### Acceptance Criteria
-- `sqlct pull` materializes DB state into expected core folder structure.
+- `sqlct pull` materializes DB state into expected active folder structure.
 - Output is deterministic across repeated runs.
 - Command returns success/failure codes aligned with spec.
 
@@ -91,7 +91,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - Remove stale naming in test artifacts and project metadata where applicable.
 
 ### Acceptance Criteria
-- Stable test suite for core command paths.
+- Stable test suite for active command paths.
 - Clear separation of fast tests vs local-only integration tests.
 - Reproducible local validation steps documented.
 - Local POC tooling can switch between named sources and defaults to AdventureWorks.
@@ -112,11 +112,11 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - `sqlct.config.json` is the primary runtime configuration source.
 - Local artifacts under `local/` remain untracked.
 - Keep naming compatibility-neutral in code and docs.
-- Keep v1 runtime scope constrained to core object types and simplified config contract.
+- Keep v1 runtime scope constrained to the active object types and simplified config contract.
 
 ## Done Criteria for v1
 - `init`, `config`, `status`, `diff`, and `pull` are fully implemented.
-- Core behavior is covered by automated tests.
+- Active behavior is covered by automated tests.
 - Deferred features are explicitly documented:
   - include/exclude filters
   - comparison ignore options

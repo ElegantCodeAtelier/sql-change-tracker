@@ -36,7 +36,7 @@ internal class StatusCommandSettings : ProjectCommandSettings
 
 internal sealed class DiffCommandSettings : StatusCommandSettings
 {
-    [CommandOption("--object <SCHEMA_NAME>")]
+    [CommandOption("--object <SELECTOR>")]
     public string? ObjectName { get; set; }
 }
 
