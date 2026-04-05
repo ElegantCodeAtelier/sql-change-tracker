@@ -1,4 +1,3 @@
-using System.Text.Json;
 using SqlChangeTracker.Config;
 using Xunit;
 
@@ -89,7 +88,7 @@ public sealed class InitAndConfigCommandTests
     }
 
     [Fact]
-    public void Config_WhenConfigMissing_CreatesDefaultConfig()
+    public void Config_WhenConfigMissing_ReturnsInvalidConfig()
     {
         var tempDir = CreateTempDir();
 
@@ -101,14 +100,8 @@ public sealed class InitAndConfigCommandTests
 
             var exitCode = Program.Main(["config", "--project-dir", projectDir]);
 
-            Assert.Equal(ExitCodes.Success, exitCode);
-            Assert.True(File.Exists(configPath));
-
-            using var document = JsonDocument.Parse(File.ReadAllText(configPath));
-            Assert.Equal("integrated", document.RootElement
-                .GetProperty("database")
-                .GetProperty("auth")
-                .GetString());
+            Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+            Assert.False(File.Exists(configPath));
         }
         finally
         {
