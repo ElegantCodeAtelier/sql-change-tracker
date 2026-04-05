@@ -38,6 +38,7 @@ Current draft shape:
 ## Config Command Behavior
 `sqlct config` parses, validates, and writes configuration from the project directory.
 
+- Requires `sqlct.config.json` to already exist in the project directory. If the file is missing, `config` exits with code `2` (`invalid config`) and prints: `Error: project directory is not initialized.` with hint `run \`sqlct init\` first.` No file is created.
 - Validates `sqlct.config.json` as the primary source.
 - Detects optional compatibility file presence for summary output only.
 - Writes normalized configuration back to `sqlct.config.json`.
