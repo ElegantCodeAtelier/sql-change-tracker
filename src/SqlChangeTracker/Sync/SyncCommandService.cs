@@ -533,7 +533,7 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         Parallel.ForEach(activeObjects, new ParallelOptions { MaxDegreeOfParallelism = dop }, (dbObject, loopState) =>
         {
-            if (Volatile.Read(ref firstFailure) != null)
+            if (firstFailure != null)
             {
                 loopState.Stop();
                 return;
@@ -573,6 +573,8 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
 
             var key = BuildObjectKey(dbObject.ObjectType, dbObject.Schema, dbObject.Name);
+            // TryAdd is a no-op for duplicate keys; duplicates are not expected since each catalog query
+            // targets distinct object types, and this matches the original ContainsKey guard behavior.
             objects.TryAdd(key, new InternalObject(
                 key,
                 dbObject.Schema,

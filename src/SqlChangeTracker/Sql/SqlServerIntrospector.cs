@@ -234,6 +234,7 @@ ORDER BY ps.name;", MapObjectType),
     {
         using var connection = SqlConnectionFactory.Create(options);
         connection.Open();
+        // .ToList() materializes results before the connection is disposed.
         return QueryObjects(connection, sql, typeMapper).ToList();
     }
 
@@ -251,6 +252,7 @@ ORDER BY ps.name;", MapObjectType),
             return [];
         }
 
+        // .ToList() materializes results before the connection is disposed.
         return QueryObjects(connection, sql, typeMapper).ToList();
     }
 
