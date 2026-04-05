@@ -2995,6 +2995,29 @@ ORDER BY i.name, ep.name;";
             }
         }
 
+        if (string.Equals(obj.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(obj.ObjectType, "Function", StringComparison.OrdinalIgnoreCase))
+        {
+            command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value, p.name AS param_name
+FROM sys.extended_properties ep
+JOIN sys.parameters p ON p.object_id = ep.major_id AND p.parameter_id = ep.minor_id
+WHERE ep.class_desc = 'OBJECT_OR_COLUMN' AND ep.major_id = OBJECT_ID(@full) AND ep.minor_id <> 0
+ORDER BY p.name, ep.name;";
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("@full", $"[{obj.Schema}].[{obj.Name}]");
+
+            using var paramReader = command.ExecuteReader();
+            while (paramReader.Read())
+            {
+                var propName = paramReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
+                var propValue = paramReader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
+                var paramName = paramReader.GetString(2);
+                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{obj.Schema}', '{className}', N'{obj.Name}', 'PARAMETER', N'{paramName}'");
+                lines.Add("GO");
+            }
+        }
+
         return lines;
     }
 
