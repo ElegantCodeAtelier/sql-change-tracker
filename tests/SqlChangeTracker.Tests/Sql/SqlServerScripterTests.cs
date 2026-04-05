@@ -306,7 +306,7 @@ public sealed class SqlServerScripterTests
     }
 
     [Fact]
-    public void ScriptProcedure_EmitsParameterExtendedProperties_WhenProcedureWithParameterEPsExists()
+    public void ScriptProcedure_EmitsParameterExtendedProperties_WhenProcedureWithParameterExtendedPropertiesExists()
     {
         var options = GetOptions();
         if (options == null)
@@ -328,7 +328,7 @@ public sealed class SqlServerScripterTests
     }
 
     [Fact]
-    public void ScriptFunction_EmitsParameterExtendedProperties_WhenFunctionWithParameterEPsExists()
+    public void ScriptFunction_EmitsParameterExtendedProperties_WhenFunctionWithParameterExtendedPropertiesExists()
     {
         var options = GetOptions();
         if (options == null)
