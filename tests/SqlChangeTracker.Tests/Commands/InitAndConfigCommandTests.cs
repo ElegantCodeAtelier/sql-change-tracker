@@ -42,6 +42,50 @@ public sealed class InitAndConfigCommandTests
     }
 
     [Fact]
+    public void Init_WithProjectDirWrappedInSingleQuotes_AndTrailingSlash_CreatesProjectStructureAndConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project with spaces");
+            var wrappedProjectDir = $"'{projectDir}{Path.DirectorySeparatorChar}'";
+
+            var exitCode = Program.Main(["init", "--project-dir", wrappedProjectDir]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+            Assert.True(File.Exists(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName)));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Tables")));
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithProjectDirEndingInDoubleQuoteArtifact_CreatesProjectStructureAndConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project with spaces");
+            var projectDirWithQuoteArtifact = projectDir + Path.DirectorySeparatorChar + '"';
+
+            var exitCode = Program.Main(["init", "--project-dir", projectDirWithQuoteArtifact]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+            Assert.True(File.Exists(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName)));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Tables")));
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void Init_WithConfigSwitch_ReturnsParsingFailure()
     {
         var tempDir = CreateTempDir();

@@ -10,7 +10,7 @@ internal sealed class ConfigCommand : Command<ConfigCommandSettings>
     public override int Execute(CommandContext context, ConfigCommandSettings settings, CancellationToken cancellationToken)
     {
         var output = new OutputFormatter(settings.Json);
-        var projectDir = ResolveProjectDir(settings.ProjectDir);
+        var projectDir = ProjectPathResolver.Resolve(settings.ProjectDir);
         var configPath = SqlctConfigWriter.GetDefaultPath(projectDir.FullPath);
 
         var reader = new SqlctConfigReader();
@@ -55,37 +55,10 @@ internal sealed class ConfigCommand : Command<ConfigCommandSettings>
             projectDir.DisplayPath,
             true,
             Array.Empty<ConfigError>(),
-            NormalizeDisplayPath(configPath, configPath),
+            ProjectPathResolver.NormalizeDisplayPath(configPath, configPath),
             config,
             scanResult.Scan!));
 
         return ExitCodes.Success;
     }
-
-    private static ResolvedPath ResolveProjectDir(string? projectDir)
-    {
-        var input = string.IsNullOrWhiteSpace(projectDir) ? Environment.CurrentDirectory : projectDir;
-        var fullPath = Path.GetFullPath(input!, Environment.CurrentDirectory);
-        var displayPath = NormalizeDisplayPath(fullPath, input!);
-        return new ResolvedPath(fullPath, displayPath);
-    }
-
-    private static string NormalizeDisplayPath(string fullPath, string originalInput)
-    {
-        if (Path.IsPathRooted(originalInput))
-        {
-            return fullPath;
-        }
-
-        var relative = Path.GetRelativePath(Environment.CurrentDirectory, fullPath);
-        if (relative.StartsWith("."))
-        {
-            return relative;
-        }
-
-        var prefix = Path.DirectorySeparatorChar == '\\' ? ".\\" : "./";
-        return prefix + relative;
-    }
-
-    private sealed record ResolvedPath(string FullPath, string DisplayPath);
 }

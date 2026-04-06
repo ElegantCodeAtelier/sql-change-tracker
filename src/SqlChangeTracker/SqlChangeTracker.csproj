@@ -13,6 +13,8 @@
     <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
     <PackageTags>sql;database;schema;cli;source-control</PackageTags>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/ElegantCodeAtelier/sql-change-tracker</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
   <ItemGroup>

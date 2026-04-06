@@ -125,6 +125,20 @@ The following types are defined in this specification family and not fully imple
   - then constraint-level properties (ordered by constraint name, then property name),
   - then index-level properties (ordered by index name, then property name),
   - then trigger-level properties (ordered by trigger name, then property name).
+- Schema extended properties:
+  - schema-level properties only (ordered by property name).
+- Principal extended properties for tracked users and roles:
+  - principal-level properties only (ordered by property name).
+- Sequence extended properties:
+  - sequence-level properties only (ordered by property name).
+- Synonym extended properties:
+  - synonym-level properties only (ordered by property name).
+- User-defined type extended properties:
+  - type-level properties only (ordered by property name).
+- Partition-function extended properties:
+  - partition-function-level properties only (ordered by property name).
+- Partition-scheme extended properties:
+  - partition-scheme-level properties only (ordered by property name).
 
 ### 6.5 Type Formatting Rules
 - User-defined types MUST be emitted as `[schema].[type]`.
@@ -363,12 +377,18 @@ Each emitted statement MUST be followed by `GO`.
   - if cached with explicit size: `CACHE <size>`,
   - if cached without explicit size: `CACHE ` (trailing space preserved),
   - if not cached: `NO CACHE`.
+- Sequence-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'SEQUENCE', N'<sequence>', NULL, NULL`
+- Sequence extended properties MUST be emitted after the sequence `GO`, ordered by property name.
 
 ### 8.6 Schemas
 - Schema scripts MUST emit one `CREATE SCHEMA [name]` statement for each user-defined schema that is in scope.
 - `dbo`, `sys`, and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
 - When schema ownership metadata is present, `AUTHORIZATION [owner]` MUST be emitted on the following line.
 - Schema scripts MUST end with `GO`.
+- Schema-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', NULL, NULL, NULL, NULL`
+- Schema extended properties MUST be emitted after the base schema `GO`, ordered by property name.
 
 ### 8.7 Roles
 - User-defined roles MUST emit `CREATE ROLE [name]` and optional `AUTHORIZATION [owner]`, followed by `GO`.
@@ -377,6 +397,9 @@ Each emitted statement MUST be followed by `GO`.
 - Role membership statements MUST use:
   - `EXEC sp_addrolemember N'<role>', N'<member>'`
 - System-principal memberships for `dbo`, `guest`, `INFORMATION_SCHEMA`, and `sys` MUST NOT be emitted.
+- Role-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'USER', N'<role>', NULL, NULL, NULL, NULL`
+- Role extended properties MUST be emitted after the base role DDL and any role-membership statements, ordered by property name.
 
 ### 8.8 Users
 - User scripts MUST emit one `CREATE USER` statement and end with `GO`.
@@ -388,12 +411,18 @@ Each emitted statement MUST be followed by `GO`.
   - `FOR ASYMMETRIC KEY [key]`
 - `WITH DEFAULT_SCHEMA=[schema]` MUST be emitted only when a non-empty, non-`dbo` default schema applies to the emitted user shape.
 - Contained database users that require `WITH PASSWORD` remain unsupported in the current scripting engine and MUST fail explicitly rather than emit lossy output.
+- User-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'USER', N'<user>', NULL, NULL, NULL, NULL`
+- User extended properties MUST be emitted after the base user `GO`, ordered by property name.
 
 ### 8.9 Synonyms
 - Synonym scripts MUST emit:
   - `CREATE SYNONYM [schema].[name] FOR <base_object_name>`
   - `GO`
 - Base-object text MUST come from synonym metadata and MUST NOT be schema-normalized or re-quoted beyond what SQL Server returns.
+- Synonym-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'SYNONYM', N'<synonym>', NULL, NULL`
+- Synonym extended properties MUST be emitted after the synonym `GO`, ordered by property name.
 
 ### 8.10 UserDefinedType
 - Alias user-defined type scripts MUST emit:
@@ -401,16 +430,25 @@ Each emitted statement MUST be followed by `GO`.
   - `GO`
 - Base-type formatting MUST reuse the general type-formatting rules from Section 6.5.
 - Table types remain out of scope for this subsection and continue to follow the planned-coverage rules.
+- User-defined-type extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'TYPE', N'<type>', NULL, NULL`
+- User-defined-type extended properties MUST be emitted after the type `GO`, ordered by property name.
 
 ### 8.11 Partition Functions
 - Partition-function metadata MUST come from `sys.partition_functions`, `sys.partition_parameters`, `sys.types`, and `sys.partition_range_values`.
 - Output MUST emit one `CREATE PARTITION FUNCTION` statement with deterministic boundary ordering and end with `GO`.
 - System base types MAY be emitted bracketed or unbracketed only when compatibility reconciliation preserves the reference spelling; otherwise canonical output remains deterministic per the implementation.
+- Partition-function extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'PARTITION FUNCTION', N'<function>', NULL, NULL, NULL, NULL`
+- Partition-function extended properties MUST be emitted after the partition-function `GO`, ordered by property name.
 
 ### 8.12 Partition Schemes
 - Partition-scheme metadata MUST come from `sys.partition_schemes`, `sys.partition_functions`, and destination data-space metadata.
 - Output MUST emit one `CREATE PARTITION SCHEME` statement that references the target partition function and ordered destination filegroups, followed by `GO`.
 - Empty or missing destination lists MUST still emit a valid `TO (...)` clause shape consistent with discovered metadata.
+- Partition-scheme extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'PARTITION SCHEME', N'<scheme>', NULL, NULL, NULL, NULL`
+- Partition-scheme extended properties MUST be emitted after the partition-scheme `GO`, ordered by property name.
 
 ### 8.13 TableData
 - Table-data scripting applies only to tables explicitly listed in `data.trackedTables`.

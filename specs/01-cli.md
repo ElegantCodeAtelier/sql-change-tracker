@@ -48,6 +48,8 @@ Common flag behavior across commands.
 
 ### --project-dir
 - Overrides the project directory for the current command.
+- `--project-dir` values wrapped in matching single or double quotes MUST be unwrapped before path resolution.
+- On Windows, stray double-quote artifacts introduced by native argument parsing for quoted paths with a trailing backslash MUST be ignored before path resolution.
 - When omitted, default to current working directory.
 - For `init`, if omitted, prompt for confirmation before initializing the current working directory.
 

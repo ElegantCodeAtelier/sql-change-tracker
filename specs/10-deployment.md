@@ -52,6 +52,7 @@ Keep generated artifacts out of Git.
 
 ## Release Checklist
 - [ ] Bump `Version` in `src/SqlChangeTracker/SqlChangeTracker.csproj`.
+- [ ] Promote `[Unreleased]` in `CHANGELOG.md` to `[X.Y.Z] - YYYY-MM-DD` and add a new empty `[Unreleased]` section above it.
 - [ ] Run `dotnet test tests/SqlChangeTracker.Tests/SqlChangeTracker.Tests.csproj`.
 - [ ] Confirm `NUGET_API_KEY` is set in GitHub Actions secrets.
 - [ ] Tag and push: `git tag vX.Y.Z` then `git push origin vX.Y.Z`.

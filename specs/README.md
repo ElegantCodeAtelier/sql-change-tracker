@@ -14,4 +14,5 @@ This folder contains evolving specifications for the SQL Change Tracker CLI.
 - `08-roadmap.md`: milestones and open items
 - `09-architecture.md`: module plan and data flow
 - `10-deployment.md`: .NET tool deployment
+- `11-changelog.md`: changelog strategy and contribution workflow
 - `12-project-plan.md`: implementation plan for agents
