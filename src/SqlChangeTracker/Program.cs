@@ -31,6 +31,16 @@ internal static class Program
                 .WithDescription("Show textual diffs.");
             config.AddCommand<PullCommand>("pull")
                 .WithDescription("Write database changes into the schema folder.");
+            config.AddBranch<DataBranchSettings>("data", data =>
+            {
+                data.SetDescription("Manage tracked tables for selective data scripting.");
+                data.AddCommand<DataTrackCommand>("track")
+                    .WithDescription("Track tables for data scripting.");
+                data.AddCommand<DataUntrackCommand>("untrack")
+                    .WithDescription("Stop tracking tables for data scripting.");
+                data.AddCommand<DataListCommand>("list")
+                    .WithDescription("List tracked tables.");
+            });
         });
 
         return app.Run(args);

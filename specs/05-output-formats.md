@@ -9,10 +9,10 @@ Last updated: 2026-04-06
 - Report only `sqlct` project state (`sqlct.config.json`, schema folder state, DB comparison results).
 - Do not list optional compatibility input files as output entities.
 - `status`, `diff`, and `pull` may include warnings for skipped unsupported object types or invalid script names.
-- `data track`, `data untrack`, and `data list` may include informational messages for no-op outcomes.
 - Schema-less active object types use bare names in human and JSON payloads (for example `ServiceUser`, `AppReader`, `Years_PF`).
 - Tracked table-data artifacts use `schema.name` for display names and `TableData` as the output `type`.
 - `data track` and `data untrack` list matched tables before asking for confirmation.
+- `data track` and `data untrack` report one of `Status: updated`, `Status: no changes`, or `Status: cancelled` in final human output.
 
 ## Progress Spinner
 - `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running, with per-step status updates (e.g. "Scripting objects (3/42): dbo.Customer" or "Scripting objects (7/42): ServiceUser").
@@ -24,36 +24,52 @@ Last updated: 2026-04-06
 
 ### Example: data track
 ```text
+Matching tables:
+  Sales.Customer
+  Sales.SalesOrderHeader
+Track these tables? [y/N]: y
 Data track: pattern=Sales.*
-Matching tables: 2
+Matched tables:
   Sales.Customer
   Sales.SalesOrderHeader
-Confirm update to sqlct.config.json? [y/N]: y
-Tracked tables added: 2
+Tracked tables:
   Sales.Customer
   Sales.SalesOrderHeader
+Status: updated
 ```
 
 ### Example: data track (no-op)
 ```text
 Data track: pattern=Archive.*
-Info: no matching tables; config unchanged.
+Matched tables:
+  none
+Tracked tables:
+  dbo.Customer
+  Sales.SalesOrderHeader
+Status: no changes
 ```
 
 ### Example: data untrack (cancelled)
 ```text
-Data untrack: pattern=Sales.*
-Matching tracked tables: 2
+Matching tracked tables:
   Sales.Customer
   Sales.SalesOrderHeader
-Confirm update to sqlct.config.json? [y/N]: n
-Info: operation cancelled; config unchanged.
+Untrack these tables? [y/N]: n
+Data untrack: pattern=Sales.*
+Matched tables:
+  Sales.Customer
+  Sales.SalesOrderHeader
+Tracked tables:
+  dbo.Customer
+  Sales.Customer
+  Sales.SalesOrderHeader
+Status: cancelled
 ```
 
 ### Example: data list
 ```text
 Data list: project-dir=.\schema
-Tracked tables: 2
+Tracked tables:
   dbo.Customer
   Sales.SalesOrderHeader
 ```
@@ -61,16 +77,15 @@ Tracked tables: 2
 ### Example: status
 ```text
 Status: target=db
-Schema: Added: 2  Changed: 1  Deleted: 0
-Data: Added: 0  Changed: 1  Deleted: 0
+Schema: Added=2  Changed=1  Deleted=0
+Data:   Added=0  Changed=1  Deleted=0
 
-Schema Added:
+Added:
   dbo.NewTable
   dbo.NewView
-Schema Changed:
+Changed:
   dbo.Customer
-Data Changed:
-  dbo.Customer
+  data:dbo.Customer
 ```
 
 ### Example: diff (single object)
@@ -127,8 +142,6 @@ Config: project-dir=.\schema
 Config file: .\schema\sqlct.config.json
 Database: server=localhost; name=MyDb; auth=integrated
 Options: orderByDependencies=true
-Data: trackedTables=2
-Compatibility: detected=false
 Config validation: ok
 ```
 
@@ -148,7 +161,6 @@ Skipped:
 Common fields:
 - `command` (string)
 - `projectDir` (string, when resolved)
-- `info` (array, optional)
 - `warnings` (array, optional)
 
 Prompt behavior:
@@ -160,6 +172,7 @@ Prompt behavior:
 Data command fields:
 - `pattern` (string, for `data track` / `data untrack`)
 - `changed` (bool, for `data track` / `data untrack`)
+- `cancelled` (bool, for `data track` / `data untrack`)
 - `matchedTables` (array of `schema.table`, for `data track` / `data untrack`)
 - `trackedTables` (array of `schema.table`, for `data track`, `data untrack`, and `data list`)
 
@@ -187,7 +200,6 @@ Config fields:
 - `errors` (array of `{ code, file, message }`)
 - `configPath` (string)
 - `config` (object, mirrors `sqlct.config.json`)
-- `compatibility` (object with `hasAny`, `hasDatabaseInfo`, `hasScpf`)
 
 Error fields:
 - `error` (object with `{ code, message, ...context }`)
@@ -232,8 +244,7 @@ Error fields:
   "trackedTables": [
     "dbo.Customer",
     "Sales.SalesOrderHeader"
-  ],
-  "warnings": []
+  ]
 }
 ```
 
@@ -244,15 +255,12 @@ Error fields:
   "projectDir": ".\\schema",
   "pattern": "Archive.*",
   "changed": false,
+  "cancelled": false,
   "matchedTables": [],
   "trackedTables": [
     "dbo.Customer",
     "Sales.SalesOrderHeader"
-  ],
-  "info": [
-    "no matching tables; config unchanged."
-  ],
-  "warnings": []
+  ]
 }
 ```
 
@@ -263,6 +271,7 @@ Error fields:
   "projectDir": ".\\schema",
   "pattern": "Sales.*",
   "changed": false,
+  "cancelled": true,
   "matchedTables": [
     "Sales.Customer",
     "Sales.SalesOrderHeader"
@@ -271,11 +280,7 @@ Error fields:
     "dbo.Customer",
     "Sales.Customer",
     "Sales.SalesOrderHeader"
-  ],
-  "info": [
-    "operation cancelled; config unchanged."
-  ],
-  "warnings": []
+  ]
 }
 ```
 
@@ -322,11 +327,6 @@ Error fields:
         "Sales.SalesOrderHeader"
       ]
     }
-  },
-  "compatibility": {
-    "hasAny": false,
-    "hasDatabaseInfo": false,
-    "hasScpf": false
   }
 }
 ```

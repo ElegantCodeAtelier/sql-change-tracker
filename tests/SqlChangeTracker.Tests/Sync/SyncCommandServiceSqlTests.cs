@@ -47,9 +47,12 @@ public sealed class SyncCommandServiceSqlTests
 
             var status = service.RunStatus(projectDir, "db");
             Assert.True(status.Success, status.Error?.Detail ?? status.Error?.Message);
-            Assert.Equal(0, status.Payload!.Summary.Added);
-            Assert.Equal(0, status.Payload.Summary.Changed);
-            Assert.Equal(0, status.Payload.Summary.Deleted);
+            Assert.Equal(0, status.Payload!.Summary.Schema.Added);
+            Assert.Equal(0, status.Payload.Summary.Schema.Changed);
+            Assert.Equal(0, status.Payload.Summary.Schema.Deleted);
+            Assert.Equal(0, status.Payload.Summary.Data.Added);
+            Assert.Equal(0, status.Payload.Summary.Data.Changed);
+            Assert.Equal(0, status.Payload.Summary.Data.Deleted);
 
             var bareDiff = service.RunDiff(projectDir, "db", "AppUser");
             Assert.True(bareDiff.Success, bareDiff.Error?.Detail ?? bareDiff.Error?.Message);

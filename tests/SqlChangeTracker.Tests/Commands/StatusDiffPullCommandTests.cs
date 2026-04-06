@@ -18,7 +18,7 @@ public sealed class StatusDiffPullCommandTests
                     "status",
                     ".\\schema",
                     "db",
-                    new StatusSummary(0, 0, 0),
+                    EmptyStatusSummary(),
                     [],
                     []),
                 ExitCodes.Success)
@@ -40,7 +40,7 @@ public sealed class StatusDiffPullCommandTests
                     "status",
                     ".\\schema",
                     "db",
-                    new StatusSummary(1, 0, 0),
+                    SchemaStatusSummary(1, 0, 0),
                     [new StatusObject("dbo.Customer", "Table", "added")],
                     []),
                 ExitCodes.DiffExists)
@@ -62,7 +62,7 @@ public sealed class StatusDiffPullCommandTests
                     "status",
                     ".\\schema",
                     "db",
-                    new StatusSummary(0, 0, 0),
+                    EmptyStatusSummary(),
                     [],
                     [new CommandWarning("unsupported_folder_entry", "skipped unsupported folder entry 'Data\\dbo.Customer_Data.sql'.")]),
                 ExitCodes.Success)
@@ -143,7 +143,7 @@ public sealed class StatusDiffPullCommandTests
                 new PullResult(
                     "pull",
                     ".\\schema",
-                    new PullSummary(1, 1, 0, 2),
+                    SchemaPullSummary(1, 1, 0, 2),
                     [new PullObject("dbo.Customer", "Table", "created", "Tables\\dbo.Customer.sql")],
                     []),
                 ExitCodes.Success)
@@ -164,7 +164,7 @@ public sealed class StatusDiffPullCommandTests
                 new PullResult(
                     "pull",
                     ".\\schema",
-                    new PullSummary(0, 0, 0, 1),
+                    EmptyPullSummary(schemaUnchanged: 1),
                     [],
                     [new CommandWarning("unsupported_folder_entry", "skipped unsupported folder entry 'Data\\dbo.Customer_Data.sql'.")]),
                 ExitCodes.Success)
@@ -202,7 +202,7 @@ public sealed class StatusDiffPullCommandTests
                     "status",
                     ".\\schema",
                     "db",
-                    new StatusSummary(0, 0, 0),
+                    EmptyStatusSummary(),
                     [],
                     []),
                 ExitCodes.Success)
@@ -224,7 +224,7 @@ public sealed class StatusDiffPullCommandTests
                     "status",
                     ".\\schema",
                     "db",
-                    new StatusSummary(0, 0, 0),
+                    EmptyStatusSummary(),
                     [],
                     []),
                 ExitCodes.Success)
@@ -289,7 +289,7 @@ public sealed class StatusDiffPullCommandTests
                 new PullResult(
                     "pull",
                     ".\\schema",
-                    new PullSummary(0, 0, 0, 1),
+                    EmptyPullSummary(schemaUnchanged: 1),
                     [],
                     []),
                 ExitCodes.Success)
@@ -310,7 +310,7 @@ public sealed class StatusDiffPullCommandTests
                 new PullResult(
                     "pull",
                     ".\\schema",
-                    new PullSummary(0, 0, 0, 1),
+                    EmptyPullSummary(schemaUnchanged: 1),
                     [],
                     []),
                 ExitCodes.Success)
@@ -324,6 +324,28 @@ public sealed class StatusDiffPullCommandTests
 
     private static CommandContext CreateContext(string name)
         => new([], new EmptyRemainingArguments(), name, null!);
+
+    private static StatusSummary EmptyStatusSummary()
+        => new(new ChangeSummary(0, 0, 0), new ChangeSummary(0, 0, 0));
+
+    private static StatusSummary SchemaStatusSummary(int added, int changed, int deleted)
+        => new(new ChangeSummary(added, changed, deleted), new ChangeSummary(0, 0, 0));
+
+    private static PullSummary EmptyPullSummary(
+        int schemaCreated = 0,
+        int schemaUpdated = 0,
+        int schemaDeleted = 0,
+        int schemaUnchanged = 0,
+        int dataCreated = 0,
+        int dataUpdated = 0,
+        int dataDeleted = 0,
+        int dataUnchanged = 0)
+        => new(
+            new PullChangeSummary(schemaCreated, schemaUpdated, schemaDeleted, schemaUnchanged),
+            new PullChangeSummary(dataCreated, dataUpdated, dataDeleted, dataUnchanged));
+
+    private static PullSummary SchemaPullSummary(int created, int updated, int deleted, int unchanged)
+        => EmptyPullSummary(schemaCreated: created, schemaUpdated: updated, schemaDeleted: deleted, schemaUnchanged: unchanged);
 
     private sealed class EmptyRemainingArguments : IRemainingArguments
     {

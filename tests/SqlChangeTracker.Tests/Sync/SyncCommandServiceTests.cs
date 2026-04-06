@@ -41,6 +41,7 @@ public sealed class SyncCommandServiceTests
     [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
     [InlineData("Synonym:Reporting.CurrentSales", "Synonym", "Reporting", "CurrentSales", false)]
     [InlineData("UserDefinedType:dbo.PhoneNumber", "UserDefinedType", "dbo", "PhoneNumber", false)]
+    [InlineData("data:dbo.Customer", "TableData", "dbo", "Customer", false)]
     public void ParseObjectSelector_AcceptsSchemaScopedSchemaLessAndTypedSelectors(
         string selector,
         string? expectedType,
@@ -63,6 +64,7 @@ public sealed class SyncCommandServiceTests
     [InlineData(".Customer")]
     [InlineData("UnknownType:dbo.Customer")]
     [InlineData("Synonym:CurrentSales")]
+    [InlineData("data:Customer")]
     public void ParseObjectSelector_RejectsInvalidSelectors(string selector)
     {
         var result = SyncCommandService.ParseObjectSelector(selector);
@@ -77,10 +79,12 @@ public sealed class SyncCommandServiceTests
         var bareRole = SyncCommandService.ParseObjectSelector("Sales");
         var typedRole = SyncCommandService.ParseObjectSelector("Role:Sales");
         var schemaScoped = SyncCommandService.ParseObjectSelector("dbo.Sales");
+        var dataScoped = SyncCommandService.ParseObjectSelector("data:dbo.Customer");
 
         Assert.True(bareRole.Success);
         Assert.True(typedRole.Success);
         Assert.True(schemaScoped.Success);
+        Assert.True(dataScoped.Success);
 
         Assert.True(SyncCommandService.MatchesSelector("Role", "", "Sales", bareRole.Payload!));
         Assert.True(SyncCommandService.MatchesSelector("User", "", "Sales", bareRole.Payload!));
@@ -91,6 +95,22 @@ public sealed class SyncCommandServiceTests
 
         Assert.True(SyncCommandService.MatchesSelector("Table", "dbo", "Sales", schemaScoped.Payload!));
         Assert.False(SyncCommandService.MatchesSelector("Role", "", "Sales", schemaScoped.Payload!));
+
+        Assert.True(SyncCommandService.MatchesSelector("TableData", "dbo", "Customer", dataScoped.Payload!));
+        Assert.False(SyncCommandService.MatchesSelector("Table", "dbo", "Customer", dataScoped.Payload!));
+    }
+
+    [Theory]
+    [InlineData("dbo.Customer_Data", true, "dbo", "Customer")]
+    [InlineData("dbo.Customer", false, "", "")]
+    [InlineData("Customer_Data", false, "", "")]
+    public void TryParseDataFileName_SupportsTrackedDataScripts(string fileName, bool expected, string expectedSchema, string expectedName)
+    {
+        var success = SyncCommandService.TryParseDataFileName(fileName, out var schema, out var name);
+
+        Assert.Equal(expected, success);
+        Assert.Equal(expectedSchema, schema);
+        Assert.Equal(expectedName, name);
     }
 
     [Fact]
@@ -181,12 +201,13 @@ public sealed class SyncCommandServiceTests
             var supportedPartitionFunction = CreateFile(tempDir, Path.Combine("Storage", "Partition Functions", "FiscalYear_PF.sql"), "CREATE PARTITION FUNCTION [FiscalYear_PF]...");
             var supportedSynonym = CreateFile(tempDir, Path.Combine("Synonyms", "dbo.LegacyCustomer.sql"), "CREATE SYNONYM [dbo].[LegacyCustomer] FOR [dbo].[Customer]");
             var supportedUserDefinedType = CreateFile(tempDir, Path.Combine("Types", "User-defined Data Types", "dbo.PhoneNumber.sql"), "CREATE TYPE [dbo].[PhoneNumber] FROM [nvarchar] (20) NOT NULL");
-            CreateFile(tempDir, Path.Combine("Data", "dbo.Customer_Data.sql"), "SELECT 1;");
+            var supportedData = CreateFile(tempDir, Path.Combine("Data", "dbo.Customer_Data.sql"), "SELECT 1;");
             CreateFile(tempDir, Path.Combine("Custom", "dbo.Legacy.sql"), "SELECT 1;");
+            CreateFile(tempDir, Path.Combine("Data", "Invalid", "dbo.Customer_Data.sql"), "SELECT 1;");
 
             var warnings = SyncCommandService.CollectUnsupportedFolderWarnings(
                 tempDir,
-                [supported, supportedRole, supportedPartitionFunction, supportedSynonym, supportedUserDefinedType]);
+                [supported, supportedRole, supportedPartitionFunction, supportedSynonym, supportedUserDefinedType, supportedData]);
 
             Assert.Collection(warnings,
                 warning =>
@@ -197,7 +218,7 @@ public sealed class SyncCommandServiceTests
                 warning =>
                 {
                     Assert.Equal("unsupported_folder_entry", warning.Code);
-                    Assert.Contains(Path.Combine("Data", "dbo.Customer_Data.sql"), warning.Message);
+                    Assert.Contains(Path.Combine("Data", "Invalid", "dbo.Customer_Data.sql"), warning.Message);
                 });
         }
         finally

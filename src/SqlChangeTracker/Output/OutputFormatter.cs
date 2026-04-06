@@ -144,7 +144,8 @@ internal sealed class OutputFormatter
         }
 
         Console.WriteLine($"Status: target={result.Target}");
-        Console.WriteLine($"Added: {result.Summary.Added}  Changed: {result.Summary.Changed}  Deleted: {result.Summary.Deleted}");
+        Console.WriteLine($"Schema: Added={result.Summary.Schema.Added}  Changed={result.Summary.Schema.Changed}  Deleted={result.Summary.Schema.Deleted}");
+        Console.WriteLine($"Data:   Added={result.Summary.Data.Added}  Changed={result.Summary.Data.Changed}  Deleted={result.Summary.Data.Deleted}");
         Console.WriteLine();
 
         WriteStatusSection(result.Objects, "added", "Added:");
@@ -191,7 +192,8 @@ internal sealed class OutputFormatter
         }
 
         Console.WriteLine($"Pull: project-dir={result.ProjectDir}");
-        Console.WriteLine($"Created: {result.Summary.Created}  Updated: {result.Summary.Updated}  Deleted: {result.Summary.Deleted}  Unchanged: {result.Summary.Unchanged}");
+        Console.WriteLine($"Schema: Created={result.Summary.Schema.Created}  Updated={result.Summary.Schema.Updated}  Deleted={result.Summary.Schema.Deleted}  Unchanged={result.Summary.Schema.Unchanged}");
+        Console.WriteLine($"Data:   Created={result.Summary.Data.Created}  Updated={result.Summary.Data.Updated}  Deleted={result.Summary.Data.Deleted}  Unchanged={result.Summary.Data.Unchanged}");
         Console.WriteLine();
         WritePullSection(result.Objects, "created", "Created:");
         WritePullSection(result.Objects, "updated", "Updated:");
@@ -224,6 +226,68 @@ internal sealed class OutputFormatter
         }
     }
 
+    public void WriteDataTrack(DataTrackResult result)
+    {
+        if (_json)
+        {
+            WriteJson(result);
+            return;
+        }
+
+        Console.WriteLine($"Data track: pattern={result.Pattern}");
+        WriteTableList("Matched tables:", result.MatchedTables);
+        WriteTableList("Tracked tables:", result.TrackedTables);
+        if (result.Cancelled)
+        {
+            Console.WriteLine("Status: cancelled");
+        }
+        else if (result.Changed)
+        {
+            Console.WriteLine("Status: updated");
+        }
+        else
+        {
+            Console.WriteLine("Status: no changes");
+        }
+    }
+
+    public void WriteDataUntrack(DataUntrackResult result)
+    {
+        if (_json)
+        {
+            WriteJson(result);
+            return;
+        }
+
+        Console.WriteLine($"Data untrack: pattern={result.Pattern}");
+        WriteTableList("Matched tables:", result.MatchedTables);
+        WriteTableList("Tracked tables:", result.TrackedTables);
+        if (result.Cancelled)
+        {
+            Console.WriteLine("Status: cancelled");
+        }
+        else if (result.Changed)
+        {
+            Console.WriteLine("Status: updated");
+        }
+        else
+        {
+            Console.WriteLine("Status: no changes");
+        }
+    }
+
+    public void WriteDataList(DataListResult result)
+    {
+        if (_json)
+        {
+            WriteJson(result);
+            return;
+        }
+
+        Console.WriteLine($"Data list: project-dir={result.ProjectDir}");
+        WriteTableList("Tracked tables:", result.TrackedTables);
+    }
+
     private static void WriteStatusSection(
         IReadOnlyList<StatusObject> objects,
         string changeKind,
@@ -231,7 +295,6 @@ internal sealed class OutputFormatter
     {
         var items = objects
             .Where(item => string.Equals(item.Change, changeKind, StringComparison.OrdinalIgnoreCase))
-            .Select(item => item.Name)
             .ToList();
 
         if (items.Count == 0)
@@ -242,7 +305,7 @@ internal sealed class OutputFormatter
         Console.WriteLine(heading);
         foreach (var item in items)
         {
-            Console.WriteLine($"  {item}");
+            Console.WriteLine($"  {FormatObjectName(item.Name, item.Type)}");
         }
     }
 
@@ -263,9 +326,29 @@ internal sealed class OutputFormatter
         Console.WriteLine(heading);
         foreach (var item in items)
         {
-            Console.WriteLine($"  {item.Name} ({item.Path})");
+            Console.WriteLine($"  {FormatObjectName(item.Name, item.Type)} ({item.Path})");
         }
     }
+
+    private static void WriteTableList(string heading, IReadOnlyList<string> tables)
+    {
+        Console.WriteLine(heading);
+        if (tables.Count == 0)
+        {
+            Console.WriteLine("  none");
+            return;
+        }
+
+        foreach (var table in tables)
+        {
+            Console.WriteLine($"  {table}");
+        }
+    }
+
+    private static string FormatObjectName(string name, string type)
+        => string.Equals(type, "TableData", StringComparison.OrdinalIgnoreCase)
+            ? $"data:{name}"
+            : name;
 
     private static void WriteWarnings(IReadOnlyList<CommandWarning> warnings)
     {

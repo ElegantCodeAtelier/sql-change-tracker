@@ -34,10 +34,14 @@ internal sealed record CommandWarning(
     string Code,
     string Message);
 
-internal sealed record StatusSummary(
+internal sealed record ChangeSummary(
     int Added,
     int Changed,
     int Deleted);
+
+internal sealed record StatusSummary(
+    ChangeSummary Schema,
+    ChangeSummary Data);
 
 internal sealed record StatusObject(
     string Name,
@@ -60,11 +64,15 @@ internal sealed record DiffResult(
     string Diff,
     IReadOnlyList<CommandWarning> Warnings);
 
-internal sealed record PullSummary(
+internal sealed record PullChangeSummary(
     int Created,
     int Updated,
     int Deleted,
     int Unchanged);
+
+internal sealed record PullSummary(
+    PullChangeSummary Schema,
+    PullChangeSummary Data);
 
 internal sealed record PullObject(
     string Name,
@@ -82,6 +90,29 @@ internal sealed record PullResult(
 internal sealed record ErrorResult(
     string Command,
     ErrorInfo Error);
+
+internal sealed record DataTrackResult(
+    string Command,
+    string ProjectDir,
+    string Pattern,
+    bool Changed,
+    bool Cancelled,
+    IReadOnlyList<string> MatchedTables,
+    IReadOnlyList<string> TrackedTables);
+
+internal sealed record DataUntrackResult(
+    string Command,
+    string ProjectDir,
+    string Pattern,
+    bool Changed,
+    bool Cancelled,
+    IReadOnlyList<string> MatchedTables,
+    IReadOnlyList<string> TrackedTables);
+
+internal sealed record DataListResult(
+    string Command,
+    string ProjectDir,
+    IReadOnlyList<string> TrackedTables);
 
 internal sealed record ErrorInfo(
     string Code,

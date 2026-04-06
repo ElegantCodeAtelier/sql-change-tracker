@@ -14,6 +14,7 @@ internal sealed class SqlctConfigWriter
     {
         try
         {
+            SqlctConfigNormalizer.Normalize(config);
             var configDirectory = Path.GetDirectoryName(configPath)
                 ?? throw new IOException("invalid config path.");
             Directory.CreateDirectory(configDirectory);

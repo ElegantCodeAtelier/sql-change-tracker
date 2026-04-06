@@ -414,7 +414,6 @@ Each emitted statement MUST be followed by `GO`.
 
 ### 8.13 TableData
 - Table-data scripting applies only to tables explicitly listed in `data.trackedTables`.
-- Foreign-key-based linked-table expansion is out of scope for v1 and MUST NOT be implied by table-data scripting behavior.
 - One data script file MUST be emitted per tracked table, even when the table currently has zero rows.
 - An empty tracked table MUST still produce a file at the expected `Data/Schema.Table_Data.sql` path; that file contains no SQL statements.
 - Data scripts MUST contain only:
