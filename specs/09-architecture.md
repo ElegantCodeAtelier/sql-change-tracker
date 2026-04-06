@@ -1,7 +1,7 @@
 # Architecture
 
 Status: draft
-Last updated: 2026-04-04
+Last updated: 2026-04-06
 
 ## Goals
 - Deterministic, reproducible scripting.
@@ -38,6 +38,7 @@ Last updated: 2026-04-04
   - Owns `sqlct.config.json` read/write behavior.
   - Configuration schema and behavior are defined in `specs/02-config.md`.
   - Compatibility-file presence detection is part of current v1 behavior; compatibility-driven sync remains deferred.
+  - Data tracking stores explicit tracked tables under `data.trackedTables`.
 - Folder Mapping
   - Maps object types and file names using rules in `specs/03-schema-folder.md`.
 - SQL Server Adapter
@@ -55,6 +56,10 @@ Last updated: 2026-04-04
     - render unified diff text for single-object and aggregate modes
     - reconcile pull writes/deletes with idempotent update behavior
     - preserve existing encoding/newline style for updated files
+    - read explicit tracked tables from `data.trackedTables`
+    - treat `Data/*.sql` as companion synchronization artifacts for tracked tables
+    - integrate data artifacts into top-level `status`, `diff`, and `pull` rather than a separate data pull command
+    - report schema and data summaries separately in `status` and `pull`
   - v1 comparison normalization is limited to line-ending/trailing-newline stability.
 - Script Normalizer
   - Applies deterministic text handling required for comparison and write stability in v1.
@@ -66,7 +71,8 @@ Last updated: 2026-04-04
 - SQL Server (SqlClient) handles connectivity, metadata discovery, and scripting. It returns raw scripts and metadata for downstream normalization and persistence.
 - Normalization and formatting follow `specs/04-scripting.md` and v1 runtime constraints.
 - Sync runtime compares normalized scripts between DB and folder sources, producing structured status/diff/pull results.
-- Active v1 comparison scope is: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
+- Active v1 schema comparison scope is: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
+- When `data.trackedTables` contains tracked tables, top-level `status`, `diff`, and `pull` also include `TableData` artifacts for those tracked tables.
 - Include/exclude filters and comparison ignore options are deferred to vNext.
 
 ## Data Flow (MVP)

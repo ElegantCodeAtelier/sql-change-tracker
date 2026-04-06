@@ -1,7 +1,7 @@
 # Output Formats
 
 Status: draft
-Last updated: 2026-04-04
+Last updated: 2026-04-06
 
 ## Human Output
 - Concise summaries with change lists.
@@ -9,7 +9,10 @@ Last updated: 2026-04-04
 - Report only `sqlct` project state (`sqlct.config.json`, schema folder state, DB comparison results).
 - Do not list optional compatibility input files as output entities.
 - `status`, `diff`, and `pull` may include warnings for skipped unsupported object types or invalid script names.
+- `data track`, `data untrack`, and `data list` may include informational messages for no-op outcomes.
 - Schema-less active object types use bare names in human and JSON payloads (for example `ServiceUser`, `AppReader`, `Years_PF`).
+- Tracked table-data artifacts use `schema.name` for display names and `TableData` as the output `type`.
+- `data track` and `data untrack` list matched tables before asking for confirmation.
 
 ## Progress Spinner
 - `status`, `diff`, and `pull` display a progress spinner on stdout while the command is running, with per-step status updates (e.g. "Scripting objects (3/42): dbo.Customer" or "Scripting objects (7/42): ServiceUser").
@@ -19,15 +22,54 @@ Last updated: 2026-04-04
   - `--no-progress` is explicitly passed.
   - The output is not an interactive terminal (e.g., redirected stdout, CI environments without TTY).
 
+### Example: data track
+```text
+Data track: pattern=Sales.*
+Matching tables: 2
+  Sales.Customer
+  Sales.SalesOrderHeader
+Confirm update to sqlct.config.json? [y/N]: y
+Tracked tables added: 2
+  Sales.Customer
+  Sales.SalesOrderHeader
+```
+
+### Example: data track (no-op)
+```text
+Data track: pattern=Archive.*
+Info: no matching tables; config unchanged.
+```
+
+### Example: data untrack (cancelled)
+```text
+Data untrack: pattern=Sales.*
+Matching tracked tables: 2
+  Sales.Customer
+  Sales.SalesOrderHeader
+Confirm update to sqlct.config.json? [y/N]: n
+Info: operation cancelled; config unchanged.
+```
+
+### Example: data list
+```text
+Data list: project-dir=.\schema
+Tracked tables: 2
+  dbo.Customer
+  Sales.SalesOrderHeader
+```
+
 ### Example: status
 ```text
 Status: target=db
-Added: 2  Changed: 1  Deleted: 0
+Schema: Added: 2  Changed: 1  Deleted: 0
+Data: Added: 0  Changed: 1  Deleted: 0
 
-Added:
+Schema Added:
   dbo.NewTable
   dbo.NewView
-Changed:
+Schema Changed:
+  dbo.Customer
+Data Changed:
   dbo.Customer
 ```
 
@@ -39,6 +81,16 @@ Diff: dbo.Customer
 @@
 -ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL;
 +ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL CONSTRAINT [DF_Customer_IsActive] DEFAULT (1);
+```
+
+### Example: diff (single data object)
+```text
+Diff: data:dbo.Customer
+--- db
++++ folder
+@@
+-INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme');
++INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme Ltd');
 ```
 
 ### Example: diff (single schema-less object)
@@ -75,6 +127,7 @@ Config: project-dir=.\schema
 Config file: .\schema\sqlct.config.json
 Database: server=localhost; name=MyDb; auth=integrated
 Options: orderByDependencies=true
+Data: trackedTables=2
 Compatibility: detected=false
 Config validation: ok
 ```
@@ -95,11 +148,24 @@ Skipped:
 Common fields:
 - `command` (string)
 - `projectDir` (string, when resolved)
+- `info` (array, optional)
 - `warnings` (array, optional)
+
+Prompt behavior:
+- `data track` and `data untrack` require interactive confirmation before mutating `sqlct.config.json`.
+- In human mode, the confirmation prompt is written to the terminal before final output is printed.
+- When `--json` is used, any confirmation prompt MUST be written to stderr only; stdout MUST remain valid JSON.
+- If confirmation is required but cannot be obtained in non-interactive execution, the command MUST fail with an execution error.
+
+Data command fields:
+- `pattern` (string, for `data track` / `data untrack`)
+- `changed` (bool, for `data track` / `data untrack`)
+- `matchedTables` (array of `schema.table`, for `data track` / `data untrack`)
+- `trackedTables` (array of `schema.table`, for `data track`, `data untrack`, and `data list`)
 
 Status fields:
 - `target` (string)
-- `summary` (object with counts)
+- `summary` (object with `schema` and `data` count objects; each count object contains `added`, `changed`, `deleted`)
 - `objects` (array of `{ name, type, change }`)
 
 Diff fields:
@@ -110,9 +176,10 @@ Diff fields:
 Notes:
 - `name` and `object` values use `schema.name` for schema-scoped objects and bare names for schema-less objects.
 - `type` remains the discriminator for selectors and JSON consumers; no additional schema-less marker field is added.
+- Data-script objects use `type = "TableData"` and use `schema.name` as the object name; `diff --object` addresses them via the reserved `data:schema.name` selector form.
 
 Pull fields:
-- `summary` (object with `created`, `updated`, `deleted`, `unchanged`)
+- `summary` (object with `schema` and `data` count objects; each count object contains `created`, `updated`, `deleted`, `unchanged`)
 - `objects` (array of `{ name, type, change, path }`)
 
 Config fields:
@@ -131,11 +198,15 @@ Error fields:
   "command": "status",
   "projectDir": ".\\schema",
   "target": "db",
-  "summary": { "added": 2, "changed": 1, "deleted": 0 },
+  "summary": {
+    "schema": { "added": 2, "changed": 1, "deleted": 0 },
+    "data": { "added": 0, "changed": 1, "deleted": 0 }
+  },
   "objects": [
     { "name": "dbo.NewTable", "type": "Table", "change": "added" },
     { "name": "dbo.NewView", "type": "View", "change": "added" },
-    { "name": "dbo.Customer", "type": "Table", "change": "changed" }
+    { "name": "dbo.Customer", "type": "Table", "change": "changed" },
+    { "name": "dbo.Customer", "type": "TableData", "change": "changed" }
   ],
   "warnings": []
 }
@@ -147,8 +218,63 @@ Error fields:
   "command": "diff",
   "projectDir": ".\\schema",
   "target": "db",
-  "object": "dbo.Customer",
-  "diff": "--- db\\n+++ folder\\n@@\\n-ALTER TABLE...\\n+ALTER TABLE...",
+  "object": "data:dbo.Customer",
+  "diff": "--- db\\n+++ folder\\n@@\\n-INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme')\\n+INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme Ltd')",
+  "warnings": []
+}
+```
+
+### Example: data list
+```json
+{
+  "command": "data list",
+  "projectDir": ".\\schema",
+  "trackedTables": [
+    "dbo.Customer",
+    "Sales.SalesOrderHeader"
+  ],
+  "warnings": []
+}
+```
+
+### Example: data track (no-op)
+```json
+{
+  "command": "data track",
+  "projectDir": ".\\schema",
+  "pattern": "Archive.*",
+  "changed": false,
+  "matchedTables": [],
+  "trackedTables": [
+    "dbo.Customer",
+    "Sales.SalesOrderHeader"
+  ],
+  "info": [
+    "no matching tables; config unchanged."
+  ],
+  "warnings": []
+}
+```
+
+### Example: data untrack (cancelled)
+```json
+{
+  "command": "data untrack",
+  "projectDir": ".\\schema",
+  "pattern": "Sales.*",
+  "changed": false,
+  "matchedTables": [
+    "Sales.Customer",
+    "Sales.SalesOrderHeader"
+  ],
+  "trackedTables": [
+    "dbo.Customer",
+    "Sales.Customer",
+    "Sales.SalesOrderHeader"
+  ],
+  "info": [
+    "operation cancelled; config unchanged."
+  ],
   "warnings": []
 }
 ```
@@ -159,7 +285,10 @@ Error fields:
   "command": "status",
   "projectDir": ".\\schema",
   "target": "db",
-  "summary": { "added": 1, "changed": 0, "deleted": 0 },
+  "summary": {
+    "schema": { "added": 1, "changed": 0, "deleted": 0 },
+    "data": { "added": 0, "changed": 0, "deleted": 0 }
+  },
   "objects": [
     { "name": "ServiceUser", "type": "User", "change": "added" }
   ],
@@ -186,6 +315,12 @@ Error fields:
     },
     "options": {
       "orderByDependencies": true
+    },
+    "data": {
+      "trackedTables": [
+        "dbo.Customer",
+        "Sales.SalesOrderHeader"
+      ]
     }
   },
   "compatibility": {

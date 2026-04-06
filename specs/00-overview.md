@@ -24,7 +24,6 @@ Define an evolvable specification for a cross-platform CLI that provides state-b
 
 ## Non-Goals (Initial)
 - Migration-based workflows.
-- Data compare/sync.
 - Cross-DB support beyond SQL Server.
 - UI beyond CLI.
 

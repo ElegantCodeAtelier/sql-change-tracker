@@ -1,7 +1,7 @@
 # Scripting
 
 Status: draft
-Last updated: 2026-04-04
+Last updated: 2026-04-06
 
 ## 1. Purpose and Normative Intent
 This specification defines normative scripting rules for `sqlct`.
@@ -15,7 +15,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Applies to schema-object scripting behavior used by `sqlct` workflows.
 - Does not define command UX, exit-code policy, or general CLI flow (see `specs/01-cli.md`).
 - Does not define folder mapping taxonomy (see `specs/03-schema-folder.md`).
-- Does not define data-tracking feature behavior beyond high-level planning notes in this file.
+- Does not define command behavior or configuration persistence for selective data scripting beyond its interaction with scripting.
 
 ## 3. Source Inputs
 ### 3.1 SQL Server Inputs
@@ -63,8 +63,8 @@ This specification defines normative scripting rules for `sqlct`.
 - PartitionFunction
 - PartitionScheme
 
-### 5.2 Planned Coverage (Normative Minimum)
-The following types are planned and not fully implemented in the current SQL scripting engine. For each type, implementation MUST define deterministic discovery, deterministic output shape, and batch framing:
+### 5.2 Additional Defined Coverage (Normative Minimum)
+The following types are defined in this specification family and not fully implemented in the current SQL scripting engine. For each type, implementation MUST define deterministic discovery, deterministic output shape, and batch framing:
 
 - TableType, XmlSchemaCollection
 - Standalone Trigger (excluding table-scoped DML triggers already emitted inline with tables), DdlTrigger, Rule
@@ -73,12 +73,17 @@ The following types are planned and not fully implemented in the current SQL scr
 - SecurityPolicy
 - ExternalDataSource, ExternalFileFormat, ExternalTable
 - MessageType, Contract, Queue, Service, Route, EventNotification, ServiceBinding
-- Data scripts
+- Data scripts for explicit tracked tables:
+  - scoped to tables listed in `data.trackedTables`,
+  - one data script file per tracked table,
+  - file naming and placement aligned to `specs/03-schema-folder.md`,
+  - deterministic for identical source rows and configuration,
+  - initial output emitted as deterministic `INSERT` statements.
 
 ## 6. Global Scripting Rules
 
 ### 6.1 Statement Framing
-- Batch separators MUST be emitted as `GO` on its own line.
+- Batch separators for schema-object scripts MUST be emitted as `GO` on its own line.
 - Programmable objects (views, procedures, functions, and table-scoped DML triggers) MUST include:
   - `SET QUOTED_IDENTIFIER <ON|OFF>` + `GO`
   - `SET ANSI_NULLS <ON|OFF>` + `GO`
@@ -406,6 +411,46 @@ Each emitted statement MUST be followed by `GO`.
 - Partition-scheme metadata MUST come from `sys.partition_schemes`, `sys.partition_functions`, and destination data-space metadata.
 - Output MUST emit one `CREATE PARTITION SCHEME` statement that references the target partition function and ordered destination filegroups, followed by `GO`.
 - Empty or missing destination lists MUST still emit a valid `TO (...)` clause shape consistent with discovered metadata.
+
+### 8.13 TableData
+- Table-data scripting applies only to tables explicitly listed in `data.trackedTables`.
+- Foreign-key-based linked-table expansion is out of scope for v1 and MUST NOT be implied by table-data scripting behavior.
+- One data script file MUST be emitted per tracked table, even when the table currently has zero rows.
+- An empty tracked table MUST still produce a file at the expected `Data/Schema.Table_Data.sql` path; that file contains no SQL statements.
+- Data scripts MUST contain only:
+  - `INSERT INTO ... VALUES ...;` statements,
+  - `SET IDENTITY_INSERT [schema].[table] ON;` and `SET IDENTITY_INSERT [schema].[table] OFF;` when identity preservation is required.
+- Data scripts MUST NOT emit `DELETE`, `TRUNCATE`, transaction wrappers, constraint-disabling statements, or `GO` batch separators.
+- Data scripts MUST use one single-row `INSERT` statement per row.
+- `INSERT` statement shape MUST be:
+  - `INSERT INTO [schema].[table] ([column_1], [column_2], ...) VALUES (<literal_1>, <literal_2>, ...);`
+- The target column list MUST include all insertable columns in `sys.columns.column_id` order.
+- Non-insertable columns MUST be excluded:
+  - computed columns,
+  - `rowversion` / `timestamp` columns,
+  - hidden columns,
+  - generated-always columns.
+- When the table has an identity column and at least one row is emitted, the identity column value MUST be included in the `INSERT` column list and the file MUST wrap the emitted `INSERT` statements with:
+  - `SET IDENTITY_INSERT [schema].[table] ON;`
+  - `SET IDENTITY_INSERT [schema].[table] OFF;`
+- Row ordering MUST be deterministic:
+  - when a primary key exists, rows MUST be ordered by primary-key columns ascending in key ordinal order,
+  - otherwise rows MUST be ordered by the canonical scripted literal tuple for the emitted columns, compared lexicographically in column order.
+- Data-row literal rendering MUST be deterministic and use invariant culture.
+- Literal rendering rules:
+  - `NULL` values MUST be rendered as `NULL`.
+  - `bit`, integer, decimal, numeric, money, smallmoney, float, and real values MUST be rendered as unquoted invariant numeric literals.
+  - `uniqueidentifier` values MUST be rendered as quoted canonical text literals.
+  - `char`, `varchar`, and `text` values MUST be rendered as `'...'` with embedded single quotes doubled.
+  - `nchar`, `nvarchar`, `ntext`, and `xml` values MUST be rendered as `N'...'` with embedded single quotes doubled.
+  - `binary`, `varbinary`, and `image` values MUST be rendered as `0x...` uppercase hexadecimal.
+  - `date` values MUST be rendered as `'YYYY-MM-DD'`.
+  - `datetime`, `smalldatetime`, and `datetime2` values MUST be rendered as quoted ISO-style timestamps.
+  - `datetimeoffset` values MUST be rendered as quoted ISO 8601 timestamps with offset.
+  - `time` values MUST be rendered as quoted `HH:MM:SS.fffffff`.
+  - `hierarchyid` values MUST be rendered as `hierarchyid::Parse(N'...')`.
+  - `geometry` and `geography` values MUST be rendered as `geometry::STGeomFromWKB(0x..., <srid>)` and `geography::STGeomFromWKB(0x..., <srid>)`.
+- Insertable column types not covered by this section or not safely serializable by the implementation MUST fail explicitly rather than emit lossy output.
 
 ## 9. Compatibility-Guided Reconciliation
 When compatibility reference files are available, `sqlct` MAY apply reconciliation per object after script generation and before writing files.

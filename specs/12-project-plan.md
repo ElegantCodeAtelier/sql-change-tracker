@@ -1,7 +1,7 @@
 # Project Plan
 
 Status: draft
-Last updated: 2026-04-04
+Last updated: 2026-04-06
 
 This plan reflects the current repository state and defines execution order to reach v1.
 
@@ -32,10 +32,12 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 | S5 | Pull workflow | done | End-to-end reconciliation implemented for active object types. |
 | S6 | Test and quality hardening | in_progress | Fast unit tests added; DB-backed local-only coverage still to expand. |
 | S7 | Packaging and release readiness | in_progress | Packaging baseline exists; release gates need completion. |
+| S8 | Selective tracked-table data scripting | not_started | Concept integrated into CLI/config/scripting/architecture specs; no runtime implementation yet. |
 
 ## Execution Order
 1. S6 Test and quality hardening.
 2. S7 Packaging and release readiness.
+3. S8 Selective tracked-table data scripting.
 
 ## S4: Status/Diff Engine
 ### Specs to read
@@ -107,6 +109,33 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 ### Acceptance Criteria
 - Package can be installed and executed as documented.
 - Release checklist is complete and traceable.
+
+## S8: Selective Tracked-Table Data Scripting
+### Specs to read
+- `specs/01-cli.md`
+- `specs/02-config.md`
+- `specs/03-schema-folder.md`
+- `specs/04-scripting.md`
+- `specs/09-architecture.md`
+
+### Tasks
+- Add `data track`, `data untrack`, and `data list` command wiring.
+- Extend config handling for explicit tracked tables in `data.trackedTables`.
+- Implement deterministic pattern matching for `data track` / `data untrack`.
+- Implement explicit tracked-table management with matched-table preview and confirmation before config writes.
+- Implement no-op informational handling for unmatched `track` / `untrack` operations.
+- Extend top-level `status`, `diff`, and `pull` to synchronize `Data/*.sql` artifacts for tracked tables only.
+- Define and implement deterministic data-script output.
+- Define and implement separate schema/data summaries for `status` and `pull`.
+- Ensure `pull` deletes `Data/*.sql` files for tables no longer tracked.
+- Document local validation steps and usage examples.
+
+### Acceptance Criteria
+- Users can track and untrack tables through the CLI, with explicit tracked tables persisted in config.
+- `track` and `untrack` preview matched tables and require confirmation before changing config.
+- Users can inspect tracked tables before synchronization.
+- Top-level `status`, `diff`, and `pull` synchronize data scripts for tracked tables.
+- The config contract remains simple and based on explicit tracked tables in `data.trackedTables`.
 
 ## Cross-Cutting Rules
 - Specs are authoritative over inferred behavior.

@@ -1,7 +1,7 @@
 # CLI
 
 Status: draft
-Last updated: 2026-04-04
+Last updated: 2026-04-06
 
 ## Command Overview
 Binary: sqlct.
@@ -27,16 +27,18 @@ Behavior:
 ## CLI Shape (Selected)
 Use git-style verbs: short, task-oriented commands with clear intent.
 
-## Commands (MVP)
+## Commands
 - init
 - config
+- data
 - status
 - diff
 - pull
 
 ## v1 Scope
-- Active object types: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
-- `status`, `diff`, and `pull` process only the active object types.
+- Active schema object types: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
+- `status`, `diff`, and `pull` process the active schema object types.
+- When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 - Unsupported object types discovered in DB introspection are skipped with warnings.
 - Include/exclude filters are deferred to vNext.
 - Comparison ignore options are deferred to vNext.
@@ -61,6 +63,7 @@ Common flag behavior across commands.
   - `name` for schema-less active object types.
   - `type:name` for explicit schema-less selection.
   - `type:schema.name` for explicit schema-scoped selection.
+  - `data:schema.name` for tracked table-data scripts.
 - Bare `name` selectors search only schema-less active object types.
 - Bare-name or `schema.name` collisions across object types return an error that instructs the user to use the type-qualified form.
 
@@ -93,6 +96,61 @@ Behavior:
 - Rewrite normalized configuration outputs if needed.
 - Print a summary of parsed values and validation status.
 
+### data
+Manage tracked tables for selective data scripting.
+
+Tracked-table rules:
+- `data.trackedTables` stores explicit tracked tables in `schema.table` form.
+- Tracked tables MUST be unique case-insensitively and persisted in stable sorted order.
+- Top-level `status`, `diff`, and `pull` process `TableData` only for tables explicitly listed in `data.trackedTables`.
+
+Pattern forms for `track` and `untrack`:
+- exact table: `schema.table`
+- schema wildcard: `schema.*`
+- name wildcard: `*.table`
+- Pattern matching is case-insensitive.
+- Bare table names without schema are not supported.
+
+#### track
+`
+sqlct data track <pattern> [--project-dir <path>]
+`
+
+Behavior:
+- Match user tables in the current database against `<pattern>`.
+- List matched tables in stable sorted order before any config change is made.
+- When `<pattern>` matches no user tables, return success with an informational message and leave config unchanged.
+- When one or more tables match, prompt for confirmation before updating `sqlct.config.json`.
+- If confirmed, add matched tables to `data.trackedTables` in `sqlct.config.json` as explicit `schema.table` entries.
+- Normalize ordering and deduplicate tracked tables case-insensitively.
+- If confirmation is declined, return success with an informational message and leave config unchanged.
+- If confirmation is required but cannot be obtained in non-interactive execution, return execution failure.
+- Do not perform synchronization by itself.
+
+#### untrack
+`
+sqlct data untrack <pattern> [--project-dir <path>]
+`
+
+Behavior:
+- Match against existing tracked entries case-insensitively.
+- List matched tracked tables in stable sorted order before any config change is made.
+- When `<pattern>` matches no tracked tables, return success with an informational message and leave config unchanged.
+- When one or more tracked tables match, prompt for confirmation before updating `sqlct.config.json`.
+- If confirmed, remove matched tracked tables from `data.trackedTables` in `sqlct.config.json`.
+- If confirmation is declined, return success with an informational message and leave config unchanged.
+- If confirmation is required but cannot be obtained in non-interactive execution, return execution failure.
+- Do not perform synchronization by itself.
+
+#### list
+`
+sqlct data list [--project-dir <path>]
+`
+
+Behavior:
+- Show tracked tables from config in stable sorted order.
+- Do not connect to the database.
+
 ### status
 Show object-level differences.
 `
@@ -108,6 +166,8 @@ Behavior:
   - Changed: normalized script content differs.
   - Suppress changes when scripts are identical after normalization.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- When `data.trackedTables` is configured, `status` also reports data-script differences for tracked tables.
+- Status output MUST report schema and data summaries separately.
 - Exit codes:
   - `0` no differences.
   - `1` differences found.
@@ -125,6 +185,7 @@ Behavior:
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- When `data.trackedTables` is configured, `diff` also supports data-script diffs for tracked tables.
 - Exit codes follow `status`.
 
 ### pull
@@ -139,6 +200,9 @@ Behavior:
 - New files default to UTF-8 (no BOM), CRLF, trailing newline.
 - Do not rewrite unchanged files.
 - Output deterministic summary and changed object list.
+- When `data.trackedTables` is configured, `pull` also synchronizes `Data/*.sql` scripts for tracked tables.
+- `pull` MUST delete `Data/*.sql` files for tables that are no longer present in `data.trackedTables`.
+- Pull output MUST report schema and data summaries separately.
 - Exit codes:
   - `0` success.
   - `2/3/4` invalid config / connection failure / execution failure.
@@ -169,16 +233,26 @@ Result:
 - Parses and validates project configuration.
 - Writes normalized configuration outputs when needed.
 
+### Manage tracked data tables
+`
+sqlct data track Sales.* --project-dir ./schema
+sqlct data list --project-dir ./schema
+`
+Result:
+- Lists matching tables and asks for confirmation before updating `data.trackedTables` in config.
+- Shows tracked tables.
+
 ### Review changes before update
 `
 sqlct status --project-dir ./schema
 sqlct diff --project-dir ./schema --object dbo.Customer
+sqlct diff --project-dir ./schema --object data:dbo.Customer
 sqlct diff --project-dir ./schema --object ServiceUser
 sqlct diff --project-dir ./schema --object Role:AppReader
 `
 Result:
-- Status shows add/change/delete counts.
-- Diff shows object-level script differences.
+- Status shows separate schema and data add/change/delete counts.
+- Diff shows object-level schema or data-script differences.
 
 ### Pull DB state into folder
 `

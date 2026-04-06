@@ -15,4 +15,3 @@ This folder contains evolving specifications for the SQL Change Tracker CLI.
 - `09-architecture.md`: module plan and data flow
 - `10-deployment.md`: .NET tool deployment
 - `12-project-plan.md`: implementation plan for agents
-
