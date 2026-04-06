@@ -42,3 +42,6 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 This triggers `.github/workflows/nuget-publish.yml` to pack and publish the tool to NuGet using version `0.1.1`.
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md) for a history of notable changes.
