@@ -11,7 +11,6 @@ This plan reflects the current repository state and defines execution order to r
 - `status`, `diff`, and `pull` are active for: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
 - Config runtime contract is simplified to:
   - `database` (existing fields)
-  - `options.orderByDependencies`
   - `options.parallelism`
 - Deprecated runtime fields are removed from current contract:
   - `options.includeSchemas`
