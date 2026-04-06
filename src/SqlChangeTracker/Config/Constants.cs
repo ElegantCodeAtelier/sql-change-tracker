@@ -22,5 +22,6 @@ internal static class ErrorCodes
     public const string ConnectionFailed = "connection_failed";
     public const string DatabaseNotFound = "database_not_found";
     public const string ExecutionFailed = "execution_failed";
+    public const string ConfirmationRequired = "confirmation_required";
     public const string NotImplemented = "not_implemented";
 }

@@ -1,7 +1,7 @@
 # Config
 
 Status: draft
-Last updated: 2026-03-11
+Last updated: 2026-04-06
 
 ## Authoritative Configuration
 `sqlct.config.json` is the authoritative configuration file for `sqlct` projects.
@@ -10,9 +10,9 @@ Last updated: 2026-03-11
 - Stores database connection settings and tool options.
 - All command behavior is resolved from this file (with CLI overrides where supported).
 
-## Schema (WIP)
-The `sqlct.config.json` structure is still work-in-progress and may change.
-Current draft shape:
+## Schema
+The `sqlct.config.json` structure defines the current contract.
+Current shape:
 
 ```json
 {
@@ -27,6 +27,12 @@ Current draft shape:
   "options": {
     "orderByDependencies": true,
     "parallelism": 0
+  },
+  "data": {
+    "trackedTables": [
+      "dbo.Customer",
+      "Sales.SalesOrderHeader"
+    ]
   }
 }
 ```
@@ -61,6 +67,10 @@ Deprecated runtime fields removed from v1 contract:
 - `trustServerCertificate` mirrors TLS environments with self-signed certs.
 - `options.parallelism`: maximum number of concurrent SQL connections used during catalog discovery and per-object scripting. `0` (default) resolves to `Environment.ProcessorCount`. Set a positive integer to cap DOP on shared SQL Server instances.
 - Include/exclude filters and comparison ignore options are deferred to vNext.
+- `data.trackedTables`: array of explicit tracked tables used for selective data scripting.
+- Entries in `data.trackedTables` MUST use `schema.table` form.
+- Entries in `data.trackedTables` MUST be unique case-insensitively and persisted in stable sorted order.
+- When omitted, `data.trackedTables` defaults to an empty array.
 
 ## External interoperability
 - Compatibility-file presence may be detected for summary/reporting purposes.

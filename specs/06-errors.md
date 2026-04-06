@@ -32,6 +32,7 @@ Connection:
 Execution:
 - script_failed: SQL execution failed.
 - io_failed: failed to read/write a file.
+- confirmation_required: command needs interactive confirmation before mutating config, but confirmation could not be obtained.
 - not_implemented: command or option not implemented in current build.
 
 ## Exit Code Matrix
@@ -39,6 +40,9 @@ Execution:
 | --- | --- | --- | --- | --- | --- |
 | init | success | n/a | invalid config/path | n/a | execution failure |
 | config | success | n/a | invalid config | n/a | execution failure |
+| data track | success | n/a | invalid config | connection failure | execution failure |
+| data untrack | success | n/a | invalid config | n/a | execution failure |
+| data list | success | n/a | invalid config | n/a | execution failure |
 | status | no diffs | diffs found | invalid config | connection failure | execution failure |
 | diff | no diffs | diffs found | invalid config | connection failure | execution failure |
 | pull | success | n/a | invalid config | connection failure | execution failure |

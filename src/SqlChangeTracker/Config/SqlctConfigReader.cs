@@ -35,6 +35,7 @@ internal sealed class SqlctConfigReader
                     ExitCodes.InvalidConfig);
             }
 
+            SqlctConfigNormalizer.Normalize(config);
             return SqlctConfigReadResult.Ok(config);
         }
         catch (JsonException ex)

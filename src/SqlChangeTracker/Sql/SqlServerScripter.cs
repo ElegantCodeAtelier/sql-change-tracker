@@ -1,7 +1,9 @@
 using Microsoft.Data.SqlClient;
+using SqlChangeTracker.Schema;
 using System.Text;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Globalization;
 
 namespace SqlChangeTracker.Sql;
 
@@ -38,6 +40,17 @@ internal sealed class SqlServerScripter
         string Compression,
         string? PartitionColumn,
         bool StatisticsIncremental);
+
+    private sealed record TableDataColumn(
+        int ColumnId,
+        string Name,
+        string BaseTypeName,
+        bool IsIdentity,
+        bool IsUnicodeText,
+        bool IsSpatial,
+        string? SpatialKind,
+        string ValueAlias,
+        string? SrsIdAlias);
 
     public string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj)
     {
@@ -88,6 +101,274 @@ internal sealed class SqlServerScripter
             _ => throw new InvalidOperationException($"Scripting not implemented for type '{obj.ObjectType}'.")
         };
     }
+
+    public string ScriptTableData(SqlConnectionOptions options, ObjectIdentifier table)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+        return ScriptTableData(connection, table);
+    }
+
+    private static string ScriptTableData(SqlConnection connection, ObjectIdentifier table)
+    {
+        var columns = ReadTableDataColumns(connection, table);
+        if (columns.Count == 0)
+        {
+            if (ReadTableRowCount(connection, table) == 0)
+            {
+                return string.Empty;
+            }
+
+            throw new InvalidOperationException($"Table [{table.Schema}].[{table.Name}] has rows but no insertable columns.");
+        }
+
+        var primaryKeyColumns = ReadPrimaryKeyColumns(connection, table);
+        var rows = ReadTableDataRows(connection, table, columns, primaryKeyColumns);
+        if (rows.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (primaryKeyColumns.Count == 0)
+        {
+            rows = rows
+                .OrderBy(row => row.SortKey, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        var fullName = $"{QuoteIdentifier(table.Schema)}.{QuoteIdentifier(table.Name)}";
+        var columnList = string.Join(", ", columns.Select(column => QuoteIdentifier(column.Name)));
+        var lines = new List<string>();
+        if (columns.Any(column => column.IsIdentity))
+        {
+            lines.Add($"SET IDENTITY_INSERT {fullName} ON;");
+        }
+
+        foreach (var row in rows)
+        {
+            lines.Add($"INSERT INTO {fullName} ({columnList}) VALUES ({string.Join(", ", row.Literals)});");
+        }
+
+        if (columns.Any(column => column.IsIdentity))
+        {
+            lines.Add($"SET IDENTITY_INSERT {fullName} OFF;");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static List<TableDataColumn> ReadTableDataColumns(SqlConnection connection, ObjectIdentifier table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT c.column_id,
+       c.name,
+       bt.name AS base_type_name,
+       c.is_identity,
+       CASE WHEN bt.name IN ('nchar','nvarchar','ntext','xml') THEN 1 ELSE 0 END AS is_unicode_text
+FROM sys.tables tbl
+JOIN sys.schemas sch ON sch.schema_id = tbl.schema_id
+JOIN sys.columns c ON c.object_id = tbl.object_id
+JOIN sys.types bt ON bt.user_type_id = c.system_type_id AND bt.system_type_id = c.system_type_id
+WHERE sch.name = @schema
+  AND tbl.name = @name
+  AND c.is_computed = 0
+  AND c.is_hidden = 0
+  AND c.generated_always_type = 0
+  AND bt.name NOT IN ('timestamp','rowversion')
+ORDER BY c.column_id;";
+        command.Parameters.AddWithValue("@schema", table.Schema);
+        command.Parameters.AddWithValue("@name", table.Name);
+
+        using var reader = command.ExecuteReader();
+        var columns = new List<TableDataColumn>();
+        while (reader.Read())
+        {
+            var columnId = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            var baseTypeName = reader.GetString(2).ToLowerInvariant();
+            var isIdentity = reader.GetBoolean(3);
+            var isUnicodeText = reader.GetInt32(4) == 1;
+            var isSpatial = baseTypeName is "geometry" or "geography";
+            var spatialKind = isSpatial ? baseTypeName : null;
+            var valueAlias = $"__sqlct_value_{columnId}";
+            var sridAlias = isSpatial ? $"__sqlct_srid_{columnId}" : null;
+
+            columns.Add(new TableDataColumn(
+                columnId,
+                name,
+                baseTypeName,
+                isIdentity,
+                isUnicodeText,
+                isSpatial,
+                spatialKind,
+                valueAlias,
+                sridAlias));
+        }
+
+        return columns;
+    }
+
+    private static int ReadTableRowCount(SqlConnection connection, ObjectIdentifier table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {QuoteIdentifier(table.Schema)}.{QuoteIdentifier(table.Name)};";
+        return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static List<string> ReadPrimaryKeyColumns(SqlConnection connection, ObjectIdentifier table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT c.name
+FROM sys.tables tbl
+JOIN sys.schemas sch ON sch.schema_id = tbl.schema_id
+JOIN sys.key_constraints kc ON kc.parent_object_id = tbl.object_id AND kc.type = 'PK'
+JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE sch.name = @schema
+  AND tbl.name = @name
+ORDER BY ic.key_ordinal;";
+        command.Parameters.AddWithValue("@schema", table.Schema);
+        command.Parameters.AddWithValue("@name", table.Name);
+
+        using var reader = command.ExecuteReader();
+        var columns = new List<string>();
+        while (reader.Read())
+        {
+            columns.Add(reader.GetString(0));
+        }
+
+        return columns;
+    }
+
+    private static List<TableDataRow> ReadTableDataRows(
+        SqlConnection connection,
+        ObjectIdentifier table,
+        IReadOnlyList<TableDataColumn> columns,
+        IReadOnlyList<string> primaryKeyColumns)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = BuildTableDataSelectSql(table, columns, primaryKeyColumns);
+        using var reader = command.ExecuteReader();
+
+        var rows = new List<TableDataRow>();
+        while (reader.Read())
+        {
+            var literals = new List<string>(columns.Count);
+            foreach (var column in columns)
+            {
+                var value = reader[column.ValueAlias];
+                var srid = column.SrsIdAlias == null ? null : reader[column.SrsIdAlias];
+                literals.Add(RenderSqlLiteral(column, value, srid));
+            }
+
+            rows.Add(new TableDataRow(literals, string.Join("\u001F", literals)));
+        }
+
+        return rows;
+    }
+
+    private static string BuildTableDataSelectSql(
+        ObjectIdentifier table,
+        IReadOnlyList<TableDataColumn> columns,
+        IReadOnlyList<string> primaryKeyColumns)
+    {
+        var selectList = new List<string>(columns.Count * 2);
+        foreach (var column in columns)
+        {
+            var qualifiedName = QuoteIdentifier(column.Name);
+            if (string.Equals(column.BaseTypeName, "hierarchyid", StringComparison.OrdinalIgnoreCase))
+            {
+                selectList.Add($"CASE WHEN {qualifiedName} IS NULL THEN NULL ELSE {qualifiedName}.ToString() END AS {QuoteIdentifier(column.ValueAlias)}");
+            }
+            else if (column.IsSpatial)
+            {
+                selectList.Add($"CASE WHEN {qualifiedName} IS NULL THEN NULL ELSE {qualifiedName}.STAsBinary() END AS {QuoteIdentifier(column.ValueAlias)}");
+                selectList.Add($"CASE WHEN {qualifiedName} IS NULL THEN NULL ELSE {qualifiedName}.STSrid END AS {QuoteIdentifier(column.SrsIdAlias!)}");
+            }
+            else
+            {
+                selectList.Add($"{qualifiedName} AS {QuoteIdentifier(column.ValueAlias)}");
+            }
+        }
+
+        var orderBy = primaryKeyColumns.Count == 0
+            ? string.Empty
+            : Environment.NewLine + "ORDER BY " + string.Join(", ", primaryKeyColumns.Select(column => $"{QuoteIdentifier(column)} ASC"));
+
+        return $"""
+SELECT {string.Join(", ", selectList)}
+FROM {QuoteIdentifier(table.Schema)}.{QuoteIdentifier(table.Name)}
+{orderBy};
+""";
+    }
+
+    private static string RenderSqlLiteral(TableDataColumn column, object value, object? spatialSrid)
+    {
+        if (value == DBNull.Value || value is null)
+        {
+            return "NULL";
+        }
+
+        return column.BaseTypeName switch
+        {
+            "bit" => Convert.ToBoolean(value, CultureInfo.InvariantCulture) ? "1" : "0",
+            "tinyint" or "smallint" or "int" or "bigint" or "decimal" or "numeric" or "money" or "smallmoney"
+                => Convert.ToString(value, CultureInfo.InvariantCulture)!,
+            "float" => ((double)value).ToString("R", CultureInfo.InvariantCulture),
+            "real" => ((float)value).ToString("R", CultureInfo.InvariantCulture),
+            "uniqueidentifier" => $"'{value.ToString()}'",
+            "char" or "varchar" or "text" => $"'{EscapeSqlStringLiteral(ReadTextValue(value))}'",
+            "nchar" or "nvarchar" or "ntext" or "xml" => $"N'{EscapeSqlStringLiteral(ReadTextValue(value))}'",
+            "binary" or "varbinary" or "image" => $"0x{Convert.ToHexString(ReadBinaryValue(value))}",
+            "date" => $"'{Convert.ToDateTime(value, CultureInfo.InvariantCulture):yyyy-MM-dd}'",
+            "datetime" or "smalldatetime" or "datetime2" => $"'{FormatDateTimeLiteral(Convert.ToDateTime(value, CultureInfo.InvariantCulture))}'",
+            "datetimeoffset" => $"'{FormatDateTimeOffsetLiteral((DateTimeOffset)value)}'",
+            "time" => $"'{((TimeSpan)value).ToString("hh\\:mm\\:ss\\.fffffff", CultureInfo.InvariantCulture)}'",
+            "hierarchyid" => $"hierarchyid::Parse(N'{EscapeSqlStringLiteral(ReadTextValue(value))}')",
+            "geometry" or "geography" => $"{column.SpatialKind}::STGeomFromWKB(0x{Convert.ToHexString(ReadBinaryValue(value))}, {Convert.ToInt32(spatialSrid ?? throw new InvalidOperationException($"Missing SRID for spatial column [{column.Name}]."), CultureInfo.InvariantCulture)})",
+            _ => throw new InvalidOperationException($"Unsupported insertable data type '{column.BaseTypeName}' on column [{column.Name}].")
+        };
+    }
+
+    private static string ReadTextValue(object value)
+        => value switch
+        {
+            string s => s,
+            System.Data.SqlTypes.SqlString sqlString => sqlString.Value,
+            System.Data.SqlTypes.SqlXml sqlXml => sqlXml.Value,
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
+        };
+
+    private static byte[] ReadBinaryValue(object value)
+        => value switch
+        {
+            byte[] bytes => bytes,
+            System.Data.SqlTypes.SqlBinary sqlBinary => sqlBinary.Value,
+            _ => throw new InvalidOperationException($"Unsupported binary runtime type '{value.GetType().FullName}'.")
+        };
+
+    private static string FormatDateTimeLiteral(DateTime value)
+    {
+        var text = value.ToString("yyyy-MM-ddTHH:mm:ss.fffffff", CultureInfo.InvariantCulture);
+        return text.TrimEnd('0').TrimEnd('.');
+    }
+
+    private static string FormatDateTimeOffsetLiteral(DateTimeOffset value)
+    {
+        var text = value.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
+        var plusMinus = Math.Max(text.LastIndexOf('+'), text.LastIndexOf('-'));
+        if (plusMinus < 0)
+        {
+            return text;
+        }
+
+        var timestamp = text[..plusMinus].TrimEnd('0').TrimEnd('.');
+        return timestamp + text[plusMinus..];
+    }
+
+    private sealed record TableDataRow(IReadOnlyList<string> Literals, string SortKey);
 
     private static string ScriptModule(
         SqlConnection connection,
@@ -5187,4 +5468,7 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
 
     private static string EscapeSqlStringLiteral(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static string QuoteIdentifier(string value)
+        => $"[{value.Replace("]", "]]", StringComparison.Ordinal)}]";
 }

@@ -16,4 +16,3 @@ This folder contains evolving specifications for the SQL Change Tracker CLI.
 - `10-deployment.md`: .NET tool deployment
 - `11-changelog.md`: changelog strategy and contribution workflow
 - `12-project-plan.md`: implementation plan for agents
-

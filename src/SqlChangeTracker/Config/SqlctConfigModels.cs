@@ -5,6 +5,8 @@ internal sealed class SqlctConfig
     public DatabaseConfig Database { get; set; } = new();
 
     public OptionsConfig Options { get; set; } = new();
+
+    public DataConfig Data { get; set; } = new();
 }
 
 internal sealed class DatabaseConfig
@@ -31,4 +33,9 @@ internal sealed class OptionsConfig
     /// 0 (default) resolves to <see cref="Environment.ProcessorCount"/>.
     /// </summary>
     public int Parallelism { get; set; } = 0;
+}
+
+internal sealed class DataConfig
+{
+    public List<string> TrackedTables { get; set; } = [];
 }

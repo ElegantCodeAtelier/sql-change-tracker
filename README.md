@@ -14,13 +14,56 @@ validate configuration, and generate reproducible scripts for Git and CI/CD.
 - Validate project configuration before scripting or automation runs.
 - Generate deterministic SQL scripts from live database metadata.
 - Preserve schema-folder conventions used in existing SQL source control workflows.
+- Support tracked-table data scripting alongside schema workflows.
 
 ## What it does today
 - `sqlct init [--project-dir <path>]`
 - `sqlct config [--project-dir <path>]`
+- `sqlct data track <pattern> [--project-dir <path>]`
+- `sqlct data untrack <pattern> [--project-dir <path>]`
+- `sqlct data list [--project-dir <path>]`
 - `sqlct status [--project-dir <path>] [--target <db|folder>]`
-- `sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <schema.name>]`
+- `sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>]`
 - `sqlct pull [--project-dir <path>]`
+
+Current runtime scope for `status`, `diff`, and `pull` covers:
+- `Table`
+- `View`
+- `StoredProcedure`
+- `Function`
+- `Sequence`
+- `Schema`
+- `Role`
+- `User`
+- `Synonym`
+- `UserDefinedType`
+- `PartitionFunction`
+- `PartitionScheme`
+
+When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
+
+`--object` selectors support:
+- `schema.name` for schema-scoped objects
+- `name` for schema-less objects
+- `type:name` and `type:schema.name` for explicit selection
+- `data:schema.name` for tracked table-data scripts
+
+## Selective data scripting
+Tracked-table data scripting is configuration-driven.
+
+- `sqlct data track` matches user tables in the current database and asks for confirmation before updating `data.trackedTables`.
+- `sqlct data untrack` previews tracked matches and asks for confirmation before removing them.
+- `sqlct data list` shows the currently tracked tables from config.
+- `sqlct pull` creates, updates, and deletes `Data/Schema.Table_Data.sql` files for tracked tables.
+- `sqlct status` and `sqlct diff` include `TableData` alongside schema artifacts, with separate schema/data summaries in `status`.
+
+Example:
+```text
+sqlct data track Sales.* --project-dir ./schema
+sqlct data list --project-dir ./schema
+sqlct diff --project-dir ./schema --object data:Sales.Customer
+sqlct pull --project-dir ./schema
+```
 
 ## Build
 ```bash

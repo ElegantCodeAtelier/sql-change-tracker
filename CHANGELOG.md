@@ -8,9 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Support for additional active object types: `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
+- Support for additional active object types: `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme` (#4).
+- Add `sqlct data track`, `sqlct data untrack`, and `sqlct data list` commands for managing explicit tracked tables used for data scripting (#15).
+- Add tracked-table `TableData` scripting to `status`, `diff`, and `pull`, including `Data/Schema.Table_Data.sql` output and the `data:schema.name` diff selector (#15).
+- Parallelism option (`options.parallelism`) for database introspection; defaults to processor count when set to `0` (#9).
+- Add a progress bar for long-running commands (#3).
+- Add --version / -v to print the installed sqlct semantic version (#2).
 
-## [0.1.0] - 2026-04-04
+### Changed
+- Change `status` and `pull` output to report schema and data summaries separately when tracked-table data scripting is configured (#15).
+
+### Fixed
+- Parameter-level MS_Description extended properties are not scripted for procedures and functions (#5).
+- `sqlct config` should fail with a clear error if executed in a non-initialized project directory (#1).
+
+## [0.1.0] - 2026-03-22
 
 ### Added
 - `sqlct init` command — scaffolds a new schema-folder project with `sqlct.config.json` and folder structure.
@@ -21,13 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Support for active object types: `Table`, `View`, `StoredProcedure`, `Function`.
 - Human-readable and JSON output modes for `status`, `diff`, and `pull`.
 - Deterministic script ordering (dependency-aware where applicable).
-- Parallelism option (`options.parallelism`) for database introspection; defaults to processor count when set to `0`.
 - Extended property scripting support for database objects.
 - Exit codes aligned with spec: `0` (no diffs), `1` (diffs present), `2`/`3`/`4` (failure categories).
 - NuGet CI publish workflow triggered on version tag push.
-
-### Changed
-- Simplified runtime config contract to `database` and `options` (`orderByDependencies`, `parallelism`); removed `options.includeSchemas`, `options.excludeObjects`, and `options.comparison.*` (deferred to vNext).
 
 [Unreleased]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ElegantCodeAtelier/sql-change-tracker/releases/tag/v0.1.0

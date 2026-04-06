@@ -37,6 +37,7 @@ internal enum ComparisonTarget
 
 internal sealed class SyncCommandService : ISyncCommandService
 {
+    internal const string TableDataObjectType = "TableData";
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -90,10 +91,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         var changes = ComputeChanges(snapshotResult.Payload!, comparisonTarget);
-        var summary = new StatusSummary(
-            changes.Count(entry => string.Equals(entry.Change, "added", StringComparison.OrdinalIgnoreCase)),
-            changes.Count(entry => string.Equals(entry.Change, "changed", StringComparison.OrdinalIgnoreCase)),
-            changes.Count(entry => string.Equals(entry.Change, "deleted", StringComparison.OrdinalIgnoreCase)));
+        var summary = BuildStatusSummary(changes);
 
         var status = new StatusResult(
             "status",
@@ -103,7 +101,8 @@ internal sealed class SyncCommandService : ISyncCommandService
             changes.Select(entry => new StatusObject(entry.Object.DisplayName, entry.Object.ObjectType, entry.Change)).ToArray(),
             snapshotResult.Payload!.Warnings);
 
-        var exitCode = summary.Added + summary.Changed + summary.Deleted > 0
+        var exitCode = summary.Schema.Added + summary.Schema.Changed + summary.Schema.Deleted
+            + summary.Data.Added + summary.Data.Changed + summary.Data.Deleted > 0
             ? ExitCodes.DiffExists
             : ExitCodes.Success;
 
@@ -159,7 +158,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 "diff",
                 projectResult.Payload!.DisplayPath,
                 comparisonTarget == ComparisonTarget.Db ? "db" : "folder",
-                selected.Payload!.DisplayName,
+                selected.Payload!.SelectorDisplayName,
                 diff,
                 snapshotResult.Payload!.Warnings);
 
@@ -213,10 +212,14 @@ internal sealed class SyncCommandService : ISyncCommandService
             .ToArray();
 
         var changes = new List<PullObject>();
-        var created = 0;
-        var updated = 0;
-        var deleted = 0;
-        var unchanged = 0;
+        var schemaCreated = 0;
+        var schemaUpdated = 0;
+        var schemaDeleted = 0;
+        var schemaUnchanged = 0;
+        var dataCreated = 0;
+        var dataUpdated = 0;
+        var dataDeleted = 0;
+        var dataUnchanged = 0;
         var writeIndex = 0;
         var writeTotal = keys.Length;
 
@@ -236,7 +239,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                     return CommandExecutionResult<PullResult>.Failure(write.Error!, write.ExitCode);
                 }
 
-                created++;
+                IncrementPullCounter(dbObject.ObjectType, ref schemaCreated, ref dataCreated);
                 changes.Add(new PullObject(dbObject.DisplayName, dbObject.ObjectType, "created", dbObject.RelativePath));
                 continue;
             }
@@ -250,11 +253,11 @@ internal sealed class SyncCommandService : ISyncCommandService
                 catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
                     return CommandExecutionResult<PullResult>.Failure(
-                        new ErrorInfo(ErrorCodes.IoFailed, "failed to delete schema script.", File: folderObject.RelativePath, Detail: ex.Message),
+                        new ErrorInfo(ErrorCodes.IoFailed, "failed to delete script.", File: folderObject.RelativePath, Detail: ex.Message),
                         ExitCodes.ExecutionFailure);
                 }
 
-                deleted++;
+                IncrementPullCounter(folderObject.ObjectType, ref schemaDeleted, ref dataDeleted);
                 changes.Add(new PullObject(folderObject.DisplayName, folderObject.ObjectType, "deleted", folderObject.RelativePath));
                 continue;
             }
@@ -266,7 +269,7 @@ internal sealed class SyncCommandService : ISyncCommandService
 
             if (ScriptsEqualForComparison(dbObject.Script, folderObject.Script))
             {
-                unchanged++;
+                IncrementPullCounter(dbObject.ObjectType, ref schemaUnchanged, ref dataUnchanged);
                 continue;
             }
 
@@ -278,19 +281,21 @@ internal sealed class SyncCommandService : ISyncCommandService
 
             if (update.Payload)
             {
-                updated++;
+                IncrementPullCounter(dbObject.ObjectType, ref schemaUpdated, ref dataUpdated);
                 changes.Add(new PullObject(dbObject.DisplayName, dbObject.ObjectType, "updated", dbObject.RelativePath));
             }
             else
             {
-                unchanged++;
+                IncrementPullCounter(dbObject.ObjectType, ref schemaUnchanged, ref dataUnchanged);
             }
         }
 
         var result = new PullResult(
             "pull",
             projectResult.Payload!.DisplayPath,
-            new PullSummary(created, updated, deleted, unchanged),
+            new PullSummary(
+                new PullChangeSummary(schemaCreated, schemaUpdated, schemaDeleted, schemaUnchanged),
+                new PullChangeSummary(dataCreated, dataUpdated, dataDeleted, dataUnchanged)),
             changes,
             snapshot.Warnings);
 
@@ -323,7 +328,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
         {
             return CommandExecutionResult<bool>.Failure(
-                new ErrorInfo(ErrorCodes.IoFailed, "failed to write schema script.", File: fullPath, Detail: ex.Message),
+                new ErrorInfo(ErrorCodes.IoFailed, "failed to write script.", File: fullPath, Detail: ex.Message),
                 ExitCodes.ExecutionFailure);
         }
     }
@@ -482,6 +487,12 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
         }
 
+        var dataFolderResult = ScanDataFolder(projectDir, objects, scannedSqlFiles, warnings);
+        if (!dataFolderResult.Success)
+        {
+            return dataFolderResult;
+        }
+
         try
         {
             warnings.AddRange(CollectUnsupportedFolderWarnings(projectDir, scannedSqlFiles));
@@ -590,7 +601,139 @@ internal sealed class SyncCommandService : ISyncCommandService
             return firstFailure;
         }
 
+        var trackedTableKeys = new HashSet<string>(
+            context.Config.Data.TrackedTables,
+            StringComparer.OrdinalIgnoreCase);
+        var trackedTables = activeObjects
+            .Where(item => string.Equals(item.ObjectType, "Table", StringComparison.OrdinalIgnoreCase))
+            .Where(item => trackedTableKeys.Contains(FormatDisplayName(item.Schema, item.Name)))
+            .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var dataScriptIndex = 0;
+        var dataScriptTotal = trackedTables.Length;
+        Parallel.ForEach(trackedTables, new ParallelOptions { MaxDegreeOfParallelism = dop }, (table, loopState) =>
+        {
+            if (firstFailure != null)
+            {
+                loopState.Stop();
+                return;
+            }
+
+            var index = Interlocked.Increment(ref dataScriptIndex);
+            progress?.Invoke($"Scripting data ({index}/{dataScriptTotal}): {FormatDisplayName(table.Schema, table.Name)}");
+
+            var relativePath = _mapper.GetObjectPath(
+                table.ObjectType,
+                new ObjectIdentifier(table.Schema, table.Name),
+                isData: true);
+            var fullPath = Path.Combine(context.ProjectDir, relativePath);
+
+            string script;
+            try
+            {
+                script = _scripter.ScriptTableData(context.ConnectionOptions, new ObjectIdentifier(table.Schema, table.Name));
+            }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref firstFailure, ToRuntimeFailure<ScanResult>(ex, "failed to script data from database."), null);
+                loopState.Stop();
+                return;
+            }
+
+            var key = BuildObjectKey(TableDataObjectType, table.Schema, table.Name);
+            objects.TryAdd(key, new InternalObject(
+                key,
+                table.Schema,
+                table.Name,
+                TableDataObjectType,
+                script,
+                relativePath,
+                fullPath));
+        });
+
+        if (firstFailure != null)
+        {
+            return firstFailure;
+        }
+
         return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, warnings), ExitCodes.Success);
+    }
+
+    private CommandExecutionResult<ScanResult> ScanDataFolder(
+        string projectDir,
+        IDictionary<string, InternalObject> objects,
+        ISet<string> scannedSqlFiles,
+        IList<CommandWarning> warnings)
+    {
+        var fullFolderPath = Path.Combine(projectDir, "Data");
+        if (!Directory.Exists(fullFolderPath))
+        {
+            return CommandExecutionResult<ScanResult>.Ok(new ScanResult((IReadOnlyDictionary<string, InternalObject>)objects, warnings.ToArray()), ExitCodes.Success);
+        }
+
+        string[] files;
+        try
+        {
+            files = Directory.EnumerateFiles(fullFolderPath, "*.sql", SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+        {
+            return CommandExecutionResult<ScanResult>.Failure(
+                new ErrorInfo(ErrorCodes.IoFailed, "failed to scan schema folder.", File: fullFolderPath, Detail: ex.Message),
+                ExitCodes.ExecutionFailure);
+        }
+
+        foreach (var file in files)
+        {
+            var normalizedFilePath = Path.GetFullPath(file);
+            scannedSqlFiles.Add(normalizedFilePath);
+
+            var fileName = Path.GetFileNameWithoutExtension(file);
+            if (!TryParseDataFileName(fileName, out var schema, out var name))
+            {
+                warnings.Add(new CommandWarning(
+                    "invalid_script_name",
+                    $"skipped '{Path.Combine("Data", Path.GetFileName(file))}' because it does not match '{GetExpectedDataFileNamePattern()}'.")); 
+                continue;
+            }
+
+            var key = BuildObjectKey(TableDataObjectType, schema, name);
+            if (objects.ContainsKey(key))
+            {
+                warnings.Add(new CommandWarning(
+                    "duplicate_script",
+                    $"skipped duplicate folder object '{FormatDisplayName(schema, name)}' of type '{TableDataObjectType}'."));
+                continue;
+            }
+
+            string script;
+            try
+            {
+                script = File.ReadAllText(file);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return CommandExecutionResult<ScanResult>.Failure(
+                    new ErrorInfo(ErrorCodes.IoFailed, "failed to read schema script.", File: file, Detail: ex.Message),
+                    ExitCodes.ExecutionFailure);
+            }
+
+            var relativePath = Path.Combine("Data", Path.GetFileName(file));
+            objects[key] = new InternalObject(
+                key,
+                schema,
+                name,
+                TableDataObjectType,
+                script,
+                relativePath,
+                normalizedFilePath);
+        }
+
+        return CommandExecutionResult<ScanResult>.Ok(new ScanResult((IReadOnlyDictionary<string, InternalObject>)objects, warnings.ToArray()), ExitCodes.Success);
     }
 
     private static CommandExecutionResult<T> ToRuntimeFailure<T>(Exception exception, string fallbackMessage)
@@ -690,6 +833,20 @@ internal sealed class SyncCommandService : ISyncCommandService
 
             if (!SupportedSqlObjectTypes.TryGet(objectTypeToken, out var entry))
             {
+                if (string.Equals(objectTypeToken, "data", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!TryParseObjectFileName(nameToken, isSchemaLess: false, out var dataSchema, out var dataName))
+                    {
+                        return CommandExecutionResult<ObjectSelector>.Failure(
+                            new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: "expected format: data:schema.name"),
+                            ExitCodes.InvalidConfig);
+                    }
+
+                    return CommandExecutionResult<ObjectSelector>.Ok(
+                        new ObjectSelector(TableDataObjectType, dataSchema, dataName, false, trimmed),
+                        ExitCodes.Success);
+                }
+
                 return CommandExecutionResult<ObjectSelector>.Failure(
                     new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object selector.", Detail: $"unsupported object type '{objectTypeToken}'."),
                     ExitCodes.InvalidConfig);
@@ -776,6 +933,11 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         if (selector.ObjectType is null)
         {
+            if (string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             if (selector.IsSchemaLess && !SupportedSqlObjectTypes.IsSchemaLess(objectType))
             {
                 return false;
@@ -885,7 +1047,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return string.Empty;
         }
 
-        return $"Object: {entry.Object.DisplayName} ({entry.Object.ObjectType}){Environment.NewLine}{diff}";
+        return $"Object: {entry.Object.SelectorDisplayName} ({entry.Object.ObjectType}){Environment.NewLine}{diff}";
     }
 
     private static string BuildDiffText(ChangeEntry entry, string sourceLabel, string targetLabel)
@@ -940,8 +1102,39 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static string BuildObjectKey(string objectType, string schema, string name)
         => $"{objectType}|{schema}|{name}";
 
+    private static StatusSummary BuildStatusSummary(IReadOnlyList<ChangeEntry> changes)
+    {
+        var schema = new ChangeSummary(
+            changes.Count(entry => !IsDataObjectType(entry.Object.ObjectType) && string.Equals(entry.Change, "added", StringComparison.OrdinalIgnoreCase)),
+            changes.Count(entry => !IsDataObjectType(entry.Object.ObjectType) && string.Equals(entry.Change, "changed", StringComparison.OrdinalIgnoreCase)),
+            changes.Count(entry => !IsDataObjectType(entry.Object.ObjectType) && string.Equals(entry.Change, "deleted", StringComparison.OrdinalIgnoreCase)));
+        var data = new ChangeSummary(
+            changes.Count(entry => IsDataObjectType(entry.Object.ObjectType) && string.Equals(entry.Change, "added", StringComparison.OrdinalIgnoreCase)),
+            changes.Count(entry => IsDataObjectType(entry.Object.ObjectType) && string.Equals(entry.Change, "changed", StringComparison.OrdinalIgnoreCase)),
+            changes.Count(entry => IsDataObjectType(entry.Object.ObjectType) && string.Equals(entry.Change, "deleted", StringComparison.OrdinalIgnoreCase)));
+        return new StatusSummary(schema, data);
+    }
+
+    private static void IncrementPullCounter(string objectType, ref int schemaCount, ref int dataCount)
+    {
+        if (IsDataObjectType(objectType))
+        {
+            dataCount++;
+        }
+        else
+        {
+            schemaCount++;
+        }
+    }
+
+    private static bool IsDataObjectType(string objectType)
+        => string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
+
     private static string GetExpectedFileNamePattern(bool isSchemaLess)
         => isSchemaLess ? "Name.sql" : "Schema.Object.sql";
+
+    private static string GetExpectedDataFileNamePattern()
+        => "Schema.Object_Data.sql";
 
     private static string FormatDisplayName(string schema, string name)
         => string.IsNullOrWhiteSpace(schema) ? name : $"{schema}.{name}";
@@ -980,6 +1173,19 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         return TryParseSchemaAndName(fileNameWithoutExtension, out schema, out name);
+    }
+
+    internal static bool TryParseDataFileName(string fileNameWithoutExtension, out string schema, out string name)
+    {
+        const string suffix = "_Data";
+        if (!fileNameWithoutExtension.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            schema = string.Empty;
+            name = string.Empty;
+            return false;
+        }
+
+        return TryParseSchemaAndName(fileNameWithoutExtension[..^suffix.Length], out schema, out name);
     }
 
     internal static bool TryParseSchemaAndName(string fileNameWithoutExtension, out string schema, out string name)
@@ -1159,6 +1365,10 @@ internal sealed class SyncCommandService : ISyncCommandService
         string FullPath)
     {
         public string DisplayName => FormatDisplayName(Schema, Name);
+
+        public string SelectorDisplayName => IsDataObjectType(ObjectType)
+            ? $"data:{DisplayName}"
+            : DisplayName;
     }
 
     private sealed record ChangeEntry(
