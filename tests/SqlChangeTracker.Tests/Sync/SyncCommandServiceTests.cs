@@ -170,6 +170,68 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunStatus_WithProjectDirWrappedInSingleQuotes_ResolvesConfigPath()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project with spaces");
+            var wrappedProjectDir = $"'{projectDir}{Path.DirectorySeparatorChar}'";
+
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var writer = new SqlctConfigWriter();
+            var write = writer.Write(SqlctConfigWriter.GetDefaultPath(projectDir), SqlctConfigWriter.CreateDefault());
+            Assert.True(write.Success);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(wrappedProjectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.Error);
+            Assert.Equal(ErrorCodes.InvalidConfig, result.Error!.Code);
+            Assert.Equal("missing required field: database.server.", result.Error.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithProjectDirEndingInDoubleQuoteArtifact_ResolvesConfigPath()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project with spaces");
+            var projectDirWithQuoteArtifact = projectDir + Path.DirectorySeparatorChar + '"';
+
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var writer = new SqlctConfigWriter();
+            var write = writer.Write(SqlctConfigWriter.GetDefaultPath(projectDir), SqlctConfigWriter.CreateDefault());
+            Assert.True(write.Success);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDirWithQuoteArtifact, "db");
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.Error);
+            Assert.Equal(ErrorCodes.InvalidConfig, result.Error!.Code);
+            Assert.Equal("missing required field: database.server.", result.Error.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void CollectUnsupportedFolderWarnings_FlagsUnsupportedSqlEntriesInStableOrder()
     {
         var tempDir = CreateTempDir();

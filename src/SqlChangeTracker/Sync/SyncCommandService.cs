@@ -1125,31 +1125,7 @@ internal sealed class SyncCommandService : ISyncCommandService
     }
 
     private static ResolvedPath ResolveProjectDir(string? projectDir)
-    {
-        var input = string.IsNullOrWhiteSpace(projectDir) ? Environment.CurrentDirectory : projectDir!;
-        var fullPath = Path.GetFullPath(input, Environment.CurrentDirectory);
-        var displayPath = NormalizeDisplayPath(fullPath, input);
-        return new ResolvedPath(fullPath, displayPath);
-    }
-
-    private static string NormalizeDisplayPath(string fullPath, string originalInput)
-    {
-        if (Path.IsPathRooted(originalInput))
-        {
-            return fullPath;
-        }
-
-        var relative = Path.GetRelativePath(Environment.CurrentDirectory, fullPath);
-        if (relative.StartsWith(".", StringComparison.Ordinal))
-        {
-            return relative;
-        }
-
-        var prefix = Path.DirectorySeparatorChar == '\\' ? ".\\" : "./";
-        return prefix + relative;
-    }
-
-    private sealed record ResolvedPath(string FullPath, string DisplayPath);
+        => ProjectPathResolver.Resolve(projectDir);
 
     private sealed record ProjectContext(
         string ProjectDir,

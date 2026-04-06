@@ -12,7 +12,9 @@ internal sealed class SqlctConfigReader
                 new ErrorInfo(
                     ErrorCodes.MissingLink,
                     "no linked schema folder found.",
-                    Hint: "run `sqlct init` first."),
+                    File: configPath,
+                    Detail: $"expected config file at '{configPath}'.",
+                    Hint: "run `sqlct init` or `sqlct config`."),
                 ExitCodes.InvalidConfig);
         }
 

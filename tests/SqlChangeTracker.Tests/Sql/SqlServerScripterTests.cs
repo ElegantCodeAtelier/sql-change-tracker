@@ -256,6 +256,63 @@ public sealed class SqlServerScripterTests
     }
 
     [Fact]
+    public void ScriptSchema_EmitsExtendedProperties_WhenSchemaWithExtendedPropertiesExists()
+    {
+        var options = GetAdventureWorksOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindSchemaWithExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("sp_addextendedproperty", script);
+        Assert.Contains("'SCHEMA'", script);
+        Assert.Contains($"N'{objInfo.Name}', NULL, NULL, NULL, NULL", script);
+    }
+
+    [Fact]
+    public void ScriptAdditionalImplementedObjectTypes_EmitExtendedProperties_WhenPropertiesExist()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var cases = new (DbObjectInfo? Object, string RequiredToken)[]
+        {
+            (FindRoleWithExtendedProperties(options), "'USER'"),
+            (FindUserWithExtendedProperties(options), "'USER'"),
+            (FindSequenceWithExtendedProperties(options), "'SEQUENCE'"),
+            (FindSynonymWithExtendedProperties(options), "'SYNONYM'"),
+            (FindUserDefinedTypeWithExtendedProperties(options), "'TYPE'"),
+            (FindPartitionFunctionWithExtendedProperties(options), "'PARTITION FUNCTION'"),
+            (FindPartitionSchemeWithExtendedProperties(options), "'PARTITION SCHEME'")
+        };
+
+        var scripter = new SqlServerScripter();
+        foreach (var testCase in cases)
+        {
+            if (testCase.Object == null)
+            {
+                continue;
+            }
+
+            var script = scripter.ScriptObject(options, testCase.Object);
+            Assert.Contains("sp_addextendedproperty", script);
+            Assert.Contains(testCase.RequiredToken, script);
+        }
+    }
+
+    [Fact]
     public void ScriptPartitionFunctionAndScheme_EmitExpectedStatements_WhenSupportedObjectsExist()
     {
         var options = GetOptions();
@@ -303,6 +360,110 @@ public sealed class SqlServerScripterTests
 
         Assert.Contains($"CREATE TYPE [{userDefinedType.Schema}].[{userDefinedType.Name}] FROM", script);
         Assert.Contains("GO", script);
+    }
+
+    [Fact]
+    public void ScriptProcedure_EmitsParameterExtendedProperties_WhenProcedureWithParameterExtendedPropertiesExists()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindProcedureWithParameterExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("'PARAMETER'", script);
+        Assert.Contains("sp_addextendedproperty", script);
+    }
+
+    [Fact]
+    public void ScriptFunction_EmitsParameterExtendedProperties_WhenFunctionWithParameterExtendedPropertiesExists()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindFunctionWithParameterExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("'PARAMETER'", script);
+        Assert.Contains("sp_addextendedproperty", script);
+    }
+
+    [Fact]
+    public void ScriptProcedure_EmitsParameterExtendedProperties_WhenCompatibilityReferenceHasOnlyObjectLevelProperties()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindProcedureWithParameterExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var referencePath = CreateModuleReferenceWithObjectLevelExtendedProperty("PROCEDURE");
+        try
+        {
+            var scripter = new SqlServerScripter();
+            var script = scripter.ScriptObject(options, objInfo, referencePath);
+
+            Assert.Contains("'PARAMETER'", script);
+            Assert.Contains("sp_addextendedproperty", script);
+        }
+        finally
+        {
+            File.Delete(referencePath);
+        }
+    }
+
+    [Fact]
+    public void ScriptFunction_EmitsParameterExtendedProperties_WhenCompatibilityReferenceHasOnlyObjectLevelProperties()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindFunctionWithParameterExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var referencePath = CreateModuleReferenceWithObjectLevelExtendedProperty("FUNCTION");
+        try
+        {
+            var scripter = new SqlServerScripter();
+            var script = scripter.ScriptObject(options, objInfo, referencePath);
+
+            Assert.Contains("'PARAMETER'", script);
+            Assert.Contains("sp_addextendedproperty", script);
+        }
+        finally
+        {
+            File.Delete(referencePath);
+        }
     }
 
     private static SqlConnectionOptions? GetOptions()
@@ -443,4 +604,234 @@ ORDER BY s.name, t.name, i.index_id;";
     private static DbObjectInfo? FindFirstObject(SqlServerIntrospector introspector, SqlConnectionOptions options, string objectType)
         => introspector.ListObjects(options)
             .FirstOrDefault(item => string.Equals(item.ObjectType, objectType, StringComparison.OrdinalIgnoreCase));
+
+    private static DbObjectInfo? FindSchemaWithExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 s.name
+FROM sys.extended_properties ep
+JOIN sys.schemas s ON s.schema_id = ep.major_id
+WHERE ep.class_desc = 'SCHEMA'
+ORDER BY s.name, ep.name;";
+
+        var result = command.ExecuteScalar() as string;
+        return string.IsNullOrWhiteSpace(result)
+            ? null
+            : new DbObjectInfo(string.Empty, result, "Schema");
+    }
+
+    private static DbObjectInfo? FindRoleWithExtendedProperties(SqlConnectionOptions options)
+        => FindDatabasePrincipalWithExtendedProperties(options, "R", "Role");
+
+    private static DbObjectInfo? FindUserWithExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 dp.name
+FROM sys.extended_properties ep
+JOIN sys.database_principals dp ON dp.principal_id = ep.major_id
+WHERE ep.class_desc = 'DATABASE_PRINCIPAL'
+  AND dp.type IN ('S','U','G','E','X','C','K')
+ORDER BY dp.name, ep.name;";
+
+        var result = command.ExecuteScalar() as string;
+        return string.IsNullOrWhiteSpace(result)
+            ? null
+            : new DbObjectInfo(string.Empty, result, "User");
+    }
+
+    private static DbObjectInfo? FindDatabasePrincipalWithExtendedProperties(SqlConnectionOptions options, string principalType, string objectType)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 dp.name
+FROM sys.extended_properties ep
+JOIN sys.database_principals dp ON dp.principal_id = ep.major_id
+WHERE ep.class_desc = 'DATABASE_PRINCIPAL'
+  AND dp.type = @type
+ORDER BY dp.name, ep.name;";
+        command.Parameters.AddWithValue("@type", principalType);
+
+        var result = command.ExecuteScalar() as string;
+        return string.IsNullOrWhiteSpace(result)
+            ? null
+            : new DbObjectInfo(string.Empty, result, objectType);
+    }
+
+    private static DbObjectInfo? FindSequenceWithExtendedProperties(SqlConnectionOptions options)
+        => FindSchemaScopedObjectWithExtendedProperties(options, "SO", "Sequence");
+
+    private static DbObjectInfo? FindSynonymWithExtendedProperties(SqlConnectionOptions options)
+        => FindSchemaScopedObjectWithExtendedProperties(options, "SN", "Synonym");
+
+    private static DbObjectInfo? FindSchemaScopedObjectWithExtendedProperties(SqlConnectionOptions options, string sqlType, string objectType)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 s.name, o.name
+FROM sys.extended_properties ep
+JOIN sys.objects o ON o.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE ep.class_desc = 'OBJECT_OR_COLUMN'
+  AND ep.minor_id = 0
+  AND o.type = @type
+ORDER BY s.name, o.name, ep.name;";
+        command.Parameters.AddWithValue("@type", sqlType);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), objectType);
+    }
+
+    private static DbObjectInfo? FindUserDefinedTypeWithExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 s.name, t.name
+FROM sys.extended_properties ep
+JOIN sys.types t ON t.user_type_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE ep.class_desc = 'TYPE'
+  AND t.is_user_defined = 1
+  AND t.is_table_type = 0
+ORDER BY s.name, t.name, ep.name;";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "UserDefinedType");
+    }
+
+    private static DbObjectInfo? FindPartitionFunctionWithExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 pf.name
+FROM sys.extended_properties ep
+JOIN sys.partition_functions pf ON pf.function_id = ep.major_id
+WHERE ep.class_desc = 'PARTITION_FUNCTION'
+ORDER BY pf.name, ep.name;";
+
+        var result = command.ExecuteScalar() as string;
+        return string.IsNullOrWhiteSpace(result)
+            ? null
+            : new DbObjectInfo(string.Empty, result, "PartitionFunction");
+    }
+
+    private static DbObjectInfo? FindPartitionSchemeWithExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 ps.name
+FROM sys.extended_properties ep
+JOIN sys.partition_schemes ps ON ps.data_space_id = ep.major_id
+WHERE ep.class_desc = 'DATASPACE'
+ORDER BY ps.name, ep.name;";
+
+        var result = command.ExecuteScalar() as string;
+        return string.IsNullOrWhiteSpace(result)
+            ? null
+            : new DbObjectInfo(string.Empty, result, "PartitionScheme");
+    }
+
+    private static DbObjectInfo? FindProcedureWithParameterExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 s.name, o.name
+FROM sys.extended_properties ep
+JOIN sys.parameters p ON p.object_id = ep.major_id AND p.parameter_id = ep.minor_id
+JOIN sys.objects o ON o.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE ep.class_desc = 'PARAMETER'
+  AND o.type = 'P'
+ORDER BY s.name, o.name, p.name, ep.name;";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "StoredProcedure");
+    }
+
+    private static DbObjectInfo? FindFunctionWithParameterExtendedProperties(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP 1 s.name, o.name
+FROM sys.extended_properties ep
+JOIN sys.parameters p ON p.object_id = ep.major_id AND p.parameter_id = ep.minor_id
+JOIN sys.objects o ON o.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE ep.class_desc = 'PARAMETER'
+  AND o.type IN ('FN', 'TF', 'IF')
+ORDER BY s.name, o.name, p.name, ep.name;";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "Function");
+    }
+
+    private static string CreateModuleReferenceWithObjectLevelExtendedProperty(string levelType)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.sql");
+        var lines = new[]
+        {
+            "SET QUOTED_IDENTIFIER ON",
+            "GO",
+            "SET ANSI_NULLS ON",
+            "GO",
+            $"CREATE {levelType} [dbo].[CompatStub]",
+            "AS",
+            "SELECT 1",
+            "GO",
+            string.Empty,
+            $"EXEC sp_addextendedproperty N'MS_Description', N'compat only', 'SCHEMA', N'dbo', '{levelType}', N'CompatStub', NULL, NULL",
+            "GO"
+        };
+
+        File.WriteAllLines(path, lines);
+        return path;
+    }
 }

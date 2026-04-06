@@ -56,14 +56,14 @@ internal sealed class SqlServerScripter
             "StoredProcedure" => ScriptModule(connection, obj, true, referenceLines),
             "View" => ScriptView(connection, obj, referenceLines),
             "Function" => ScriptModule(connection, obj, true, referenceLines),
-            "Sequence" => ScriptSequence(connection, obj),
-            "Schema" => ScriptSchema(connection, obj),
-            "Role" => ScriptRole(connection, obj),
-            "User" => ScriptUser(connection, obj),
+            "Sequence" => ScriptSequence(connection, obj, referenceLines),
+            "Schema" => ScriptSchema(connection, obj, referenceLines),
+            "Role" => ScriptRole(connection, obj, referenceLines),
+            "User" => ScriptUser(connection, obj, referenceLines),
             "PartitionFunction" => ScriptPartitionFunction(connection, obj, referenceLines),
             "PartitionScheme" => ScriptPartitionScheme(connection, obj, referenceLines),
-            "Synonym" => ScriptSynonym(connection, obj),
-            "UserDefinedType" => ScriptUserDefinedType(connection, obj),
+            "Synonym" => ScriptSynonym(connection, obj, referenceLines),
+            "UserDefinedType" => ScriptUserDefinedType(connection, obj, referenceLines),
             "TableType" => ScriptTableType(connection, obj),
             "XmlSchemaCollection" => ScriptXmlSchemaCollection(connection, obj),
             "MessageType" => ScriptMessageType(connection, obj),
@@ -267,7 +267,7 @@ WHERE s.name = @schema AND o.name = @name";
         return (lines, hasGoAfterDefinition);
     }
 
-    private static string ScriptSequence(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptSequence(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -307,6 +307,7 @@ WHERE s.name = @schema AND seq.name = @name";
         var cache = isCached
             ? cacheSize is DBNull ? "CACHE " : $"CACHE {cacheSize}"
             : "NO CACHE";
+        reader.Close();
 
         var lines = new List<string>
         {
@@ -321,10 +322,12 @@ WHERE s.name = @schema AND seq.name = @name";
             "GO"
         };
 
+        AppendExtendedPropertyLines(lines, ReadSequenceExtendedProperties(connection, schemaName, sequenceName, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptSchema(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptSchema(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -347,11 +350,14 @@ WHERE s.name = @name";
         {
             lines.Add($"AUTHORIZATION [{ownerName}]");
         }
+        reader.Close();
         lines.Add("GO");
+        AppendExtendedPropertyLines(lines, ReadSchemaExtendedProperties(connection, schemaName, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptRole(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptRole(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -390,10 +396,12 @@ WHERE dp.type = 'R' AND dp.name = @name";
             throw new InvalidOperationException($"Role has no scriptable definition: [{roleName}].");
         }
 
+        AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, roleName, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptUser(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptUser(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -425,6 +433,9 @@ WHERE dp.name = @name";
         var certificateName = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
         var asymmetricKeyName = reader.IsDBNull(6) ? string.Empty : reader.GetString(6);
         var defaultSchemaClause = BuildUserDefaultSchemaClause(defaultSchema);
+        reader.Close();
+
+        var lines = new List<string>();
 
         if (string.Equals(typeDesc, "CERTIFICATE_MAPPED_USER", StringComparison.OrdinalIgnoreCase))
         {
@@ -433,7 +444,11 @@ WHERE dp.name = @name";
                 throw new InvalidOperationException($"Certificate-mapped user is missing certificate metadata: [{userName}].");
             }
 
-            return $"CREATE USER [{userName}] FOR CERTIFICATE [{certificateName}]{Environment.NewLine}GO";
+            lines.Add($"CREATE USER [{userName}] FOR CERTIFICATE [{certificateName}]");
+            lines.Add("GO");
+            AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+            AppendTrailingBlankLines(lines, referenceLines);
+            return string.Join(Environment.NewLine, lines);
         }
 
         if (string.Equals(typeDesc, "ASYMMETRIC_KEY_MAPPED_USER", StringComparison.OrdinalIgnoreCase))
@@ -443,18 +458,30 @@ WHERE dp.name = @name";
                 throw new InvalidOperationException($"Asymmetric-key-mapped user is missing asymmetric key metadata: [{userName}].");
             }
 
-            return $"CREATE USER [{userName}] FOR ASYMMETRIC KEY [{asymmetricKeyName}]{Environment.NewLine}GO";
+            lines.Add($"CREATE USER [{userName}] FOR ASYMMETRIC KEY [{asymmetricKeyName}]");
+            lines.Add("GO");
+            AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+            AppendTrailingBlankLines(lines, referenceLines);
+            return string.Join(Environment.NewLine, lines);
         }
 
         if (string.Equals(authType, "NONE", StringComparison.OrdinalIgnoreCase))
         {
-            return $"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}{Environment.NewLine}GO";
+            lines.Add($"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}");
+            lines.Add("GO");
+            AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+            AppendTrailingBlankLines(lines, referenceLines);
+            return string.Join(Environment.NewLine, lines);
         }
 
         if (string.Equals(authType, "EXTERNAL", StringComparison.OrdinalIgnoreCase) &&
             string.IsNullOrWhiteSpace(loginName))
         {
-            return $"CREATE USER [{userName}] FROM EXTERNAL PROVIDER{defaultSchemaClause}{Environment.NewLine}GO";
+            lines.Add($"CREATE USER [{userName}] FROM EXTERNAL PROVIDER{defaultSchemaClause}");
+            lines.Add("GO");
+            AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+            AppendTrailingBlankLines(lines, referenceLines);
+            return string.Join(Environment.NewLine, lines);
         }
 
         if (string.Equals(authType, "DATABASE", StringComparison.OrdinalIgnoreCase))
@@ -463,7 +490,11 @@ WHERE dp.name = @name";
         }
 
         var effectiveLoginName = string.IsNullOrWhiteSpace(loginName) ? userName : loginName;
-        return $"CREATE USER [{userName}] FOR LOGIN [{effectiveLoginName}]{defaultSchemaClause}{Environment.NewLine}GO";
+        lines.Add($"CREATE USER [{userName}] FOR LOGIN [{effectiveLoginName}]{defaultSchemaClause}");
+        lines.Add("GO");
+        AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static IEnumerable<string> ReadRoleMembershipStatements(SqlConnection connection, string roleName)
@@ -578,6 +609,7 @@ ORDER BY rv.boundary_id";
         }
 
         lines.Add("GO");
+        AppendExtendedPropertyLines(lines, ReadPartitionFunctionExtendedProperties(connection, name, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
     }
@@ -612,6 +644,7 @@ WHERE name = @schemeName;";
         if (dataSpaceId is DBNull || dataSpaceId is null)
         {
             var emptyLines = BuildPartitionSchemeLines(schemeName, functionName, string.Empty, referenceLines);
+            AppendExtendedPropertyLines(emptyLines, ReadPartitionSchemeExtendedProperties(connection, schemeName, referenceLines), referenceLines);
             AppendTrailingBlankLines(emptyLines, referenceLines);
             return string.Join(Environment.NewLine, emptyLines);
         }
@@ -634,11 +667,12 @@ ORDER BY dds.destination_id";
 
         var groupList = groups.Count == 0 ? string.Empty : string.Join(", ", groups);
         var lines = BuildPartitionSchemeLines(schemeName, functionName, groupList, referenceLines);
+        AppendExtendedPropertyLines(lines, ReadPartitionSchemeExtendedProperties(connection, schemeName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptSynonym(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptSynonym(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -655,10 +689,18 @@ WHERE s.name = @schema AND syn.name = @name;";
             throw new InvalidOperationException($"Synonym not found: [{obj.Schema}].[{obj.Name}].");
         }
 
-        return $"CREATE SYNONYM [{obj.Schema}].[{obj.Name}] FOR {baseObject}{Environment.NewLine}GO";
+        var lines = new List<string>
+        {
+            $"CREATE SYNONYM [{obj.Schema}].[{obj.Name}] FOR {baseObject}",
+            "GO"
+        };
+
+        AppendExtendedPropertyLines(lines, ReadSynonymExtendedProperties(connection, obj.Schema, obj.Name, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptUserDefinedType(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptUserDefinedType(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -689,8 +731,17 @@ WHERE t.is_user_defined = 1 AND t.is_table_type = 0 AND s.name = @schema AND t.n
 
         var baseType = FormatTypeName(baseTypeName, baseSchemaName, false, maxLength, precision, scale);
         var nullable = isNullable ? "NULL" : "NOT NULL";
+        reader.Close();
 
-        return $"CREATE TYPE [{schemaName}].[{typeName}] FROM {baseType} {nullable}{Environment.NewLine}GO";
+        var lines = new List<string>
+        {
+            $"CREATE TYPE [{schemaName}].[{typeName}] FROM {baseType} {nullable}",
+            "GO"
+        };
+
+        AppendExtendedPropertyLines(lines, ReadUserDefinedTypeExtendedProperties(connection, schemaName, typeName, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj)
@@ -2722,82 +2773,81 @@ ORDER BY pr.name, dp.permission_name;";
         return lines;
     }
 
-    private static List<string> ReadReferenceExtendedProperties(string[]? referenceLines)
+    private static bool UsesSysNamedExtendedProperties(string[]? referenceLines)
     {
-        var lines = new List<string>();
         if (referenceLines == null || referenceLines.Length == 0)
         {
-            return lines;
+            return false;
         }
 
-        var start = -1;
-        for (var i = 0; i < referenceLines.Length; i++)
+        foreach (var line in referenceLines)
         {
-            var trimmed = referenceLines[i].TrimStart();
-            if (trimmed.StartsWith("--", StringComparison.OrdinalIgnoreCase))
+            if (line.TrimStart().StartsWith("EXEC sys.sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
             {
-                var next = i + 1;
-                while (next < referenceLines.Length && referenceLines[next].Trim().Length == 0)
-                {
-                    next++;
-                }
-
-                if (next < referenceLines.Length)
-                {
-                    var nextTrimmed = referenceLines[next].TrimStart();
-                    if (nextTrimmed.StartsWith("EXEC sp_addextendedproperty", StringComparison.OrdinalIgnoreCase) ||
-                        nextTrimmed.StartsWith("EXEC sys.sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
-                    {
-                        start = i;
-                        break;
-                    }
-                }
-            }
-            else if (trimmed.StartsWith("EXEC sp_addextendedproperty", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("EXEC sys.sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
-            {
-                start = i;
-                break;
+                return true;
             }
         }
 
-        if (start < 0)
+        return false;
+    }
+
+    private static string BuildExtendedPropertyStatement(
+        string propertyProcedure,
+        string propertyName,
+        string propertyValue,
+        string level0Type,
+        string level0Name,
+        string? level1Type,
+        string? level1Name,
+        string? level2Type,
+        string? level2Name)
+    {
+        var propName = EscapeSqlStringLiteral(propertyName);
+        var propValueSql = EscapeSqlStringLiteral(propertyValue);
+        var level0TypeSql = EscapeSqlStringLiteral(level0Type);
+        var level0NameSql = EscapeSqlStringLiteral(level0Name);
+
+        if (string.IsNullOrWhiteSpace(level1Type) || string.IsNullOrWhiteSpace(level1Name))
         {
-            return lines;
+            return $"{propertyProcedure} N'{propName}', N'{propValueSql}', '{level0TypeSql}', N'{level0NameSql}', NULL, NULL, NULL, NULL";
         }
 
-        var end = -1;
-        for (var i = start; i < referenceLines.Length; i++)
-        {
-            var trimmed = referenceLines[i].TrimStart();
-            if (!trimmed.StartsWith("EXEC sp_addextendedproperty", StringComparison.OrdinalIgnoreCase) &&
-                !trimmed.StartsWith("EXEC sys.sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
+        var level1TypeSql = EscapeSqlStringLiteral(level1Type);
+        var level1NameSql = EscapeSqlStringLiteral(level1Name);
 
-            for (var j = i + 1; j < referenceLines.Length; j++)
-            {
-                if (string.Equals(referenceLines[j].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
-                {
-                    end = j;
-                    i = j;
-                    break;
-                }
-            }
+        if (string.IsNullOrWhiteSpace(level2Type) || string.IsNullOrWhiteSpace(level2Name))
+        {
+            return $"{propertyProcedure} N'{propName}', N'{propValueSql}', '{level0TypeSql}', N'{level0NameSql}', '{level1TypeSql}', N'{level1NameSql}', NULL, NULL";
         }
 
-        if (end < 0)
+        var level2TypeSql = EscapeSqlStringLiteral(level2Type);
+        var level2NameSql = EscapeSqlStringLiteral(level2Name);
+        return $"{propertyProcedure} N'{propName}', N'{propValueSql}', '{level0TypeSql}', N'{level0NameSql}', '{level1TypeSql}', N'{level1NameSql}', '{level2TypeSql}', N'{level2NameSql}'";
+    }
+
+    private static string GetExtendedPropertyProcedure(string[]? referenceLines)
+        => UsesSysNamedExtendedProperties(referenceLines)
+            ? "EXEC sys.sp_addextendedproperty"
+            : "EXEC sp_addextendedproperty";
+
+    private static void AppendExtendedPropertyLines(
+        List<string> lines,
+        IEnumerable<string> extendedProperties,
+        string[]? referenceLines)
+    {
+        var propertyLines = extendedProperties.ToList();
+        if (propertyLines.Count == 0)
         {
-            return lines;
+            return;
         }
 
-        for (var i = start; i <= end; i++)
+        var blankBeforeProps = CountBlankLinesBeforeExtendedProperties(referenceLines);
+        for (var i = 0; i < blankBeforeProps; i++)
         {
-            lines.Add(referenceLines[i]);
+            lines.Add(string.Empty);
         }
 
-        return lines;
+        lines.AddRange(propertyLines);
     }
 
     private static int CountBlankLinesBeforeExtendedProperties(string[]? referenceLines)
@@ -2920,17 +2970,13 @@ ORDER BY pr.name, dp.permission_name;";
         DbObjectInfo obj,
         string[]? referenceLines)
     {
-        var referenceProps = ReadReferenceExtendedProperties(referenceLines);
-        if (referenceProps.Count > 0)
-        {
-            return referenceProps;
-        }
-
         var className = GetExtendedPropertyClassName(obj.ObjectType);
         if (string.IsNullOrWhiteSpace(className))
         {
             return Array.Empty<string>();
         }
+
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
 
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -2945,9 +2991,18 @@ ORDER BY ep.name;";
         {
             while (reader.Read())
             {
-                var propName = reader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = reader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{obj.Schema}', '{className}', N'{obj.Name}', NULL, NULL");
+                var propName = reader.GetString(0);
+                var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    obj.Schema,
+                    className,
+                    obj.Name,
+                    null,
+                    null));
                 lines.Add("GO");
             }
         }
@@ -2965,10 +3020,19 @@ ORDER BY c.name, ep.name;";
         {
             while (columnReader.Read())
             {
-                var propName = columnReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = columnReader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
+                var propName = columnReader.GetString(0);
+                var propValue = columnReader.GetValue(1).ToString() ?? string.Empty;
                 var columnName = columnReader.GetString(2);
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{obj.Schema}', '{className}', N'{obj.Name}', 'COLUMN', N'{columnName}'");
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    obj.Schema,
+                    className,
+                    obj.Name,
+                    "COLUMN",
+                    columnName));
                 lines.Add("GO");
             }
         }
@@ -2987,10 +3051,53 @@ ORDER BY i.name, ep.name;";
             using var indexReader = command.ExecuteReader();
             while (indexReader.Read())
             {
-                var propName = indexReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = indexReader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
+                var propName = indexReader.GetString(0);
+                var propValue = indexReader.GetValue(1).ToString() ?? string.Empty;
                 var indexName = indexReader.GetString(2);
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{obj.Schema}', '{className}', N'{obj.Name}', 'INDEX', N'{indexName}'");
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    obj.Schema,
+                    className,
+                    obj.Name,
+                    "INDEX",
+                    indexName));
+                lines.Add("GO");
+            }
+        }
+
+        if (string.Equals(obj.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(obj.ObjectType, "Function", StringComparison.OrdinalIgnoreCase))
+        {
+            command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value, p.name AS param_name
+FROM sys.extended_properties ep
+JOIN sys.parameters p ON p.object_id = ep.major_id AND p.parameter_id = ep.minor_id
+WHERE ep.class_desc = 'PARAMETER'
+  AND ep.major_id = OBJECT_ID(@full)
+  AND p.name IS NOT NULL
+ORDER BY p.name, ep.name;";
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("@full", $"[{obj.Schema}].[{obj.Name}]");
+
+            using var paramReader = command.ExecuteReader();
+            while (paramReader.Read())
+            {
+                var propName = paramReader.GetString(0);
+                var propValue = paramReader.GetValue(1).ToString() ?? string.Empty;
+                var paramName = paramReader.GetString(2);
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    obj.Schema,
+                    className,
+                    obj.Name,
+                    "PARAMETER",
+                    paramName));
                 lines.Add("GO");
             }
         }
@@ -3339,18 +3446,266 @@ ORDER BY fic.column_id;";
         };
     }
 
+    private static IEnumerable<string> ReadSchemaExtendedProperties(
+        SqlConnection connection,
+        string schemaName,
+        string[]? referenceLines)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.schemas s ON s.schema_id = ep.major_id
+WHERE ep.class_desc = 'SCHEMA' AND s.name = @name
+ORDER BY ep.name;";
+        command.Parameters.AddWithValue("@name", schemaName);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "SCHEMA",
+                schemaName,
+                null,
+                null,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static IEnumerable<string> ReadPrincipalExtendedProperties(
+        SqlConnection connection,
+        string principalName,
+        string[]? referenceLines)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.database_principals dp ON dp.principal_id = ep.major_id
+WHERE ep.class_desc = 'DATABASE_PRINCIPAL' AND dp.name = @name
+ORDER BY ep.name;";
+        command.Parameters.AddWithValue("@name", principalName);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "USER",
+                principalName,
+                null,
+                null,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static IEnumerable<string> ReadSchemaScopedObjectExtendedProperties(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string objectTypeCode,
+        string level1Type,
+        string[]? referenceLines)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.objects o ON o.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE ep.class_desc = 'OBJECT_OR_COLUMN'
+  AND ep.minor_id = 0
+  AND s.name = @schema
+  AND o.name = @name
+  AND o.type = @type
+ORDER BY ep.name;";
+        command.Parameters.AddWithValue("@schema", schema);
+        command.Parameters.AddWithValue("@name", name);
+        command.Parameters.AddWithValue("@type", objectTypeCode);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "SCHEMA",
+                schema,
+                level1Type,
+                name,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static IEnumerable<string> ReadSequenceExtendedProperties(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ReadSchemaScopedObjectExtendedProperties(connection, schema, name, "SO", "SEQUENCE", referenceLines);
+
+    private static IEnumerable<string> ReadSynonymExtendedProperties(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ReadSchemaScopedObjectExtendedProperties(connection, schema, name, "SN", "SYNONYM", referenceLines);
+
+    private static IEnumerable<string> ReadUserDefinedTypeExtendedProperties(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.types t ON t.user_type_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE ep.class_desc = 'TYPE'
+  AND t.is_user_defined = 1
+  AND t.is_table_type = 0
+  AND s.name = @schema
+  AND t.name = @name
+ORDER BY ep.name;";
+        command.Parameters.AddWithValue("@schema", schema);
+        command.Parameters.AddWithValue("@name", name);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "SCHEMA",
+                schema,
+                "TYPE",
+                name,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static IEnumerable<string> ReadPartitionFunctionExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.partition_functions pf ON pf.function_id = ep.major_id
+WHERE ep.class_desc = 'PARTITION_FUNCTION' AND pf.name = @name
+ORDER BY ep.name;";
+        command.Parameters.AddWithValue("@name", name);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "PARTITION FUNCTION",
+                name,
+                null,
+                null,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static IEnumerable<string> ReadPartitionSchemeExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.partition_schemes ps ON ps.data_space_id = ep.major_id
+WHERE ep.class_desc = 'DATASPACE' AND ps.name = @name
+ORDER BY ep.name;";
+        command.Parameters.AddWithValue("@name", name);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "PARTITION SCHEME",
+                name,
+                null,
+                null,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
     private static IEnumerable<string> ReadTableExtendedProperties(
         SqlConnection connection,
         string schema,
         string name,
         string[]? referenceLines)
     {
-        var referenceProps = ReadReferenceExtendedProperties(referenceLines);
-        if (referenceProps.Count > 0)
-        {
-            return referenceProps;
-        }
-
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
         using var command = connection.CreateCommand();
         command.CommandText = @"
 SELECT ep.name AS prop_name, ep.value AS prop_value
@@ -3364,9 +3719,18 @@ ORDER BY ep.name;";
         {
             while (reader.Read())
             {
-                var propName = reader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = reader.GetString(1).Replace("'", "''", StringComparison.Ordinal);
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{schema}', 'TABLE', N'{name}', NULL, NULL");
+                var propName = reader.GetString(0);
+                var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    schema,
+                    "TABLE",
+                    name,
+                    null,
+                    null));
                 lines.Add("GO");
             }
         }
@@ -3384,10 +3748,19 @@ ORDER BY c.name, ep.name;";
         {
             while (columnReader.Read())
             {
-                var propName = columnReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = columnReader.GetString(1).Replace("'", "''", StringComparison.Ordinal);
+                var propName = columnReader.GetString(0);
+                var propValue = columnReader.GetValue(1).ToString() ?? string.Empty;
                 var columnName = columnReader.GetString(2);
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{schema}', 'TABLE', N'{name}', 'COLUMN', N'{columnName}'");
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    schema,
+                    "TABLE",
+                    name,
+                    "COLUMN",
+                    columnName));
                 lines.Add("GO");
             }
         }
@@ -3408,10 +3781,19 @@ ORDER BY o.name, ep.name;";
         {
             while (constraintReader.Read())
             {
-                var propName = constraintReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = constraintReader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
+                var propName = constraintReader.GetString(0);
+                var propValue = constraintReader.GetValue(1).ToString() ?? string.Empty;
                 var constraintName = constraintReader.GetString(2);
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{schema}', 'TABLE', N'{name}', 'CONSTRAINT', N'{constraintName}'");
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    schema,
+                    "TABLE",
+                    name,
+                    "CONSTRAINT",
+                    constraintName));
                 lines.Add("GO");
             }
         }
@@ -3429,10 +3811,19 @@ ORDER BY i.name, ep.name;";
         {
             while (indexReader.Read())
             {
-                var propName = indexReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-                var propValue = indexReader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
+                var propName = indexReader.GetString(0);
+                var propValue = indexReader.GetValue(1).ToString() ?? string.Empty;
                 var indexName = indexReader.GetString(2);
-                lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{schema}', 'TABLE', N'{name}', 'INDEX', N'{indexName}'");
+                lines.Add(BuildExtendedPropertyStatement(
+                    propertyProcedure,
+                    propName,
+                    propValue,
+                    "SCHEMA",
+                    schema,
+                    "TABLE",
+                    name,
+                    "INDEX",
+                    indexName));
                 lines.Add("GO");
             }
         }
@@ -3452,10 +3843,19 @@ ORDER BY t.name, ep.name;";
         using var triggerReader = command.ExecuteReader();
         while (triggerReader.Read())
         {
-            var propName = triggerReader.GetString(0).Replace("'", "''", StringComparison.Ordinal);
-            var propValue = triggerReader.GetValue(1).ToString()?.Replace("'", "''", StringComparison.Ordinal) ?? string.Empty;
+            var propName = triggerReader.GetString(0);
+            var propValue = triggerReader.GetValue(1).ToString() ?? string.Empty;
             var triggerName = triggerReader.GetString(2);
-            lines.Add($"EXEC sp_addextendedproperty N'{propName}', N'{propValue}', 'SCHEMA', N'{schema}', 'TABLE', N'{name}', 'TRIGGER', N'{triggerName}'");
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                "SCHEMA",
+                schema,
+                "TABLE",
+                name,
+                "TRIGGER",
+                triggerName));
             lines.Add("GO");
         }
 

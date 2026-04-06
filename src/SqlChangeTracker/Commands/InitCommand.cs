@@ -11,9 +11,9 @@ internal sealed class InitCommand : Command<InitCommandSettings>
     {
         var output = new OutputFormatter(settings.Json);
         var projectDirFromCurrentDirectory = string.IsNullOrWhiteSpace(settings.ProjectDir);
-        var projectDirInput = projectDirFromCurrentDirectory ? Environment.CurrentDirectory : settings.ProjectDir!;
-        var projectDir = ResolveSchemaDir(projectDirInput);
-        var displayProjectDir = NormalizeDisplayPath(projectDir, projectDirInput);
+        var resolvedProjectDir = ProjectPathResolver.Resolve(settings.ProjectDir);
+        var projectDir = resolvedProjectDir.FullPath;
+        var displayProjectDir = resolvedProjectDir.DisplayPath;
 
         if (projectDirFromCurrentDirectory && !ConfirmCurrentDirectory(displayProjectDir))
         {
@@ -57,23 +57,4 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             || string.Equals(response?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ResolveSchemaDir(string schemaDir)
-        => Path.GetFullPath(schemaDir, Environment.CurrentDirectory);
-
-    private static string NormalizeDisplayPath(string fullPath, string originalInput)
-    {
-        if (Path.IsPathRooted(originalInput))
-        {
-            return fullPath;
-        }
-
-        var relative = Path.GetRelativePath(Environment.CurrentDirectory, fullPath);
-        if (relative.StartsWith("."))
-        {
-            return relative;
-        }
-
-        var prefix = Path.DirectorySeparatorChar == '\\' ? ".\\" : "./";
-        return prefix + relative;
-    }
 }
