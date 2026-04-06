@@ -7,6 +7,34 @@ namespace SqlChangeTracker.Tests.Config;
 public sealed class SqlctConfigWriterTests
 {
     [Fact]
+    public void Read_WhenConfigMissing_ReturnsMissingLinkWithConfigPath()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var configPath = Path.Combine(tempDir, "project with spaces", ConfigFileNames.SqlctConfigFileName);
+
+            var reader = new SqlctConfigReader();
+            var result = reader.Read(configPath);
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.Error);
+            Assert.Equal(ErrorCodes.MissingLink, result.Error!.Code);
+            Assert.Equal(configPath, result.Error.File);
+            Assert.Contains(configPath, result.Error.Detail);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
     public void Write_CreatesConfigWithDefaults()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));

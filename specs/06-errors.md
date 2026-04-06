@@ -1,7 +1,7 @@
 # Errors
 
 Status: draft
-Last updated: 2026-03-08
+Last updated: 2026-04-06
 
 ## Exit Codes
 - 0 success
@@ -21,6 +21,7 @@ Exit code 1 indicates differences were found (non-empty status/diff). It is not 
 ## Error Codes (JSON)
 Config:
 - invalid_config: config file missing or malformed.
+- missing_link: project directory/config link could not be resolved.
 - missing_required_field: required setting is missing in `sqlct.config.json`.
 - unsupported_config_version: config version is not supported by this build.
 
@@ -47,6 +48,14 @@ Execution:
 ```text
 Error: invalid config file.
 Detail: config was empty.
+```
+
+### Missing project config (exit code 2)
+```text
+Error: no linked schema folder found.
+File: C:\path\to\project\sqlct.config.json
+Detail: expected config file at 'C:\path\to\project\sqlct.config.json'.
+Hint: run `sqlct init` or `sqlct config`.
 ```
 
 ### Connection failure (exit code 3)
