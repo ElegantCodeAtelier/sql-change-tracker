@@ -30,3 +30,8 @@ This file defines how automation and AI agents should operate in this repository
 - Avoid destructive commands unless explicitly requested.
 - Do not revert unrelated changes in the repository.
 
+## Changelog
+- When a PR adds, changes, removes, or fixes user-facing behavior, add an entry under `## [Unreleased]` in `CHANGELOG.md`.
+- Follow the entry style in `specs/11-changelog.md`: imperative mood, one line, reference issue/PR number where useful.
+- Do not add entries for internal-only refactors, test additions, or spec-only changes with no user-observable impact.
+
