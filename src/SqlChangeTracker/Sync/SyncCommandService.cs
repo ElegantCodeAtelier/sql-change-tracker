@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.SqlClient;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Schema;
@@ -497,11 +498,13 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     private CommandExecutionResult<ScanResult> ScanDatabase(ProjectContext context, Action<string>? progress = null)
     {
+        var dop = SqlServerIntrospector.ResolveParallelism(context.Config.Options.Parallelism);
+
         progress?.Invoke("Connecting to database...");
         IReadOnlyList<DbObjectInfo> listedObjects;
         try
         {
-            listedObjects = _introspector.ListObjects(context.ConnectionOptions);
+            listedObjects = _introspector.ListObjects(context.ConnectionOptions, dop);
         }
         catch (Exception ex)
         {
@@ -525,11 +528,20 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         var total = activeObjects.Length;
         var scriptIndex = 0;
-        var objects = new Dictionary<string, InternalObject>(StringComparer.OrdinalIgnoreCase);
-        foreach (var dbObject in activeObjects)
+        var objects = new ConcurrentDictionary<string, InternalObject>(StringComparer.OrdinalIgnoreCase);
+        CommandExecutionResult<ScanResult>? firstFailure = null;
+
+        Parallel.ForEach(activeObjects, new ParallelOptions { MaxDegreeOfParallelism = dop }, (dbObject, loopState) =>
         {
-            scriptIndex++;
-            progress?.Invoke($"Scripting objects ({scriptIndex}/{total}): {FormatDisplayName(dbObject.Schema, dbObject.Name)}");
+            if (firstFailure != null)
+            {
+                loopState.Stop();
+                return;
+            }
+
+            var index = Interlocked.Increment(ref scriptIndex);
+            progress?.Invoke($"Scripting objects ({index}/{total}): {FormatDisplayName(dbObject.Schema, dbObject.Name)}");
+
             string relativePath;
             try
             {
@@ -540,7 +552,9 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
             catch (Exception ex)
             {
-                return ToRuntimeFailure<ScanResult>(ex, "failed to map object path.");
+                Interlocked.CompareExchange(ref firstFailure, ToRuntimeFailure<ScanResult>(ex, "failed to map object path."), null);
+                loopState.Stop();
+                return;
             }
 
             var fullPath = Path.Combine(context.ProjectDir, relativePath);
@@ -553,21 +567,27 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
             catch (Exception ex)
             {
-                return ToRuntimeFailure<ScanResult>(ex, "failed to script object from database.");
+                Interlocked.CompareExchange(ref firstFailure, ToRuntimeFailure<ScanResult>(ex, "failed to script object from database."), null);
+                loopState.Stop();
+                return;
             }
 
             var key = BuildObjectKey(dbObject.ObjectType, dbObject.Schema, dbObject.Name);
-            if (!objects.ContainsKey(key))
-            {
-                objects[key] = new InternalObject(
-                    key,
-                    dbObject.Schema,
-                    dbObject.Name,
-                    dbObject.ObjectType,
-                    script,
-                    relativePath,
-                    fullPath);
-            }
+            // TryAdd is a no-op for duplicate keys; duplicates are not expected since each catalog query
+            // targets distinct object types, and this matches the original ContainsKey guard behavior.
+            objects.TryAdd(key, new InternalObject(
+                key,
+                dbObject.Schema,
+                dbObject.Name,
+                dbObject.ObjectType,
+                script,
+                relativePath,
+                fullPath));
+        });
+
+        if (firstFailure != null)
+        {
+            return firstFailure;
         }
 
         return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, warnings), ExitCodes.Success);

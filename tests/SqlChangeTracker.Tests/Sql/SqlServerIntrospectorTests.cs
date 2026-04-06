@@ -5,6 +5,27 @@ namespace SqlChangeTracker.Tests.Sql;
 
 public sealed class SqlServerIntrospectorTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ResolveParallelism_ReturnsProcessorCount_WhenNotPositive(int configured)
+    {
+        var resolved = SqlServerIntrospector.ResolveParallelism(configured);
+
+        Assert.Equal(Environment.ProcessorCount, resolved);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    [InlineData(16)]
+    public void ResolveParallelism_ReturnsConfiguredValue_WhenPositive(int configured)
+    {
+        var resolved = SqlServerIntrospector.ResolveParallelism(configured);
+
+        Assert.Equal(configured, resolved);
+    }
+
     [Fact]
     public void ListObjects_ReturnsResults_WhenConfigured()
     {

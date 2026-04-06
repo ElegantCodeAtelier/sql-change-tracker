@@ -43,6 +43,8 @@ Last updated: 2026-04-04
 - SQL Server Adapter
   - Introspection and scripting.
   - Returns raw scripts for normalization/persistence.
+  - Catalog discovery queries run in parallel (bounded by `options.parallelism`) using ADO.NET connection pooling.
+  - Per-object scripting also runs in parallel under the same DOP; output order is deterministic because results are sorted after collection.
 - Sync Runtime Service
   - Internal orchestration for `status`, `diff`, and `pull`.
   - Responsibilities:

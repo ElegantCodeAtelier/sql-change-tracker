@@ -14,13 +14,16 @@ internal sealed class ConfigCommand : Command<ConfigCommandSettings>
         var configPath = SqlctConfigWriter.GetDefaultPath(projectDir.FullPath);
 
         var reader = new SqlctConfigReader();
-        SqlctConfig config;
         var readResult = reader.Read(configPath);
         if (!readResult.Success)
         {
             if (readResult.Error?.Code == ErrorCodes.MissingLink)
             {
-                config = SqlctConfigWriter.CreateDefault();
+                output.WriteError(new ErrorResult("config", new ErrorInfo(
+                    ErrorCodes.InvalidConfig,
+                    "project directory is not initialized.",
+                    Hint: "run `sqlct init` first.")));
+                return ExitCodes.InvalidConfig;
             }
             else
             {
@@ -28,10 +31,8 @@ internal sealed class ConfigCommand : Command<ConfigCommandSettings>
                 return readResult.ExitCode;
             }
         }
-        else
-        {
-            config = readResult.Config!;
-        }
+
+        var config = readResult.Config!;
 
         var compatibilitySync = new CompatibilitySync();
         var scanResult = compatibilitySync.Scan(projectDir.FullPath);
