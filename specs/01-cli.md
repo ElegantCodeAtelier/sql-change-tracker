@@ -96,18 +96,15 @@ Behavior:
 - Initialize configuration in an empty directory or existing project structure.
 - Requires only schema directory context.
 - If `--project-dir` is omitted, assume current working directory and prompt for confirmation.
-- When `--server` is omitted and `--project-dir` is omitted (interactive first-time setup), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
-- `--auth` accepts `integrated` (Windows/Entra Authentication, default) or `sql` (SQL Server Authentication). Any other value returns exit code 2.
-- `--auth sql` requires `--user`; omitting it returns exit code 2.
+- When `--project-dir` is omitted (interactive first-time setup), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
+- Auth accepts `integrated` (Windows/Entra Authentication, default) or `sql` (SQL Server Authentication).
 - Password input during interactive prompts is masked.
-- When connection details are provided (via flags or prompts), attempt a connection test **before** creating any project files (5-second timeout).
+- When connection details are provided via interactive prompts, attempt a connection test **before** creating any project files (5-second timeout).
 - If the connection test fails in interactive mode, print troubleshooting hints and prompt `"Proceed anyway? [y/N]:"`. If declined, exit without creating any files. If confirmed, proceed to create the directory structure and write config.
-- If the connection test fails in non-interactive mode (`--project-dir` provided), print troubleshooting hints and proceed regardless.
-- `--skip-connection-test` bypasses the connection test entirely.
-- After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure or skipped test.
+- When `--project-dir` is provided (non-interactive mode), no connection prompts are shown and no connection test is run; the config is written with empty connection fields.
+- After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure.
 - Exit codes:
   - `0` success.
-  - `2` invalid arguments (bad auth, missing user, etc.).
 
 ### config
 Parse, validate, and write configuration from the project directory.
@@ -255,12 +252,11 @@ Result:
 
 ### First-time setup (scripted / non-interactive)
 `
-sqlct init --project-dir ./schema --server myserver --database MyDb --auth integrated
+sqlct init --project-dir ./schema
 `
 Result:
 - Initializes config and schema folder structure in the target directory.
-- Runs a connection test; prints troubleshooting hints on failure but proceeds regardless.
-- Use `--skip-connection-test` to bypass the test entirely.
+- No connection prompts; config is written with empty connection fields to be filled in manually.
 
 ### Initialize in current directory
 `

@@ -32,8 +32,8 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             return ExitCodes.InvalidConfig;
         }
 
-        var connectionSetup = ResolveConnectionSetup(settings,
-            promptInteractively: isInteractive && string.IsNullOrWhiteSpace(settings.Server));
+        var connectionSetup = ResolveConnectionSetup(
+            promptInteractively: isInteractive);
 
         var authValidation = ValidateConnectionSetup(connectionSetup);
         if (!authValidation.Success)
@@ -45,7 +45,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         // Run connection test before creating any files so that a bad configuration
         // is caught early and the user is not left with a partially-initialised directory.
         InitConnectionTestResult? connectionTestResult = null;
-        if (!settings.SkipConnectionTest && !string.IsNullOrWhiteSpace(connectionSetup.Server))
+        if (!string.IsNullOrWhiteSpace(connectionSetup.Server))
         {
             connectionTestResult = RunConnectionTest(connectionSetup, GetConnectionTester());
             if (!connectionTestResult.Success)
@@ -93,19 +93,8 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         return ExitCodes.Success;
     }
 
-    private static ConnectionSetup ResolveConnectionSetup(InitCommandSettings settings, bool promptInteractively)
+    private static ConnectionSetup ResolveConnectionSetup(bool promptInteractively)
     {
-        if (!string.IsNullOrWhiteSpace(settings.Server))
-        {
-            return new ConnectionSetup(
-                settings.Server,
-                settings.Database ?? string.Empty,
-                settings.Auth ?? "integrated",
-                settings.User,
-                settings.Password,
-                settings.TrustServerCertificate);
-        }
-
         if (promptInteractively)
         {
             return PromptForConnectionSetup();
@@ -183,7 +172,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         }
         if (!setup.TrustServerCertificate)
         {
-            Console.WriteLine("  - If using a self-signed certificate, retry with --trust-server-certificate.");
+            Console.WriteLine("  - If using a self-signed certificate, run 'sqlct init' again and select 'yes' for trust server certificate.");
         }
         Console.WriteLine("  - Run 'sqlct config' to review or update connection settings.");
     }
