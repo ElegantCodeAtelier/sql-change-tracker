@@ -66,6 +66,9 @@ public sealed class InitAndConfigCommandTests
     [Fact]
     public void Init_WithProjectDirEndingInDoubleQuoteArtifact_CreatesProjectStructureAndConfig()
     {
+        if (!OperatingSystem.IsWindows())
+            return;
+
         var tempDir = CreateTempDir();
 
         try

@@ -49,14 +49,14 @@ internal sealed class SchemaFolderMapper
         }
 
         var includeSchema = !SupportedSqlObjectTypes.IsSchemaLess(objectType);
-        return Path.Combine(folder, FormatFileName(identifier, false, includeSchema));
+        return Path.Combine([..NormalizeFolder(folder), FormatFileName(identifier, false, includeSchema)]);
     }
 
     private string ResolveDataFolder(string objectType)
     {
         if (_folderMap.TryGetValue("Data", out var dataFolder))
         {
-            return dataFolder;
+            return Path.Combine(NormalizeFolder(dataFolder));
         }
 
         if (_dataWriteAllFilesInOneDirectory)
@@ -64,8 +64,11 @@ internal sealed class SchemaFolderMapper
             return "Data";
         }
 
-        return TryGetFolder(objectType, out var folder) ? folder : "Data";
+        return TryGetFolder(objectType, out var folder) ? Path.Combine(NormalizeFolder(folder)) : "Data";
     }
+
+    private static string[] NormalizeFolder(string folder)
+        => folder.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
 
     private static string FormatFileName(ObjectIdentifier identifier, bool isData, bool includeSchema)
     {
@@ -87,7 +90,10 @@ internal sealed class SchemaFolderMapper
             return value;
         }
 
-        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars());
+        // Use a cross-platform-consistent set: union of Linux invalid chars plus
+        // the Windows-specific extras so generated file names are valid on both OSes.
+        var invalid = new HashSet<char>(
+            Path.GetInvalidFileNameChars().Concat(s_windowsExtraInvalidFileNameChars));
         var builder = new System.Text.StringBuilder(value.Length);
 
         foreach (var ch in value)
@@ -105,4 +111,8 @@ internal sealed class SchemaFolderMapper
 
         return builder.ToString();
     }
+
+    // Characters that Windows disallows in file names but Linux permits.
+    // Included unconditionally so escaping is consistent across platforms.
+    private static readonly char[] s_windowsExtraInvalidFileNameChars = ['"', '<', '>', '|', ':', '*', '?', '\\'];
 }

@@ -45,7 +45,7 @@ public sealed class SchemaFolderMapperTests
 
         var path = mapper.GetObjectPath(objectType, identifier, false);
 
-        Assert.Equal(Path.Combine(folder, $"{name}.sql"), path);
+        Assert.Equal(FolderPath(folder, $"{name}.sql"), path);
     }
 
     [Theory]
@@ -58,8 +58,13 @@ public sealed class SchemaFolderMapperTests
 
         var path = mapper.GetObjectPath(objectType, identifier, false);
 
-        Assert.Equal(Path.Combine(folder, $"{schema}.{name}.sql"), path);
+        Assert.Equal(FolderPath(folder, $"{schema}.{name}.sql"), path);
     }
+
+    // Builds an expected path from a folder string that may use either separator
+    // character, mirroring the cross-platform normalisation performed by the mapper.
+    private static string FolderPath(string folder, string fileName)
+        => Path.Combine([..folder.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries), fileName]);
 
     [Fact]
     public void Escapes_InvalidFileNameCharacters()
