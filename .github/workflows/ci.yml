@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - dotnet-version: "8.0.x"
+            tfm: "net8.0"
+          - dotnet-version: "10.0.x"
+            tfm: "net10.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ matrix.dotnet-version }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet-version }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release -f ${{ matrix.tfm }}
+
+      - name: Test
+        run: dotnet test --no-build -c Release -f ${{ matrix.tfm }} --filter "Category!=LocalOnly"

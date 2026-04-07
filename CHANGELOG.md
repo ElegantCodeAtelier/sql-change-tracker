@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Support for .NET 8 alongside .NET 10 (multi-targeted); CI validates both frameworks (#16).
 - Support for additional active object types: `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme` (#4).
 - Add `sqlct data track`, `sqlct data untrack`, and `sqlct data list` commands for managing explicit tracked tables used for data scripting (#15).
 - Add tracked-table `TableData` scripting to `status`, `diff`, and `pull`, including `Data/Schema.Table_Data.sql` output and the `data:schema.name` diff selector (#15).
