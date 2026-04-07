@@ -360,6 +360,70 @@ public sealed class SyncCommandServiceTests
         Assert.Equal("LINE1\r\nLINE2\r\n", styled);
     }
 
+    [Theory]
+    [InlineData("dbo.Customer", "dbo\\.Customer", true)]
+    [InlineData("dbo.Customer", "dbo\\..*", true)]
+    [InlineData("dbo.Customer", ".*Customer.*", true)]
+    [InlineData("dbo.Customer", "Customer", false)]
+    [InlineData("dbo.Order", "dbo\\.Customer", false)]
+    [InlineData("AppReader", "AppReader", true)]
+    [InlineData("AppReader", "app.*", true)]
+    [InlineData("AppReader", "dbo\\..*", false)]
+    public void MatchesObjectPatterns_AppliesRegexCaseInsensitively(string displayName, string pattern, bool expected)
+    {
+        var regex = new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+        var result = SyncCommandService.MatchesObjectPatterns(displayName, [regex]);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void MatchesObjectPatterns_ReturnsTrueWhenAnyPatternMatches()
+    {
+        var patterns = new[]
+        {
+            new System.Text.RegularExpressions.Regex("dbo\\.Customer", System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1)),
+            new System.Text.RegularExpressions.Regex("dbo\\.Order", System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1))
+        };
+
+        Assert.True(SyncCommandService.MatchesObjectPatterns("dbo.Customer", patterns));
+        Assert.True(SyncCommandService.MatchesObjectPatterns("dbo.Order", patterns));
+        Assert.False(SyncCommandService.MatchesObjectPatterns("dbo.Product", patterns));
+    }
+
+    [Fact]
+    public void RunPull_WithInvalidObjectPattern_ReturnsInvalidConfigError()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var service = new SyncCommandService();
+            var result = service.RunPull(projectDir, objectPatterns: ["[invalid"]);
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotNull(result.Error);
+            Assert.Equal(ErrorCodes.InvalidConfig, result.Error!.Code);
+            Assert.Equal("invalid object pattern.", result.Error.Message);
+            Assert.Contains("[invalid", result.Error.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
     private static string CreateTempDir()
     {
         var path = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Schema;
@@ -13,7 +14,7 @@ internal interface ISyncCommandService
 
     CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null);
 
-    CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null);
+    CommandExecutionResult<PullResult> RunPull(string? projectDir, string[]? objectPatterns = null, Action<string>? progress = null);
 }
 
 internal sealed record CommandExecutionResult<T>(
@@ -186,12 +187,33 @@ internal sealed class SyncCommandService : ISyncCommandService
             string.IsNullOrWhiteSpace(combinedDiff) ? ExitCodes.Success : ExitCodes.DiffExists);
     }
 
-    public CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null)
+    public CommandExecutionResult<PullResult> RunPull(string? projectDir, string[]? objectPatterns = null, Action<string>? progress = null)
     {
         var projectResult = LoadProject(projectDir);
         if (!projectResult.Success)
         {
             return CommandExecutionResult<PullResult>.Failure(projectResult.Error!, projectResult.ExitCode);
+        }
+
+        IReadOnlyList<Regex>? compiledPatterns = null;
+        if (objectPatterns is { Length: > 0 })
+        {
+            var patternList = new List<Regex>(objectPatterns.Length);
+            foreach (var pattern in objectPatterns)
+            {
+                try
+                {
+                    patternList.Add(new Regex(pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1)));
+                }
+                catch (ArgumentException)
+                {
+                    return CommandExecutionResult<PullResult>.Failure(
+                        new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object pattern.", Detail: $"'{pattern}' is not a valid regular expression."),
+                        ExitCodes.InvalidConfig);
+                }
+            }
+
+            compiledPatterns = patternList;
         }
 
         var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
@@ -205,6 +227,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             .Concat(snapshot.FolderObjects.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(key => snapshot.DbObjects.TryGetValue(key, out var dbObj) ? dbObj : snapshot.FolderObjects[key])
+            .Where(item => compiledPatterns is null || MatchesObjectPatterns(item!.DisplayName, compiledPatterns))
             .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
@@ -1129,6 +1152,20 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     private static bool IsDataObjectType(string objectType)
         => string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool MatchesObjectPatterns(string displayName, IReadOnlyList<Regex> patterns)
+    {
+        foreach (var pattern in patterns)
+        {
+            var match = pattern.Match(displayName);
+            if (match.Success && match.Index == 0 && match.Length == displayName.Length)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static string GetExpectedFileNamePattern(bool isSchemaLess)
         => isSchemaLess ? "Name.sql" : "Schema.Object.sql";

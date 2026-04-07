@@ -193,7 +193,7 @@ Behavior:
 ### pull
 Write DB changes into folder.
 `
-sqlct pull [--project-dir <path>]
+sqlct pull [--project-dir <path>] [--object <pattern>...]
 `
 Behavior:
 - Materialize DB state into schema folder for active object types.
@@ -205,9 +205,22 @@ Behavior:
 - When `data.trackedTables` is configured, `pull` also synchronizes `Data/*.sql` scripts for tracked tables.
 - `pull` MUST delete `Data/*.sql` files for tables that are no longer present in `data.trackedTables`.
 - Pull output MUST report schema and data summaries separately.
+- When `--object` is specified, only objects whose display name (`schema.name` or `name` for schema-less types) matches at least one pattern are considered for reconciliation.
+- Multiple `--object` patterns may be provided; an object is included if any pattern matches.
+- Patterns are .NET regular expressions; matching is case-insensitive.
+- An invalid regular expression in `--object` returns exit code 2 (invalid config).
 - Exit codes:
   - `0` success.
   - `2/3/4` invalid config / connection failure / execution failure.
+
+#### --object pattern syntax for pull
+- Patterns are .NET regular expressions matched against the full object display name (full-string match, not substring).
+- Display name format: `schema.name` (e.g. `dbo.Customer`) or bare `name` for schema-less types (e.g. `AppReader`).
+- Examples:
+  - `dbo\.Customer` — exact match on `dbo.Customer`.
+  - `dbo\..*` — all objects in the `dbo` schema.
+  - `.*Order.*` — all objects with "Order" anywhere in the name.
+  - `AppReader` — schema-less object named `AppReader`.
 
 ## Usage
 Common flows using the simplified CLI.

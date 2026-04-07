@@ -322,6 +322,51 @@ public sealed class StatusDiffPullCommandTests
         Assert.Equal(ExitCodes.Success, exitCode);
     }
 
+    [Fact]
+    public void PullCommand_WithObjectPatterns_PassesPatternsToService()
+    {
+        string[]? capturedPatterns = null;
+        var stub = new StubSyncCommandService
+        {
+            PullResult = CommandExecutionResult<PullResult>.Ok(
+                new PullResult(
+                    "pull",
+                    ".\\schema",
+                    EmptyPullSummary(schemaUnchanged: 1),
+                    [],
+                    []),
+                ExitCodes.Success),
+            OnRunPull = (_, patterns, _) => capturedPatterns = patterns
+        };
+
+        var command = new PullCommand { SyncService = stub };
+        var settings = new PullCommandSettings { ObjectPatterns = ["dbo\\.Customer", "dbo\\..*"] };
+        var exitCode = command.Execute(CreateContext("pull"), settings, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.NotNull(capturedPatterns);
+        Assert.Equal(2, capturedPatterns!.Length);
+        Assert.Equal("dbo\\.Customer", capturedPatterns[0]);
+        Assert.Equal("dbo\\..*", capturedPatterns[1]);
+    }
+
+    [Fact]
+    public void PullCommand_WithInvalidObjectPattern_ReturnsInvalidConfigError()
+    {
+        var stub = new StubSyncCommandService
+        {
+            PullResult = CommandExecutionResult<PullResult>.Failure(
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object pattern.", Detail: "'[invalid' is not a valid regular expression."),
+                ExitCodes.InvalidConfig)
+        };
+
+        var command = new PullCommand { SyncService = stub };
+        var settings = new PullCommandSettings { ObjectPatterns = ["[invalid"] };
+        var exitCode = command.Execute(CreateContext("pull"), settings, default);
+
+        Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+    }
+
     private static CommandContext CreateContext(string name)
         => new([], new EmptyRemainingArguments(), name, null!);
 
@@ -366,13 +411,18 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
+        public Action<string?, string[]?, Action<string>?>? OnRunPull { get; set; }
+
         public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
         public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
             => DiffResult;
 
-        public CommandExecutionResult<PullResult> RunPull(string? projectDir, Action<string>? progress = null)
-            => PullResult;
+        public CommandExecutionResult<PullResult> RunPull(string? projectDir, string[]? objectPatterns = null, Action<string>? progress = null)
+        {
+            OnRunPull?.Invoke(projectDir, objectPatterns, progress);
+            return PullResult;
+        }
     }
 }
