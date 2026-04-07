@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Sql;
 using SqlChangeTracker.Sync;
+using System.Text.RegularExpressions;
 
 namespace SqlChangeTracker.Data;
 
@@ -27,11 +28,11 @@ internal sealed record DataUntrackPlan(
 
 internal interface IDataTrackingService
 {
-    CommandExecutionResult<DataTrackPlan> PrepareTrack(string? projectDir, string pattern);
+    CommandExecutionResult<DataTrackPlan> PrepareTrack(string? projectDir, string? objectPattern, string? filterPattern);
 
     CommandExecutionResult<DataTrackResult> ApplyTrack(DataTrackPlan plan);
 
-    CommandExecutionResult<DataUntrackPlan> PrepareUntrack(string? projectDir, string pattern);
+    CommandExecutionResult<DataUntrackPlan> PrepareUntrack(string? projectDir, string? objectPattern, string? filterPattern);
 
     CommandExecutionResult<DataUntrackResult> ApplyUntrack(DataUntrackPlan plan);
 
@@ -54,12 +55,32 @@ internal sealed class DataTrackingService : IDataTrackingService
         _configWriter = configWriter;
     }
 
-    public CommandExecutionResult<DataTrackPlan> PrepareTrack(string? projectDir, string pattern)
+    public CommandExecutionResult<DataTrackPlan> PrepareTrack(string? projectDir, string? objectPattern, string? filterPattern)
     {
-        var patternResult = TryParsePattern(pattern);
-        if (!patternResult.Success)
+        ITableMatcher matcher;
+        string displayPattern;
+
+        if (objectPattern is not null)
         {
-            return CommandExecutionResult<DataTrackPlan>.Failure(patternResult.Error!, patternResult.ExitCode);
+            var patternResult = TryParsePattern(objectPattern);
+            if (!patternResult.Success)
+            {
+                return CommandExecutionResult<DataTrackPlan>.Failure(patternResult.Error!, patternResult.ExitCode);
+            }
+
+            matcher = patternResult.Payload!;
+            displayPattern = objectPattern.Trim();
+        }
+        else
+        {
+            var filterResult = TryCompileFilter(filterPattern!);
+            if (!filterResult.Success)
+            {
+                return CommandExecutionResult<DataTrackPlan>.Failure(filterResult.Error!, filterResult.ExitCode);
+            }
+
+            matcher = filterResult.Payload!;
+            displayPattern = filterPattern!.Trim();
         }
 
         var projectResult = LoadProject(projectDir, requireDatabase: true);
@@ -72,7 +93,7 @@ internal sealed class DataTrackingService : IDataTrackingService
         try
         {
             matchedTables = ListUserTables(projectResult.Payload!.ConnectionOptions!)
-                .Where(table => patternResult.Payload!.Matches(table.Schema, table.Name))
+                .Where(table => matcher.Matches(table.Schema, table.Name))
                 .Select(table => $"{table.Schema}.{table.Name}")
                 .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -103,7 +124,7 @@ internal sealed class DataTrackingService : IDataTrackingService
                 projectResult.Payload.ProjectDir,
                 projectResult.Payload.DisplayPath,
                 projectResult.Payload.ConfigPath,
-                pattern.Trim(),
+                displayPattern,
                 matchedTables,
                 currentTracked,
                 nextTracked,
@@ -139,12 +160,32 @@ internal sealed class DataTrackingService : IDataTrackingService
             ExitCodes.Success);
     }
 
-    public CommandExecutionResult<DataUntrackPlan> PrepareUntrack(string? projectDir, string pattern)
+    public CommandExecutionResult<DataUntrackPlan> PrepareUntrack(string? projectDir, string? objectPattern, string? filterPattern)
     {
-        var patternResult = TryParsePattern(pattern);
-        if (!patternResult.Success)
+        ITableMatcher matcher;
+        string displayPattern;
+
+        if (objectPattern is not null)
         {
-            return CommandExecutionResult<DataUntrackPlan>.Failure(patternResult.Error!, patternResult.ExitCode);
+            var patternResult = TryParsePattern(objectPattern);
+            if (!patternResult.Success)
+            {
+                return CommandExecutionResult<DataUntrackPlan>.Failure(patternResult.Error!, patternResult.ExitCode);
+            }
+
+            matcher = patternResult.Payload!;
+            displayPattern = objectPattern.Trim();
+        }
+        else
+        {
+            var filterResult = TryCompileFilter(filterPattern!);
+            if (!filterResult.Success)
+            {
+                return CommandExecutionResult<DataUntrackPlan>.Failure(filterResult.Error!, filterResult.ExitCode);
+            }
+
+            matcher = filterResult.Payload!;
+            displayPattern = filterPattern!.Trim();
         }
 
         var projectResult = LoadProject(projectDir, requireDatabase: false);
@@ -160,7 +201,7 @@ internal sealed class DataTrackingService : IDataTrackingService
                 Sync.SyncCommandService.TryParseSchemaAndName(value, out var schema, out var name);
                 return new { Value = value, Schema = schema, Name = name };
             })
-            .Where(table => patternResult.Payload!.Matches(table.Schema, table.Name))
+            .Where(table => matcher.Matches(table.Schema, table.Name))
             .Select(table => table.Value)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -175,7 +216,7 @@ internal sealed class DataTrackingService : IDataTrackingService
                 projectResult.Payload.ProjectDir,
                 projectResult.Payload.DisplayPath,
                 projectResult.Payload.ConfigPath,
-                pattern.Trim(),
+                displayPattern,
                 matchedTables,
                 currentTracked,
                 nextTracked,
@@ -288,6 +329,31 @@ internal sealed class DataTrackingService : IDataTrackingService
         return CommandExecutionResult<TablePattern>.Ok(new TablePattern(schemaToken, nameToken), ExitCodes.Success);
     }
 
+    private static CommandExecutionResult<TableFilterMatcher> TryCompileFilter(string filter)
+    {
+        var trimmed = filter?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+        {
+            return CommandExecutionResult<TableFilterMatcher>.Failure(
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid filter pattern.", Detail: "filter pattern must not be empty."),
+                ExitCodes.InvalidConfig);
+        }
+
+        Regex regex;
+        try
+        {
+            regex = new Regex(trimmed, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+        }
+        catch (ArgumentException)
+        {
+            return CommandExecutionResult<TableFilterMatcher>.Failure(
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid filter pattern.", Detail: $"'{trimmed}' is not a valid regular expression."),
+                ExitCodes.InvalidConfig);
+        }
+
+        return CommandExecutionResult<TableFilterMatcher>.Ok(new TableFilterMatcher(regex), ExitCodes.Success);
+    }
+
     private static IReadOnlyList<(string Schema, string Name)> ListUserTables(SqlConnectionOptions options)
     {
         using var connection = SqlConnectionFactory.Create(options);
@@ -383,7 +449,12 @@ ORDER BY s.name, t.name;";
 
     private sealed record ResolvedPath(string FullPath, string DisplayPath);
 
-    private sealed record TablePattern(string SchemaToken, string NameToken)
+    private interface ITableMatcher
+    {
+        bool Matches(string schema, string name);
+    }
+
+    private sealed record TablePattern(string SchemaToken, string NameToken) : ITableMatcher
     {
         public bool Matches(string schema, string name)
         {
@@ -392,6 +463,15 @@ ORDER BY s.name, t.name;";
             var nameMatches = string.Equals(NameToken, "*", StringComparison.Ordinal)
                 || string.Equals(NameToken, name, StringComparison.OrdinalIgnoreCase);
             return schemaMatches && nameMatches;
+        }
+    }
+
+    private sealed record TableFilterMatcher(Regex Pattern) : ITableMatcher
+    {
+        public bool Matches(string schema, string name)
+        {
+            var displayName = string.IsNullOrWhiteSpace(schema) ? name : $"{schema}.{name}";
+            return Pattern.IsMatch(displayName);
         }
     }
 }

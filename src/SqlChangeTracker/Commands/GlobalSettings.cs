@@ -65,14 +65,26 @@ internal class DataCommandSettings : DataBranchSettings
 
 internal sealed class DataTrackCommandSettings : DataCommandSettings
 {
-    [CommandArgument(0, "<pattern>")]
-    public string Pattern { get; set; } = string.Empty;
+    [CommandArgument(0, "[pattern]")]
+    public string? Pattern { get; set; }
+
+    [CommandOption("--object <PATTERN>")]
+    public string? ObjectPattern { get; set; }
+
+    [CommandOption("--filter <PATTERN>")]
+    public string? FilterPattern { get; set; }
 }
 
 internal sealed class DataUntrackCommandSettings : DataCommandSettings
 {
-    [CommandArgument(0, "<pattern>")]
-    public string Pattern { get; set; } = string.Empty;
+    [CommandArgument(0, "[pattern]")]
+    public string? Pattern { get; set; }
+
+    [CommandOption("--object <PATTERN>")]
+    public string? ObjectPattern { get; set; }
+
+    [CommandOption("--filter <PATTERN>")]
+    public string? FilterPattern { get; set; }
 }
 
 internal sealed class DataListCommandSettings : DataCommandSettings
