@@ -91,10 +91,6 @@ Common flag behavior across commands.
 Initialize project configuration and schema folder structure.
 `
 sqlct init [--project-dir <path>]
-       [--server <host>] [--database <name>]
-       [--auth <integrated|sql>] [--user <name>] [--password <secret>]
-       [--trust-server-certificate]
-       [--skip-connection-test]
 `
 Behavior:
 - Initialize configuration in an empty directory or existing project structure.
