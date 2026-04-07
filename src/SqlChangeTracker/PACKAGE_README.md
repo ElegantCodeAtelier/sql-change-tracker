@@ -19,8 +19,8 @@ It focuses on deterministic output and schema-folder workflows that are Git and 
 ```text
 sqlct init [--project-dir <path>]
 sqlct config [--project-dir <path>]
-sqlct data track <pattern> [--project-dir <path>]
-sqlct data untrack <pattern> [--project-dir <path>]
+sqlct data track [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
+sqlct data untrack [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
 sqlct data list [--project-dir <path>]
 sqlct status [--project-dir <path>] [--target <db|folder>] [--no-progress]
 sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--no-progress]
@@ -52,8 +52,8 @@ When `data.trackedTables` is configured, `status`, `diff`, and `pull` also proce
 ## Selective Data Scripting
 Tracked-table data scripting is configuration-driven.
 
-- `sqlct data track` matches user tables in the current database and asks for confirmation before updating `data.trackedTables`.
-- `sqlct data untrack` previews tracked matches and asks for confirmation before removing them.
+- `sqlct data track` matches user tables in the current database against a positional pattern (`schema.*`, `*.name`, `schema.name`), `--object <pattern>`, or `--filter <regex>`, and asks for confirmation before updating `data.trackedTables`. Exactly one selector must be provided.
+- `sqlct data untrack` previews tracked matches (same selector forms) and asks for confirmation before removing them.
 - `sqlct data list` shows the currently tracked tables from config.
 - `sqlct pull` creates, updates, and deletes `Data/Schema.Table_Data.sql` files for tracked tables.
 - `sqlct status` and `sqlct diff` include `TableData` alongside schema artifacts, with separate schema/data summaries in `status`.
@@ -61,6 +61,8 @@ Tracked-table data scripting is configuration-driven.
 Example:
 ```text
 sqlct data track Sales.* --project-dir ./schema
+sqlct data track --object Sales.Orders --project-dir ./schema
+sqlct data track --filter '^Sales\.' --project-dir ./schema
 sqlct data list --project-dir ./schema
 sqlct diff --project-dir ./schema --object data:Sales.Customer
 sqlct pull --project-dir ./schema
