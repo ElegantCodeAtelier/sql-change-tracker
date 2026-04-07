@@ -296,6 +296,58 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunDiff_WithSchemaLessObjectSelector_UsesTargetedDatabaseDiscoveryWithEmptySchema()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Security", "Roles", "AppReader.sql"), "EXEC sp_addrolemember N'AppReader', N'ServiceUser';\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("", "AppReader", "Role")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, obj, _) => "EXEC sp_addrolemember N'AppReader', N'ServiceUser';\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "Role:AppReader");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Payload!.Diff);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(new[] { "Role" }, introspector.LastRequestedObjectTypes);
+            Assert.Equal(string.Empty, introspector.LastRequestedSchema);
+            Assert.Equal("AppReader", introspector.LastRequestedName);
+            Assert.Equal(new[] { "Role:.AppReader" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunStatus_WithProjectDirWrappedInSingleQuotes_ResolvesConfigPath()
     {
         var tempDir = CreateTempDir();
@@ -497,6 +549,10 @@ public sealed class SyncCommandServiceTests
 
         public IReadOnlyList<string> LastRequestedObjectTypes { get; private set; } = [];
 
+        public string LastRequestedSchema { get; private set; } = "";
+
+        public string LastRequestedName { get; private set; } = "";
+
         public IReadOnlyList<DbObjectInfo> MatchingObjects { get; init; } = [];
 
         public override IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
@@ -514,6 +570,8 @@ public sealed class SyncCommandServiceTests
         {
             ListMatchingObjectsCalled = true;
             LastRequestedObjectTypes = objectTypes.ToArray();
+            LastRequestedSchema = schema;
+            LastRequestedName = name;
             return MatchingObjects;
         }
     }

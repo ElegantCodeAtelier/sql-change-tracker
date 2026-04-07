@@ -414,7 +414,7 @@ ORDER BY s.name, seq.name;
 
             case "Schema":
                 command.CommandText = """
-SELECT s.name AS schema_name, s.name AS object_name
+SELECT '' AS schema_name, s.name AS object_name
 FROM sys.schemas s
 WHERE s.name = @name
   AND s.name NOT IN (
