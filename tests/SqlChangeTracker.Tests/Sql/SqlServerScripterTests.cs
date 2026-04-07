@@ -313,6 +313,50 @@ public sealed class SqlServerScripterTests
     }
 
     [Fact]
+    public void ScriptPartitionFunction_DoesNotLeaveOpenReader_WhenExtendedPropertiesExist()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindPartitionFunctionWithExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("CREATE PARTITION FUNCTION", script);
+        Assert.Contains("'PARTITION FUNCTION'", script);
+    }
+
+    [Fact]
+    public void ScriptPartitionScheme_DoesNotLeaveOpenReader_WhenExtendedPropertiesExist()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindPartitionSchemeWithExtendedProperties(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("CREATE PARTITION SCHEME", script);
+        Assert.Contains("'PARTITION SCHEME'", script);
+    }
+
+    [Fact]
     public void ScriptPartitionFunctionAndScheme_EmitExpectedStatements_WhenSupportedObjectsExist()
     {
         var options = GetOptions();
