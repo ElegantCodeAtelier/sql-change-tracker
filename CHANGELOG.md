@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-07
+
 ### Added
 - Support for additional active object types: `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme` (#4).
 - Add `sqlct data track`, `sqlct data untrack`, and `sqlct data list` commands for managing explicit tracked tables used for data scripting (#15).
@@ -40,5 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Exit codes aligned with spec: `0` (no diffs), `1` (diffs present), `2`/`3`/`4` (failure categories).
 - NuGet CI publish workflow triggered on version tag push.
 
-[Unreleased]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ElegantCodeAtelier/sql-change-tracker/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ElegantCodeAtelier/sql-change-tracker/releases/tag/v0.1.0
