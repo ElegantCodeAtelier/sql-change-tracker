@@ -4,9 +4,9 @@ using SqlChangeTracker.Schema;
 
 namespace SqlChangeTracker.Sql;
 
-internal sealed class SqlServerIntrospector
+internal class SqlServerIntrospector
 {
-    public IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
+    public virtual IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
     {
         var dop = ResolveParallelism(maxParallelism);
 
@@ -224,6 +224,41 @@ ORDER BY ps.name;", MapObjectType),
         return bag.ToList();
     }
 
+    public virtual IReadOnlyList<DbObjectInfo> ListMatchingObjects(
+        SqlConnectionOptions options,
+        IReadOnlyList<string> objectTypes,
+        string schema,
+        string name,
+        int maxParallelism = 0)
+    {
+        var candidates = objectTypes
+            .Where(type => SupportedSqlObjectTypes.IsActiveInSync(type))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (candidates.Length == 0)
+        {
+            return [];
+        }
+
+        var dop = Math.Min(ResolveParallelism(maxParallelism), candidates.Length);
+        var bag = new ConcurrentBag<DbObjectInfo>();
+
+        Parallel.ForEach(candidates, new ParallelOptions { MaxDegreeOfParallelism = dop }, objectType =>
+        {
+            foreach (var item in RunMatchingQuery(options, objectType, schema, name))
+            {
+                bag.Add(item);
+            }
+        });
+
+        return bag
+            .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     internal static int ResolveParallelism(int configured)
         => configured > 0 ? configured : Environment.ProcessorCount;
 
@@ -236,6 +271,17 @@ ORDER BY ps.name;", MapObjectType),
         connection.Open();
         // .ToList() materializes results before the connection is disposed.
         return QueryObjects(connection, sql, typeMapper).ToList();
+    }
+
+    private static IEnumerable<DbObjectInfo> RunMatchingQuery(
+        SqlConnectionOptions options,
+        string objectType,
+        string schema,
+        string name)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+        return QueryMatchingObjects(connection, objectType, schema, name).ToList();
     }
 
     private static IEnumerable<DbObjectInfo> RunQueryIfExists(
@@ -281,6 +327,207 @@ ORDER BY ps.name;", MapObjectType),
             }
 
             yield return new DbObjectInfo(schema, name, objectType);
+        }
+    }
+
+    private static IEnumerable<DbObjectInfo> QueryMatchingObjects(
+        SqlConnection connection,
+        string objectType,
+        string schema,
+        string name)
+    {
+        using var command = connection.CreateCommand();
+
+        switch (objectType)
+        {
+            case "Table":
+                command.CommandText = """
+SELECT s.name AS schema_name, t.name AS object_name
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE t.is_ms_shipped = 0
+  AND s.name = @schema
+  AND t.name = @name
+ORDER BY s.name, t.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "View":
+                command.CommandText = """
+SELECT s.name AS schema_name, o.name AS object_name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'V'
+  AND s.name = @schema
+  AND o.name = @name
+ORDER BY s.name, o.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "StoredProcedure":
+                command.CommandText = """
+SELECT s.name AS schema_name, o.name AS object_name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'P'
+  AND s.name = @schema
+  AND o.name = @name
+ORDER BY s.name, o.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Function":
+                command.CommandText = """
+SELECT s.name AS schema_name, o.name AS object_name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type IN ('FN','TF','IF')
+  AND s.name = @schema
+  AND o.name = @name
+ORDER BY s.name, o.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Sequence":
+                command.CommandText = """
+SELECT s.name AS schema_name, seq.name AS object_name
+FROM sys.sequences seq
+JOIN sys.schemas s ON s.schema_id = seq.schema_id
+WHERE s.name = @schema
+  AND seq.name = @name
+ORDER BY s.name, seq.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Schema":
+                command.CommandText = """
+SELECT s.name AS schema_name, s.name AS object_name
+FROM sys.schemas s
+WHERE s.name = @name
+  AND s.name NOT IN (
+    'dbo',
+    'guest',
+    'sys',
+    'INFORMATION_SCHEMA',
+    'db_accessadmin',
+    'db_backupoperator',
+    'db_datareader',
+    'db_datawriter',
+    'db_ddladmin',
+    'db_denydatareader',
+    'db_denydatawriter',
+    'db_owner',
+    'db_securityadmin')
+ORDER BY s.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Synonym":
+                command.CommandText = """
+SELECT s.name AS schema_name, syn.name AS object_name
+FROM sys.synonyms syn
+JOIN sys.schemas s ON s.schema_id = syn.schema_id
+WHERE s.name = @schema
+  AND syn.name = @name
+ORDER BY s.name, syn.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "UserDefinedType":
+                command.CommandText = """
+SELECT s.name AS schema_name, t.name AS object_name
+FROM sys.types t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE t.is_user_defined = 1
+  AND t.is_table_type = 0
+  AND s.name = @schema
+  AND t.name = @name
+ORDER BY s.name, t.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Role":
+                command.CommandText = """
+SELECT '' AS schema_name, dp.name AS object_name
+FROM sys.database_principals dp
+WHERE dp.type = 'R'
+  AND dp.name <> 'public'
+  AND dp.name = @name
+  AND (
+    dp.is_fixed_role = 0
+    OR EXISTS (
+      SELECT 1
+      FROM sys.database_role_members drm
+      JOIN sys.database_principals member_principal ON member_principal.principal_id = drm.member_principal_id
+      WHERE drm.role_principal_id = dp.principal_id
+        AND member_principal.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys')
+    )
+  )
+ORDER BY dp.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "User":
+                command.CommandText = """
+SELECT '' AS schema_name, dp.name AS object_name
+FROM sys.database_principals dp
+WHERE dp.type IN ('S','U','G','E','X','C','K')
+  AND dp.name NOT IN ('dbo','guest','INFORMATION_SCHEMA','sys')
+  AND dp.name = @name
+ORDER BY dp.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "PartitionFunction":
+                command.CommandText = """
+SELECT '' AS schema_name, pf.name AS object_name
+FROM sys.partition_functions pf
+WHERE pf.name = @name
+ORDER BY pf.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "PartitionScheme":
+                command.CommandText = """
+SELECT '' AS schema_name, ps.name AS object_name
+FROM sys.partition_schemes ps
+WHERE ps.name = @name
+ORDER BY ps.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            default:
+                yield break;
+        }
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var matchedSchema = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+            var matchedName = reader.GetString(1);
+            yield return new DbObjectInfo(matchedSchema, matchedName, objectType);
         }
     }
 
