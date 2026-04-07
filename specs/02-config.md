@@ -54,7 +54,6 @@ Deprecated runtime fields removed from v1 contract:
 - `options.includeSchemas`
 - `options.excludeObjects`
 - `options.comparison.*`
-- `options.orderByDependencies`
 
 ## File Handling Policy
 - `sqlct.config.json`: required; read/write by `init` and `config`.

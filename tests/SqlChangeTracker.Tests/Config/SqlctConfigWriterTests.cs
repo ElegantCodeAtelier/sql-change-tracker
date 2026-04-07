@@ -57,7 +57,6 @@ public sealed class SqlctConfigWriterTests
             Assert.Equal(string.Empty, root.GetProperty("database").GetProperty("server").GetString());
             Assert.Equal(string.Empty, root.GetProperty("database").GetProperty("name").GetString());
             Assert.Equal("integrated", root.GetProperty("database").GetProperty("auth").GetString());
-            Assert.False(root.GetProperty("options").TryGetProperty("orderByDependencies", out _));
             Assert.Equal(0, root.GetProperty("data").GetProperty("trackedTables").GetArrayLength());
         }
         finally
@@ -109,7 +108,6 @@ public sealed class SqlctConfigWriterTests
 
             using var document = JsonDocument.Parse(File.ReadAllText(configPath));
             var options = document.RootElement.GetProperty("options");
-            Assert.False(options.TryGetProperty("orderByDependencies", out _));
             Assert.False(options.TryGetProperty("includeSchemas", out _));
             Assert.False(options.TryGetProperty("excludeObjects", out _));
             Assert.False(options.TryGetProperty("comparison", out _));
