@@ -54,6 +54,7 @@ Last updated: 2026-04-06
     - snapshot DB objects for the same active types
     - classify objects (`added`, `changed`, `deleted`) in deterministic order
     - render unified diff text for single-object and aggregate modes
+    - in `diff --object` mode, restrict DB discovery/scripting to selector-matching candidate objects instead of the full active DB object set
     - reconcile pull writes/deletes with idempotent update behavior
     - preserve existing encoding/newline style for updated files
     - read explicit tracked tables from `data.trackedTables`

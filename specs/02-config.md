@@ -60,6 +60,31 @@ Deprecated runtime fields removed from v1 contract:
 - External compatibility files: optional; presence may be scanned/reported; files are preserved as-is.
 - Do not fail baseline workflows solely because optional external compatibility files are missing.
 
+## Authentication Modes
+`database.auth` controls how `sqlct` authenticates to SQL Server. Supported values:
+
+- `integrated` (default): Uses Windows Integrated Security (Trusted Connection). `user` and `password` are ignored. Suitable for domain environments and local development.
+- `sql`: Uses SQL Server Authentication. `user` is required; `password` is optional (empty string is accepted).
+
+### SQL Authentication example
+```json
+{
+  "database": {
+    "server": "my-server.example.com",
+    "name": "MyDb",
+    "auth": "sql",
+    "user": "my_login",
+    "password": "my_password",
+    "trustServerCertificate": false
+  }
+}
+```
+
+Validation rules:
+- `database.auth` MUST be `"integrated"` or `"sql"` (case-insensitive). Any other value is a configuration error.
+- When `database.auth` is `"sql"`, `database.user` MUST be non-empty.
+- When `database.auth` is `"integrated"`, `database.user` and `database.password` are ignored.
+
 ## Notes
 - Plaintext passwords are acceptable for MVP; future integration with OS secret store.
 - Config versioning planned for migrations.

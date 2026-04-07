@@ -1,4 +1,6 @@
 using SqlChangeTracker.Config;
+using SqlChangeTracker.Schema;
+using SqlChangeTracker.Sql;
 using SqlChangeTracker.Sync;
 using System.Text;
 using Xunit;
@@ -190,6 +192,162 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunDiff_WithObjectSelector_UsesTargetedDatabaseDiscovery()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Tables", "dbo.Customer.sql"), "CREATE TABLE [dbo].[Customer] ([Id] [int] NOT NULL);\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("dbo", "Customer", "Table")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, obj, _) => "CREATE TABLE [dbo].[Customer] ([Id] [int] NOT NULL);\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "dbo.Customer");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Payload!.Diff);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            var expectedCandidateTypes = new[] { "Function", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View" };
+            Assert.Equal(
+                expectedCandidateTypes,
+                introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));
+            Assert.Equal(new[] { "Table:dbo.Customer" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunDiff_WithDataSelector_UsesTargetedTableLookup()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            config.Data.TrackedTables.Add("dbo.Customer");
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Data", "dbo.Customer_Data.sql"), "INSERT INTO [dbo].[Customer] ([Id]) VALUES (1);\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("dbo", "Customer", "Table")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptTableDataHandler = (_, table) => "INSERT INTO [dbo].[Customer] ([Id]) VALUES (1);\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "data:dbo.Customer");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(new[] { "Table" }, introspector.LastRequestedObjectTypes);
+            Assert.Empty(scripter.ScriptedObjects);
+            Assert.Equal(new[] { "dbo.Customer" }, scripter.ScriptedTableData);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunDiff_WithSchemaLessObjectSelector_UsesTargetedDatabaseDiscoveryWithEmptySchema()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Security", "Roles", "AppReader.sql"), "EXEC sp_addrolemember N'AppReader', N'ServiceUser';\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("", "AppReader", "Role")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, obj, _) => "EXEC sp_addrolemember N'AppReader', N'ServiceUser';\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "Role:AppReader");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Payload!.Diff);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(new[] { "Role" }, introspector.LastRequestedObjectTypes);
+            Assert.Equal(string.Empty, introspector.LastRequestedSchema);
+            Assert.Equal("AppReader", introspector.LastRequestedName);
+            Assert.Equal(new[] { "Role:.AppReader" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunStatus_WithProjectDirWrappedInSingleQuotes_ResolvesConfigPath()
     {
         var tempDir = CreateTempDir();
@@ -375,11 +533,212 @@ public sealed class SyncCommandServiceTests
         }
     }
 
+    [Fact]
+    public void RunStatus_WithInvalidAuthMode_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "kerberos", user: null, password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.Equal("database.auth must be 'integrated' or 'sql'.", result.Error!.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithSqlAuthAndNoUser_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "sql", user: null, password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.Equal("missing required field: database.user for sql authentication.", result.Error!.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithSqlAuthAndEmptyUser_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "sql", user: "  ", password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.Equal("missing required field: database.user for sql authentication.", result.Error!.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithSqlAuthAndValidUser_PassesAuthValidation()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "sql", user: "sa", password: "secret");
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            // Auth validation passes; failure here is a runtime error, not a config validation error.
+            Assert.False(result.Success);
+            Assert.NotEqual(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotEqual(ErrorCodes.InvalidConfig, result.Error!.Code);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithIntegratedAuth_PassesAuthValidation()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "integrated", user: null, password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            // Auth validation passes; failure here is a runtime error, not a config validation error.
+            Assert.False(result.Success);
+            Assert.NotEqual(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotEqual(ErrorCodes.InvalidConfig, result.Error!.Code);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    private static void WriteConfigWithAuth(string projectDir, string auth, string? user, string? password)
+    {
+        Directory.CreateDirectory(projectDir);
+        var configPath = Path.Combine(projectDir, "sqlct.config.json");
+        var userLine = user != null ? $"""
+                "user": "{user}",
+        """ : string.Empty;
+        var passwordLine = password != null ? $"""
+                "password": "{password}",
+        """ : string.Empty;
+        File.WriteAllText(configPath, $$"""
+            {
+              "database": {
+                "server": "non-existent-server-for-auth-test",
+                "name": "TestDb",
+                "auth": "{{auth}}",
+                {{userLine}}
+                {{passwordLine}}
+                "trustServerCertificate": true
+              }
+            }
+            """);
+    }
+
     private static string CreateFile(string root, string relativePath, string content)
     {
         var fullPath = Path.Combine(root, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, content);
         return fullPath;
+    }
+
+    private sealed class TrackingIntrospector : SqlServerIntrospector
+    {
+        public bool ListObjectsCalled { get; private set; }
+
+        public bool ListMatchingObjectsCalled { get; private set; }
+
+        public IReadOnlyList<string> LastRequestedObjectTypes { get; private set; } = [];
+
+        public string LastRequestedSchema { get; private set; } = "";
+
+        public string LastRequestedName { get; private set; } = "";
+
+        public IReadOnlyList<DbObjectInfo> MatchingObjects { get; init; } = [];
+
+        public override IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
+        {
+            ListObjectsCalled = true;
+            throw new InvalidOperationException("full database discovery should not be used for diff --object");
+        }
+
+        public override IReadOnlyList<DbObjectInfo> ListMatchingObjects(
+            SqlConnectionOptions options,
+            IReadOnlyList<string> objectTypes,
+            string schema,
+            string name,
+            int maxParallelism = 0)
+        {
+            ListMatchingObjectsCalled = true;
+            LastRequestedObjectTypes = objectTypes.ToArray();
+            LastRequestedSchema = schema;
+            LastRequestedName = name;
+            return MatchingObjects;
+        }
+    }
+
+    private sealed class TrackingScripter : SqlServerScripter
+    {
+        public Func<SqlConnectionOptions, DbObjectInfo, string?, string>? ScriptObjectHandler { get; init; }
+
+        public Func<SqlConnectionOptions, ObjectIdentifier, string>? ScriptTableDataHandler { get; init; }
+
+        public List<string> ScriptedObjects { get; } = [];
+
+        public List<string> ScriptedTableData { get; } = [];
+
+        public override string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj, string? referencePath)
+        {
+            ScriptedObjects.Add($"{obj.ObjectType}:{obj.Schema}.{obj.Name}");
+            return ScriptObjectHandler?.Invoke(options, obj, referencePath)
+                ?? throw new InvalidOperationException("unexpected ScriptObject call");
+        }
+
+        public override string ScriptTableData(SqlConnectionOptions options, ObjectIdentifier table)
+        {
+            ScriptedTableData.Add($"{table.Schema}.{table.Name}");
+            return ScriptTableDataHandler?.Invoke(options, table)
+                ?? throw new InvalidOperationException("unexpected ScriptTableData call");
+        }
     }
 }

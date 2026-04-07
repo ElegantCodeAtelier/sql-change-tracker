@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--skip-connection-test` flag for `sqlct init` to bypass the connection test step.
 - After `sqlct init`, a connection test is attempted when a server is configured, reporting success or failure with troubleshooting tips.
 - Next-steps suggestions are printed after `sqlct init` to guide users toward `pull`, `status`, and `diff`.
+- SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
+
+### Changed
+- In `diff --object` mode, database discovery and scripting are now limited to the selector-matching candidate set instead of scanning the full active object set, improving performance for targeted diffs (#28).
 
 ## [0.2.1] - 2026-04-07
 
