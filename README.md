@@ -17,7 +17,7 @@ validate configuration, and generate reproducible scripts for Git and CI/CD.
 - Support tracked-table data scripting alongside schema workflows.
 
 ## What it does today
-- `sqlct init [--project-dir <path>]`
+- `sqlct init [--project-dir <path>] [--server <host>] [--database <name>] [--auth <integrated|sql>] [--user <name>] [--password <secret>] [--trust-server-certificate] [--skip-connection-test]`
 - `sqlct config [--project-dir <path>]`
 - `sqlct data track <pattern> [--project-dir <path>]`
 - `sqlct data untrack <pattern> [--project-dir <path>]`

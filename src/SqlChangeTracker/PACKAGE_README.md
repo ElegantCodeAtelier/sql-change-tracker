@@ -17,7 +17,7 @@ It focuses on deterministic output and schema-folder workflows that are Git and 
 
 ## Current Commands
 ```text
-sqlct init [--project-dir <path>]
+sqlct init [--project-dir <path>] [--server <host>] [--database <name>] [--auth <integrated|sql>] [--user <name>] [--password <secret>] [--trust-server-certificate] [--skip-connection-test]
 sqlct config [--project-dir <path>]
 sqlct data track <pattern> [--project-dir <path>]
 sqlct data untrack <pattern> [--project-dir <path>]
