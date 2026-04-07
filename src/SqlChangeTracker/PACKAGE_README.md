@@ -23,8 +23,8 @@ sqlct data track <pattern> [--project-dir <path>]
 sqlct data untrack <pattern> [--project-dir <path>]
 sqlct data list [--project-dir <path>]
 sqlct status [--project-dir <path>] [--target <db|folder>] [--no-progress]
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--no-progress]
-sqlct pull [--project-dir <path>] [--no-progress]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--no-progress]
+sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...] [--no-progress]
 ```
 
 Current runtime scope for `status`, `diff`, and `pull` covers:
@@ -48,6 +48,8 @@ When `data.trackedTables` is configured, `status`, `diff`, and `pull` also proce
 - `name` for schema-less objects
 - `type:name` and `type:schema.name` for explicit selection
 - `data:schema.name` for tracked table-data scripts
+
+`--filter` accepts one or more .NET regex patterns matched against the full display name (`schema.name` or bare `name`); an object is included if any pattern matches. Matching is case-insensitive and full-string. Use `.*` for substring matching.
 
 ## Selective Data Scripting
 Tracked-table data scripting is configuration-driven.
