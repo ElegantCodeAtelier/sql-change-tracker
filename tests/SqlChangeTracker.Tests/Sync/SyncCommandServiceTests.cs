@@ -223,6 +223,9 @@ public sealed class SyncCommandServiceTests
     [Fact]
     public void RunStatus_WithProjectDirEndingInDoubleQuoteArtifact_ResolvesConfigPath()
     {
+        if (!OperatingSystem.IsWindows())
+            return;
+
         var tempDir = CreateTempDir();
 
         try

@@ -115,7 +115,7 @@ Last updated: 2026-04-06
   - Use sanitized, intentionally authored samples in tracked specs when needed.
 
 ## Tech Stack
-- .NET 10
+- .NET 8 and .NET 10 (multi-targeted)
 - Spectre.Console (CLI parsing + output)
 - System.Text.Json (config)
 - System.Xml.Linq + raw file preservation (XML files)

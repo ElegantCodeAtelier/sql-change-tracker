@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Support for .NET 8 alongside .NET 10 (multi-targeted); CI validates both frameworks (#16).
+
 ### Fixed
 - Ensure `SqlDataReader` instances are closed after use in `SqlServerScripter` to prevent "There is already an open DataReader" errors (#25).
 
