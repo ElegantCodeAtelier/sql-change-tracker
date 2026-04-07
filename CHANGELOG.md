@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Add `--object <pattern>` option to `sqlct pull` to filter objects by regex pattern; multiple patterns may be provided and matching is case-insensitive (#issue).
+- Add `--object <pattern>` option to `sqlct pull` to filter objects by regex pattern; multiple patterns may be provided and matching is case-insensitive (#35).
 
 ## [0.2.1] - 2026-04-07
 

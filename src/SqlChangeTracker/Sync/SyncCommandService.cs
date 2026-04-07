@@ -227,7 +227,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             .Concat(snapshot.FolderObjects.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(key => snapshot.DbObjects.TryGetValue(key, out var dbObj) ? dbObj : snapshot.FolderObjects[key])
-            .Where(item => compiledPatterns is null || MatchesObjectPatterns(item!.DisplayName, compiledPatterns))
+            .Where(item => compiledPatterns is null || MatchesObjectPatterns(item.DisplayName, compiledPatterns))
             .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
