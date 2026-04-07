@@ -325,6 +325,7 @@ public sealed class StatusDiffPullCommandTests
     [Fact]
     public void PullCommand_WithObjectPatterns_PassesPatternsToService()
     {
+        string? capturedSelector = null;
         string[]? capturedPatterns = null;
         var stub = new StubSyncCommandService
         {
@@ -336,18 +337,48 @@ public sealed class StatusDiffPullCommandTests
                     [],
                     []),
                 ExitCodes.Success),
-            OnRunPull = (_, patterns, _) => capturedPatterns = patterns
+            OnRunPull = (_, selector, patterns, _) =>
+            {
+                capturedSelector = selector;
+                capturedPatterns = patterns;
+            }
         };
 
         var command = new PullCommand { SyncService = stub };
-        var settings = new PullCommandSettings { ObjectPatterns = ["dbo\\.Customer", "dbo\\..*"] };
+        var settings = new PullCommandSettings { FilterPatterns = ["dbo\\.Customer", "dbo\\..*"] };
         var exitCode = command.Execute(CreateContext("pull"), settings, default);
 
         Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.Null(capturedSelector);
         Assert.NotNull(capturedPatterns);
         Assert.Equal(2, capturedPatterns!.Length);
         Assert.Equal("dbo\\.Customer", capturedPatterns[0]);
         Assert.Equal("dbo\\..*", capturedPatterns[1]);
+    }
+
+    [Fact]
+    public void PullCommand_WithObjectSelector_PassesSelectorToService()
+    {
+        string? capturedSelector = null;
+        var stub = new StubSyncCommandService
+        {
+            PullResult = CommandExecutionResult<PullResult>.Ok(
+                new PullResult(
+                    "pull",
+                    ".\\schema",
+                    EmptyPullSummary(schemaUnchanged: 1),
+                    [],
+                    []),
+                ExitCodes.Success),
+            OnRunPull = (_, selector, _, _) => capturedSelector = selector
+        };
+
+        var command = new PullCommand { SyncService = stub };
+        var settings = new PullCommandSettings { ObjectSelector = "dbo.Customer" };
+        var exitCode = command.Execute(CreateContext("pull"), settings, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.Equal("dbo.Customer", capturedSelector);
     }
 
     [Fact]
@@ -356,12 +387,12 @@ public sealed class StatusDiffPullCommandTests
         var stub = new StubSyncCommandService
         {
             PullResult = CommandExecutionResult<PullResult>.Failure(
-                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object pattern.", Detail: "'[invalid' is not a valid regular expression."),
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid filter pattern.", Detail: "'[invalid' is not a valid regular expression."),
                 ExitCodes.InvalidConfig)
         };
 
         var command = new PullCommand { SyncService = stub };
-        var settings = new PullCommandSettings { ObjectPatterns = ["[invalid"] };
+        var settings = new PullCommandSettings { FilterPatterns = ["[invalid"] };
         var exitCode = command.Execute(CreateContext("pull"), settings, default);
 
         Assert.Equal(ExitCodes.InvalidConfig, exitCode);
@@ -411,7 +442,7 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
-        public Action<string?, string[]?, Action<string>?>? OnRunPull { get; set; }
+        public Action<string?, string?, string[]?, Action<string>?>? OnRunPull { get; set; }
 
         public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
@@ -419,9 +450,9 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
             => DiffResult;
 
-        public CommandExecutionResult<PullResult> RunPull(string? projectDir, string[]? objectPatterns = null, Action<string>? progress = null)
+        public CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null)
         {
-            OnRunPull?.Invoke(projectDir, objectPatterns, progress);
+            OnRunPull?.Invoke(projectDir, objectSelector, filterPatterns, progress);
             return PullResult;
         }
     }

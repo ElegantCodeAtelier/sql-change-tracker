@@ -42,8 +42,11 @@ internal sealed class DiffCommandSettings : StatusCommandSettings
 
 internal sealed class PullCommandSettings : ProjectCommandSettings
 {
-    [CommandOption("--object <PATTERN>")]
-    public string[]? ObjectPatterns { get; set; }
+    [CommandOption("--object <SELECTOR>")]
+    public string? ObjectSelector { get; set; }
+
+    [CommandOption("--filter <PATTERN>")]
+    public string[]? FilterPatterns { get; set; }
 }
 
 internal class DataBranchSettings : CommandSettings

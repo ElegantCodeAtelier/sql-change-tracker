@@ -14,7 +14,7 @@ internal interface ISyncCommandService
 
     CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null);
 
-    CommandExecutionResult<PullResult> RunPull(string? projectDir, string[]? objectPatterns = null, Action<string>? progress = null);
+    CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null);
 }
 
 internal sealed record CommandExecutionResult<T>(
@@ -193,7 +193,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             string.IsNullOrWhiteSpace(combinedDiff) ? ExitCodes.Success : ExitCodes.DiffExists);
     }
 
-    public CommandExecutionResult<PullResult> RunPull(string? projectDir, string[]? objectPatterns = null, Action<string>? progress = null)
+    public CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null)
     {
         var projectResult = LoadProject(projectDir);
         if (!projectResult.Success)
@@ -201,11 +201,23 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<PullResult>.Failure(projectResult.Error!, projectResult.ExitCode);
         }
 
-        IReadOnlyList<Regex>? compiledPatterns = null;
-        if (objectPatterns is { Length: > 0 })
+        ObjectSelector? parsedSelector = null;
+        if (objectSelector is not null)
         {
-            var patternList = new List<Regex>(objectPatterns.Length);
-            foreach (var pattern in objectPatterns)
+            var selectorResult = ParseObjectSelector(objectSelector);
+            if (!selectorResult.Success)
+            {
+                return CommandExecutionResult<PullResult>.Failure(selectorResult.Error!, selectorResult.ExitCode);
+            }
+
+            parsedSelector = selectorResult.Payload!;
+        }
+
+        IReadOnlyList<Regex>? compiledPatterns = null;
+        if (filterPatterns is { Length: > 0 })
+        {
+            var patternList = new List<Regex>(filterPatterns.Length);
+            foreach (var pattern in filterPatterns)
             {
                 try
                 {
@@ -214,7 +226,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 catch (ArgumentException)
                 {
                     return CommandExecutionResult<PullResult>.Failure(
-                        new ErrorInfo(ErrorCodes.InvalidConfig, "invalid object pattern.", Detail: $"'{pattern}' is not a valid regular expression."),
+                        new ErrorInfo(ErrorCodes.InvalidConfig, "invalid filter pattern.", Detail: $"'{pattern}' is not a valid regular expression."),
                         ExitCodes.InvalidConfig);
                 }
             }
@@ -233,6 +245,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             .Concat(snapshot.FolderObjects.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(key => snapshot.DbObjects.TryGetValue(key, out var dbObj) ? dbObj : snapshot.FolderObjects[key])
+            .Where(item => parsedSelector is null || MatchesSelector(item.ObjectType, item.Schema, item.Name, parsedSelector))
             .Where(item => compiledPatterns is null || MatchesObjectPatterns(item.DisplayName, compiledPatterns))
             .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)

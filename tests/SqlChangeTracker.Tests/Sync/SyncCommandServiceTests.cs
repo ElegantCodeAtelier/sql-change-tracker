@@ -550,7 +550,7 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
-    public void RunPull_WithInvalidObjectPattern_ReturnsInvalidConfigError()
+    public void RunPull_WithInvalidFilterPattern_ReturnsInvalidConfigError()
     {
         var tempDir = CreateTempDir();
 
@@ -567,14 +567,46 @@ public sealed class SyncCommandServiceTests
             Assert.True(write.Success);
 
             var service = new SyncCommandService();
-            var result = service.RunPull(projectDir, objectPatterns: ["[invalid"]);
+            var result = service.RunPull(projectDir, filterPatterns: ["[invalid"]);
 
             Assert.False(result.Success);
             Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
             Assert.NotNull(result.Error);
             Assert.Equal(ErrorCodes.InvalidConfig, result.Error!.Code);
-            Assert.Equal("invalid object pattern.", result.Error.Message);
+            Assert.Equal("invalid filter pattern.", result.Error.Message);
             Assert.Contains("[invalid", result.Error.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunPull_WithInvalidObjectSelector_ReturnsInvalidConfigError()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var service = new SyncCommandService();
+            var result = service.RunPull(projectDir, objectSelector: "dbo.");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotNull(result.Error);
+            Assert.Equal(ErrorCodes.InvalidConfig, result.Error!.Code);
+            Assert.Equal("invalid object selector.", result.Error.Message);
         }
         finally
         {

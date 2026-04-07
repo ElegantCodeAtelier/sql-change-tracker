@@ -194,7 +194,7 @@ Behavior:
 ### pull
 Write DB changes into folder.
 `
-sqlct pull [--project-dir <path>] [--object <pattern>...]
+sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...]
 `
 Behavior:
 - Materialize DB state into schema folder for active object types.
@@ -206,17 +206,28 @@ Behavior:
 - When `data.trackedTables` is configured, `pull` also synchronizes `Data/*.sql` scripts for tracked tables.
 - `pull` MUST delete `Data/*.sql` files for tables that are no longer present in `data.trackedTables`.
 - Pull output MUST report schema and data summaries separately.
-- When `--object` is specified, only objects whose display name (`schema.name` or `name` for schema-less types) matches at least one pattern are considered for reconciliation.
-- Multiple `--object` patterns may be provided; an object is included if any pattern matches.
-- Patterns are .NET regular expressions; matching is case-insensitive.
-- An invalid regular expression in `--object` returns exit code 2 (invalid config).
+- When `--object` is specified, only objects matching the selector exactly (same forms as `diff --object`) are considered for reconciliation.
+- When `--filter` is specified, only objects whose display name matches at least one regex pattern are considered for reconciliation.
+- `--object` and `--filter` may be combined; both filters are applied (AND semantics).
+- An invalid selector in `--object` returns exit code 2 (invalid config).
+- An invalid regular expression in `--filter` returns exit code 2 (invalid config).
 - Exit codes:
   - `0` success.
   - `2/3/4` invalid config / connection failure / execution failure.
 
-#### --object pattern syntax for pull
+#### --object selector for pull
+Uses the same selector forms as `diff --object`:
+- `schema.name` for schema-scoped active object types.
+- `name` for schema-less active object types.
+- `type:name` for explicit schema-less selection.
+- `type:schema.name` for explicit schema-scoped selection.
+- `data:schema.name` for tracked table-data scripts.
+
+#### --filter pattern syntax for pull
 - Patterns are .NET regular expressions matched against the full object display name (full-string match, not substring).
 - Display name format: `schema.name` (e.g. `dbo.Customer`) or bare `name` for schema-less types (e.g. `AppReader`).
+- Multiple `--filter` values may be provided; an object is included if any pattern matches.
+- Matching is case-insensitive.
 - Examples:
   - `dbo\.Customer` — exact match on `dbo.Customer`.
   - `dbo\..*` — all objects in the `dbo` schema.

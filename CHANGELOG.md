@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Add `--object <pattern>` option to `sqlct pull` to filter objects by regex pattern; multiple patterns may be provided and matching is case-insensitive (#35).
+- Add `--object <selector>` to `sqlct pull` for exact-match filtering using the same selector forms as `diff --object` (#35).
+- Add `--filter <pattern>` to `sqlct pull` for regex-based filtering; multiple patterns may be provided and matching is case-insensitive (#35).
 
 ### Changed
 - In `diff --object` mode, database discovery and scripting are now limited to the selector-matching candidate set instead of scanning the full active object set, improving performance for targeted diffs (#28).
