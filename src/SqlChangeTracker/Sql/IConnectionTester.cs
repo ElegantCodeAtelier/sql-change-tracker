@@ -11,11 +11,18 @@ internal sealed record ConnectionTestResult(bool Success, string? ErrorMessage);
 
 internal sealed class SqlConnectionTester : IConnectionTester
 {
+    private const int ConnectTimeoutSeconds = 5;
+
     public ConnectionTestResult Test(SqlConnectionOptions options)
     {
         try
         {
             using var connection = SqlConnectionFactory.Create(options);
+            var builder = new SqlConnectionStringBuilder(connection.ConnectionString)
+            {
+                ConnectTimeout = ConnectTimeoutSeconds
+            };
+            connection.ConnectionString = builder.ConnectionString;
             connection.Open();
             return new ConnectionTestResult(true, null);
         }
