@@ -24,7 +24,7 @@ validate configuration, and generate reproducible scripts for Git and CI/CD.
 - `sqlct data list [--project-dir <path>]`
 - `sqlct status [--project-dir <path>] [--target <db|folder>]`
 - `sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>]`
-- `sqlct pull [--project-dir <path>]`
+- `sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...]`
 
 Current runtime scope for `status`, `diff`, and `pull` covers:
 - `Table`
@@ -47,6 +47,8 @@ When `data.trackedTables` is configured, `status`, `diff`, and `pull` also proce
 - `name` for schema-less objects
 - `type:name` and `type:schema.name` for explicit selection
 - `data:schema.name` for tracked table-data scripts
+
+`--filter` accepts one or more .NET regex patterns matched against the full display name (`schema.name` or bare `name`); an object is included if any pattern matches. Matching is case-insensitive and full-string. Use `.*` for substring matching.
 
 ## Selective data scripting
 Tracked-table data scripting is configuration-driven.
