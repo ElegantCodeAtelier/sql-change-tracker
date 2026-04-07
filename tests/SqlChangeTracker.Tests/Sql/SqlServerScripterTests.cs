@@ -140,10 +140,16 @@ public sealed class SqlServerScripterTests
             return;
         }
 
+        var fullTextCatalogName = FindFullTextCatalogForTable(options, "HumanResources", "JobCandidate");
+        if (string.IsNullOrWhiteSpace(fullTextCatalogName))
+        {
+            return;
+        }
+
         var scripter = new SqlServerScripter();
         var script = scripter.ScriptObject(options, new DbObjectInfo("HumanResources", "JobCandidate", "Table"));
 
-        Assert.Contains("CREATE FULLTEXT INDEX ON [HumanResources].[JobCandidate] KEY INDEX [PK_JobCandidate_JobCandidateID] ON [AW2016FullTextCatalog]", script);
+        Assert.Contains($"CREATE FULLTEXT INDEX ON [HumanResources].[JobCandidate] KEY INDEX [PK_JobCandidate_JobCandidateID] ON [{fullTextCatalogName}]", script);
         Assert.Contains("ALTER FULLTEXT INDEX ON [HumanResources].[JobCandidate] ADD ([Resume] LANGUAGE 1033)", script);
     }
 
@@ -635,6 +641,26 @@ ORDER BY s.name, t.name, i.index_id;";
         return (
             new DbObjectInfo(reader.GetString(0), reader.GetString(1), "Table"),
             reader.GetString(2));
+    }
+
+    private static string? FindFullTextCatalogForTable(SqlConnectionOptions options, string schema, string tableName)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT TOP (1) fc.name
+FROM sys.fulltext_indexes fi
+JOIN sys.tables t ON t.object_id = fi.object_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.fulltext_catalogs fc ON fc.fulltext_catalog_id = fi.fulltext_catalog_id
+WHERE s.name = @schema
+  AND t.name = @name;";
+        command.Parameters.AddWithValue("@schema", schema);
+        command.Parameters.AddWithValue("@name", tableName);
+
+        return command.ExecuteScalar() as string;
     }
 
     private static string? FindScriptLineContainingName(string script, string name)

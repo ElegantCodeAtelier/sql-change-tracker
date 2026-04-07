@@ -1,7 +1,7 @@
 # Scripting
 
 Status: draft
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 ## 1. Purpose and Normative Intent
 This specification defines normative scripting rules for `sqlct`.
@@ -43,6 +43,17 @@ This specification defines normative scripting rules for `sqlct`.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
 - `Schema` discovery covers user-defined schemas and excludes `dbo`, `sys`, and `INFORMATION_SCHEMA`.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
+- `TableType` discovery covers user-defined table types.
+- `XmlSchemaCollection` discovery covers user-defined XML schema collections and excludes collections in `sys` and `INFORMATION_SCHEMA`.
+- `MessageType` and `Contract` discovery covers user-defined Service Broker objects and excludes SQL Server-owned broker artifacts named `DEFAULT` and broker/notification artifacts whose names start with `http://schemas.microsoft.com/SQL/`.
+- `Service` discovery covers user-defined Service Broker services and excludes broker/notification artifacts whose names start with `http://schemas.microsoft.com/SQL/`.
+- `Queue` discovery covers user-defined Service Broker queues and excludes SQL Server-owned queues `ServiceBrokerQueue`, `QueryNotificationErrorsQueue`, and `EventNotificationErrorsQueue`.
+- `Route` discovery covers user-defined Service Broker routes and excludes SQL Server-created route `AutoCreatedLocal`.
+- `EventNotification` discovery covers database event notifications from `sys.event_notifications`.
+- `ServiceBinding` discovery covers remote service bindings from `sys.remote_service_bindings`.
+- `FullTextCatalog` discovery covers user-defined full-text catalogs.
+- `FullTextStoplist` discovery covers user-defined full-text stoplists and excludes system stoplists.
+- `SearchPropertyList` discovery covers registered search property lists and registered search properties when `sys.registered_search_property_lists` is available.
 - Discovery MUST gracefully skip feature-specific metadata paths not available on the current SQL Server edition/version (for example external/full-text/security-policy catalogs) without failing whole-run scripting.
 - Discovery MUST include permissions and extended properties needed by scripting rules.
 - Discovery order MUST be deterministic.
@@ -60,19 +71,28 @@ This specification defines normative scripting rules for `sqlct`.
 - User
 - Synonym
 - UserDefinedType
+- TableType
+- XmlSchemaCollection
 - PartitionFunction
 - PartitionScheme
+- MessageType
+- Contract
+- Queue
+- Service
+- Route
+- EventNotification
+- ServiceBinding
+- FullTextCatalog
+- FullTextStoplist
+- SearchPropertyList
 
 ### 5.2 Additional Defined Coverage (Normative Minimum)
 The following types are defined in this specification family and not fully implemented in the current SQL scripting engine. For each type, implementation MUST define deterministic discovery, deterministic output shape, and batch framing:
 
-- TableType, XmlSchemaCollection
 - Standalone Trigger (excluding table-scoped DML triggers already emitted inline with tables), DdlTrigger, Rule
 - Certificate, SymmetricKey, AsymmetricKey
-- FullTextCatalog, FullTextStoplist, SearchPropertyList
 - SecurityPolicy
 - ExternalDataSource, ExternalFileFormat, ExternalTable
-- MessageType, Contract, Queue, Service, Route, EventNotification, ServiceBinding
 - Data scripts for explicit tracked tables:
   - scoped to tables listed in `data.trackedTables`,
   - one data script file per tracked table,
@@ -100,13 +120,9 @@ The following types are defined in this specification family and not fully imple
 
 ### 6.3 Permission Emission
 - Statements MUST be generated from `sys.database_permissions` joined to `sys.database_principals`.
-- For module scripting:
-  - `GRANT_WITH_GRANT_OPTION` -> `GRANT ... WITH GRANT OPTION`
-  - `DENY` -> `DENY ...`
-  - otherwise -> `GRANT ...`
-- For table scripting:
-  - `GRANT_WITH_GRANT_OPTION` -> `GRANT ... WITH GRANT OPTION`
-  - otherwise -> `GRANT ...`
+- `GRANT_WITH_GRANT_OPTION` -> `GRANT ... WITH GRANT OPTION`
+- `DENY` -> `DENY ...`
+- otherwise -> `GRANT ...`
 - Permissions MUST be ordered deterministically by grantee then permission name.
 
 ### 6.4 Extended Property Emission
@@ -429,12 +445,197 @@ Each emitted statement MUST be followed by `GO`.
   - `CREATE TYPE [schema].[name] FROM <base_type> <NULL|NOT NULL>`
   - `GO`
 - Base-type formatting MUST reuse the general type-formatting rules from Section 6.5.
-- Table types remain out of scope for this subsection and continue to follow the planned-coverage rules.
 - User-defined-type extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'TYPE', N'<type>', NULL, NULL`
 - User-defined-type extended properties MUST be emitted after the type `GO`, ordered by property name.
 
-### 8.11 Partition Functions
+### 8.11 TableType
+- Table-type metadata MUST be sourced from `sys.table_types` together with the table-like metadata attached to `type_table_object_id`.
+- Output MUST emit:
+  - `CREATE TYPE [schema].[name] AS TABLE`
+  - `(`
+  - columns and inline constraints in deterministic order
+  - `)`
+  - `GO`
+- Table-type column formatting MUST reuse the applicable column rules from Section 8.1.1.
+- Inline table-type body order MUST be:
+  1. columns by `column_id`,
+  2. CHECK constraints by constraint name,
+  3. key constraints (`PRIMARY KEY` / `UNIQUE`) by constraint name.
+- Inline entries inside the table-type body MUST be comma-separated.
+- Table-type key-constraint formatting MUST reuse the applicable constraint rules from Section 8.1.6, except the constraints remain inside the `AS TABLE (...)` body rather than being emitted after `GO`.
+- Table-type scripting MUST NOT emit storage clauses, non-constraint indexes, XML indexes, foreign keys, triggers, full-text indexes, permissions, or extended properties.
+
+### 8.12 XmlSchemaCollection
+- XML schema collection metadata MUST be sourced from `sys.xml_schema_collections`, schema metadata, and `XML_SCHEMA_NAMESPACE`.
+- XML schema collection scripts MUST emit:
+  - `CREATE XML SCHEMA COLLECTION [schema].[name] AS <schema_definition>`
+  - `GO`
+- The `<schema_definition>` payload MUST be the trimmed XML schema namespace text returned for the collection.
+- XML schema collection permissions MUST use `ON XML SCHEMA COLLECTION::[schema].[name]`.
+- XML schema collection-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'XML SCHEMA COLLECTION', N'<collection>', NULL, NULL`
+- XML schema collection extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.13 MessageType
+- Message-type metadata MUST be sourced from `sys.service_message_types` together with owner metadata and XML schema collection metadata when XML-schema validation applies.
+- Message-type scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE MESSAGE TYPE [name]`
+  - optional `AUTHORIZATION [owner]`
+  - `VALIDATION = <NONE|EMPTY|WELL_FORMED_XML>`
+  - or `VALIDATION = VALID_XML WITH SCHEMA COLLECTION [schema].[collection]`
+  - `GO`
+- Message-type permissions MUST use `ON MESSAGE TYPE::[name]`.
+- Message-type extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'MESSAGE TYPE', N'<message_type>', NULL, NULL, NULL, NULL`
+- Message-type extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.14 Contract
+- Contract metadata MUST be sourced from `sys.service_contracts`, `sys.service_contract_message_usages`, `sys.service_message_types`, and owner metadata.
+- Contract scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE CONTRACT [name]`
+  - optional `AUTHORIZATION [owner]`
+  - `(`
+  - zero or more `[message_type] SENT BY <INITIATOR|TARGET|ANY>` items ordered by message-type name
+  - `)`
+  - `GO`
+- Contracts with no message usages MUST still emit an empty `()` body.
+- Contract permissions MUST use `ON CONTRACT::[name]`.
+- Contract-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'CONTRACT', N'<contract>', NULL, NULL, NULL, NULL`
+- Contract extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.15 Queue
+- Queue metadata MUST be sourced from `sys.service_queues` together with schema metadata, activation metadata, and queue storage metadata when available.
+- Queue scripts MUST emit:
+  - `CREATE QUEUE [schema].[name]`
+  - optional `WITH ...`
+  - optional `ON [data_space]`
+  - `GO`
+- Queue option order inside `WITH ...` MUST be:
+  1. `STATUS = <ON|OFF>`
+  2. `RETENTION = <ON|OFF>`
+  3. `POISON_MESSAGE_HANDLING (STATUS = <ON|OFF>)`
+  4. optional `ACTIVATION (...)`
+- Activation option order inside `ACTIVATION (...)` MUST be:
+  1. `STATUS = <ON|OFF>`
+  2. `PROCEDURE_NAME = [schema].[procedure]`
+  3. `MAX_QUEUE_READERS = <count>`
+  4. `EXECUTE AS <principal>`
+- `ACTIVATION (...)` MUST be emitted only when activation metadata is enabled or otherwise non-default for the queue.
+- Queue permissions MUST use object-permission emission against `[schema].[name]`.
+- Queue-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'QUEUE', N'<queue>', NULL, NULL`
+- Queue extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.16 Service
+- Service metadata MUST be sourced from `sys.services`, the referenced queue metadata, `sys.service_contract_usages`, `sys.service_contracts`, and owner metadata.
+- Service scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE SERVICE [name]`
+  - optional `AUTHORIZATION [owner]`
+  - `ON QUEUE [queue_schema].[queue_name]`
+  - optional `([contract_1], [contract_2], ...)` ordered by contract name
+  - `GO`
+- Service permissions MUST use `ON SERVICE::[name]`.
+- Service-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SERVICE', N'<service>', NULL, NULL, NULL, NULL`
+- Service extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.17 Route
+- Route metadata MUST be sourced from `sys.routes` together with owner metadata.
+- Route scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE ROUTE [name]`
+  - optional `AUTHORIZATION [owner]`
+  - `WITH <option_list>`
+  - `GO`
+- Route options MUST be emitted in this order when present:
+  1. `SERVICE_NAME = '<service_name>'`
+  2. `BROKER_INSTANCE = '<guid>'`
+  3. `LIFETIME = <seconds>`
+  4. `ADDRESS = '<address>'`
+  5. `MIRROR_ADDRESS = '<mirror_address>'`
+- Route string literals MUST escape embedded single quotes.
+- Route permissions MUST use `ON ROUTE::[name]`.
+- Route-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'ROUTE', N'<route>', NULL, NULL, NULL, NULL`
+- Route extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.18 EventNotification
+- Event-notification metadata MUST be sourced from `sys.event_notifications` and `sys.events`, together with queue metadata when queue-scoped output is required.
+- Event-notification scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE EVENT NOTIFICATION [name]`
+  - `<ON DATABASE|ON SERVER|ON QUEUE [schema].[queue]>`
+  - `FOR <event_1>, <event_2>, ...`
+  - `TO SERVICE '<service_name>'`
+  - optional `, '<broker_instance>'`
+  - `GO`
+- Event names MUST be emitted in deterministic order by event type name.
+- Event-notification scripting MUST preserve the effective subscribed event set rather than the original event-group shorthand used at creation time.
+- Service-name and broker-instance string literals MUST escape embedded single quotes.
+- SQL Server does not expose a dedicated event-notification permission class in `sys.database_permissions`; event-notification scripts MUST NOT emit permissions.
+- Event-notification extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'EVENT NOTIFICATION', N'<event_notification>', NULL, NULL, NULL, NULL`
+- Event-notification extended properties MUST be emitted after the base statement `GO`, ordered by property name.
+
+### 8.19 ServiceBinding
+- Service-binding metadata MUST be sourced from `sys.remote_service_bindings` together with remote-principal metadata.
+- Service-binding scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE REMOTE SERVICE BINDING [name]`
+  - `TO SERVICE '<remote_service_name>'`
+  - `WITH USER = [principal]`
+  - optional `, ANONYMOUS = ON`
+  - `GO`
+- Remote-service string literals MUST escape embedded single quotes.
+- Service-binding permissions MUST use `ON REMOTE SERVICE BINDING::[name]`.
+- Service-binding extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'REMOTE SERVICE BINDING', N'<binding>', NULL, NULL, NULL, NULL`
+- Service-binding extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.20 FullTextCatalog
+- Full-text catalog metadata MUST be sourced from `sys.fulltext_catalogs`.
+- Full-text catalog scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE FULLTEXT CATALOG [name]`
+  - optional `AS DEFAULT`
+  - `WITH ACCENT_SENSITIVITY = <ON|OFF>`
+  - `GO`
+- Full-text catalog permissions MUST use `ON FULLTEXT CATALOG::[name]`.
+- SQL Server does not expose full-text catalog entries in `sys.extended_properties`; full-text catalog scripts MUST NOT emit extended properties.
+
+### 8.21 FullTextStoplist
+- Full-text stoplist metadata MUST be sourced from `sys.fulltext_stoplists` and `sys.fulltext_stopwords`.
+- Full-text stoplist scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE FULLTEXT STOPLIST [name]`
+  - `GO`
+  - zero or more `ALTER FULLTEXT STOPLIST [name] ADD '<stopword>' LANGUAGE <language_id>` statements ordered by `language_id`, then stopword text
+  - `GO` after each `ALTER` statement
+- Full-text stoplist scripting MUST preserve the effective stopword set rather than the original construction source; emitted output MUST NOT require `FROM SYSTEM STOPLIST` or `FROM <other_stoplist>` to recreate the active stopword list.
+- Full-text stoplist string literals MUST escape embedded single quotes.
+- Full-text stoplist permissions MUST use `ON FULLTEXT STOPLIST::[name]`.
+- SQL Server does not expose full-text stoplist entries in `sys.extended_properties`; full-text stoplist scripts MUST NOT emit extended properties.
+
+### 8.22 SearchPropertyList
+- Search-property-list metadata MUST be sourced from `sys.registered_search_property_lists` and `sys.registered_search_properties` when those catalog views are available.
+- Search-property-list scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE SEARCH PROPERTY LIST [name]`
+  - `GO`
+  - zero or more `ALTER SEARCH PROPERTY LIST [name] ADD '<property_name>' WITH (PROPERTY_SET_GUID = '<guid>', PROPERTY_INT_ID = <int>[, PROPERTY_DESCRIPTION = '<description>'])` statements
+  - `GO` after each `ALTER` statement
+- Search-property entries MUST be emitted in deterministic order by property name, then property-set GUID, then property integer ID.
+- Search-property-list scripting MUST preserve the effective registered property set rather than the original construction source.
+- Property-name and property-description string literals MUST escape embedded single quotes.
+- Search-property-list permissions MUST use `ON SEARCH PROPERTY LIST::[name]`.
+- SQL Server does not expose search-property-list entries in `sys.extended_properties`; search-property-list scripts MUST NOT emit extended properties.
+
+### 8.23 Partition Functions
 - Partition-function metadata MUST come from `sys.partition_functions`, `sys.partition_parameters`, `sys.types`, and `sys.partition_range_values`.
 - Output MUST emit one `CREATE PARTITION FUNCTION` statement with deterministic boundary ordering and end with `GO`.
 - System base types MAY be emitted bracketed or unbracketed only when compatibility reconciliation preserves the reference spelling; otherwise canonical output remains deterministic per the implementation.
@@ -442,7 +643,7 @@ Each emitted statement MUST be followed by `GO`.
   - `EXEC sp_addextendedproperty ..., 'PARTITION FUNCTION', N'<function>', NULL, NULL, NULL, NULL`
 - Partition-function extended properties MUST be emitted after the partition-function `GO`, ordered by property name.
 
-### 8.12 Partition Schemes
+### 8.24 Partition Schemes
 - Partition-scheme metadata MUST come from `sys.partition_schemes`, `sys.partition_functions`, and destination data-space metadata.
 - Output MUST emit one `CREATE PARTITION SCHEME` statement that references the target partition function and ordered destination filegroups, followed by `GO`.
 - Empty or missing destination lists MUST still emit a valid `TO (...)` clause shape consistent with discovered metadata.
@@ -450,7 +651,7 @@ Each emitted statement MUST be followed by `GO`.
   - `EXEC sp_addextendedproperty ..., 'PARTITION SCHEME', N'<scheme>', NULL, NULL, NULL, NULL`
 - Partition-scheme extended properties MUST be emitted after the partition-scheme `GO`, ordered by property name.
 
-### 8.13 TableData
+### 8.25 TableData
 - Table-data scripting applies only to tables explicitly listed in `data.trackedTables`.
 - One data script file MUST be emitted per tracked table, even when the table currently has zero rows.
 - An empty tracked table MUST still produce a file at the expected `Data/Schema.Table_Data.sql` path; that file contains no SQL statements.

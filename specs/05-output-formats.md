@@ -1,7 +1,7 @@
 # Output Formats
 
 Status: draft
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 ## Human Output
 - Concise summaries with change lists.
@@ -9,7 +9,7 @@ Last updated: 2026-04-06
 - Report only `sqlct` project state (`sqlct.config.json`, schema folder state, DB comparison results).
 - Do not list optional compatibility input files as output entities.
 - `status`, `diff`, and `pull` may include warnings for skipped unsupported object types or invalid script names.
-- Schema-less active object types use bare names in human and JSON payloads (for example `ServiceUser`, `AppReader`, `Years_PF`).
+- Schema-less active object types use bare names in human and JSON payloads (for example `ServiceUser`, `AppReader`, `FiscalYear_PF`, `DocumentCatalog`, `//App/Messaging/Request`, `NotifySchemaChanges`).
 - Tracked table-data artifacts use `schema.name` for display names and `TableData` as the output `type`.
 - `data track` and `data untrack` list matched tables before asking for confirmation.
 - `data track` and `data untrack` report one of `Status: updated`, `Status: no changes`, or `Status: cancelled` in final human output.

@@ -38,10 +38,24 @@ Current runtime scope for `status`, `diff`, and `pull` covers:
 - `User`
 - `Synonym`
 - `UserDefinedType`
+- `TableType`
+- `XmlSchemaCollection`
 - `PartitionFunction`
 - `PartitionScheme`
+- `MessageType`
+- `Contract`
+- `Queue`
+- `Service`
+- `Route`
+- `EventNotification`
+- `ServiceBinding`
+- `FullTextCatalog`
+- `FullTextStoplist`
+- `SearchPropertyList`
 
 When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
+
+Feature-backed object types are included when the target database exposes them, such as `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
 
 `--object` selectors support:
 - `schema.name` for schema-scoped objects

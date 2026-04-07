@@ -1,14 +1,15 @@
 # Project Plan
 
 Status: draft
-Last updated: 2026-04-06
+Last updated: 2026-04-07
 
 This plan reflects the current repository state and defines execution order to reach v1.
 
 ## Current State Summary
 - CLI entrypoint exists with commands: `init`, `config`, `status`, `diff`, `pull`.
 - `init`, `config`, `status`, `diff`, and `pull` are implemented.
-- `status`, `diff`, and `pull` are active for: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `PartitionFunction`, `PartitionScheme`.
+- `status`, `diff`, and `pull` are active for: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- Additional defined-but-inactive object types remain tracked in `specs/04-scripting.md` Section 5.2.
 - Config runtime contract is simplified to:
   - `database` (existing fields)
   - `options.parallelism`
@@ -27,6 +28,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 | S1 | CLI foundation and command wiring | done | Command registration and global settings are in place. |
 | S2 | Config and init flows | done | `sqlct.config.json` read/write and project seeding are functional. |
 | S3 | SQL adapter and schema mapping | done | Active object-type services are integrated into command runtime. |
+| S3b | Additional object-type activation | done | Active scope covers broker, full-text, XML schema collection, and search-property-list additions needed for current compatibility work. |
 | S4 | Status/diff engine | done | End-to-end behavior implemented for active object types. |
 | S5 | Pull workflow | done | End-to-end reconciliation implemented for active object types. |
 | S6 | Test and quality hardening | in_progress | Fast unit tests added; DB-backed local-only coverage still to expand. |
@@ -37,6 +39,29 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 1. S6 Test and quality hardening.
 2. S7 Packaging and release readiness.
 3. S8 Selective tracked-table data scripting.
+
+## S3b: Additional Object-Type Activation
+### Specs to read
+- `specs/01-cli.md`
+- `specs/03-schema-folder.md`
+- `specs/04-scripting.md`
+- `specs/05-output-formats.md`
+- `specs/06-errors.md`
+- `specs/09-architecture.md`
+
+### Tasks
+- Activate folder mapping and project seeding for `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- Expand DB discovery filters so user-defined Service Broker objects and user-defined full-text stoplists are included while SQL Server-owned broker/system-stoplist artifacts remain excluded.
+- Use `sys.registered_search_property_lists` and `sys.registered_search_properties` when available instead of the stale `sys.fulltext_search_property_lists` catalog name.
+- Wire the new object types through `status`, `diff`, and `pull` comparison flows.
+- Align folder naming and schema-less/schema-scoped handling with the compatibility sources for CreditRiskDB and AdventureWorks.
+- Add local-only DB-backed validation for CreditRiskDB Service Broker coverage, CreditRiskDB table types, XML schema collections, event notifications, remote service bindings, and AdventureWorks full-text/search-property-list storage objects when the feature surface is available.
+
+### Acceptance Criteria
+- `status`, `diff`, and `pull` support `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- CreditRiskDB compatibility runs no longer warn that those object types are unsupported.
+- SQL Server-owned Service Broker artifacts and system full-text stoplists remain excluded from the active sync set.
+- Full-text catalog, full-text stoplist, and search property list paths align with the `Storage/` folder taxonomy defined in `specs/03-schema-folder.md`.
 
 ## S4: Status/Diff Engine
 ### Specs to read

@@ -77,10 +77,22 @@ dotnet run --project tools/sqlct-export/Sqlct.Export.csproj -- `
   - `Security/Schemas`
   - `Security/Roles`
   - `Security/Users`
-  - `Synonyms`
-  - `Types/User-defined Data Types`
+  - `Service Broker/Contracts`
+  - `Service Broker/Event Notifications`
+  - `Service Broker/Message Types`
+  - `Service Broker/Queues`
+  - `Service Broker/Remote Service Bindings`
+  - `Service Broker/Routes`
+  - `Service Broker/Services`
+  - `Storage/Full Text Catalogs`
+  - `Storage/Full Text Stoplists`
   - `Storage/Partition Functions`
   - `Storage/Partition Schemes`
+  - `Storage/Search Property Lists`
+  - `Synonyms`
+  - `Types/Table Types`
+  - `Types/XML Schema Collections`
+  - `Types/User-defined Data Types`
 
 ```
 powershell -File tools/compat-harness.ps1 `

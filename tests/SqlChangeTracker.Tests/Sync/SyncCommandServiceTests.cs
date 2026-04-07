@@ -26,6 +26,7 @@ public sealed class SyncCommandServiceTests
     [Theory]
     [InlineData("ServiceUser", true, "", "ServiceUser")]
     [InlineData("Security.Reader", true, "", "Security.Reader")]
+    [InlineData("%2F%2FApp%2FMessaging%2FRequest", true, "", "//App/Messaging/Request")]
     [InlineData("", false, "", "")]
     [InlineData("   ", false, "", "")]
     public void TryParseObjectFileName_SupportsSchemaLessNames(string fileName, bool expected, string expectedSchema, string expectedName)
@@ -41,8 +42,10 @@ public sealed class SyncCommandServiceTests
     [InlineData("dbo.Customer", null, "dbo", "Customer", false)]
     [InlineData("ServiceUser", null, "", "ServiceUser", true)]
     [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
+    [InlineData("SearchPropertyList:DocumentProperties", "SearchPropertyList", "", "DocumentProperties", true)]
     [InlineData("Synonym:Reporting.CurrentSales", "Synonym", "Reporting", "CurrentSales", false)]
     [InlineData("UserDefinedType:dbo.PhoneNumber", "UserDefinedType", "dbo", "PhoneNumber", false)]
+    [InlineData("XmlSchemaCollection:dbo.PayloadSchema", "XmlSchemaCollection", "dbo", "PayloadSchema", false)]
     [InlineData("data:dbo.Customer", "TableData", "dbo", "Customer", false)]
     public void ParseObjectSelector_AcceptsSchemaScopedSchemaLessAndTypedSelectors(
         string selector,
@@ -104,11 +107,28 @@ public sealed class SyncCommandServiceTests
 
     [Theory]
     [InlineData("dbo.Customer_Data", true, "dbo", "Customer")]
+    [InlineData("Ops%3A1.Customer%3FArchive_Data", true, "Ops:1", "Customer?Archive")]
     [InlineData("dbo.Customer", false, "", "")]
     [InlineData("Customer_Data", false, "", "")]
     public void TryParseDataFileName_SupportsTrackedDataScripts(string fileName, bool expected, string expectedSchema, string expectedName)
     {
         var success = SyncCommandService.TryParseDataFileName(fileName, out var schema, out var name);
+
+        Assert.Equal(expected, success);
+        Assert.Equal(expectedSchema, schema);
+        Assert.Equal(expectedName, name);
+    }
+
+    [Theory]
+    [InlineData("Ops%3A1.Customer%3FArchive", true, "Ops:1", "Customer?Archive")]
+    [InlineData("%2F%2FApp%2FMessaging%2FRequest", false, "", "")]
+    public void TryParseSchemaAndName_DecodesEscapedPartsAndStillValidatesShape(
+        string fileName,
+        bool expected,
+        string expectedSchema,
+        string expectedName)
+    {
+        var success = SyncCommandService.TryParseSchemaAndName(fileName, out var schema, out var name);
 
         Assert.Equal(expected, success);
         Assert.Equal(expectedSchema, schema);
@@ -232,7 +252,7 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(string.Empty, result.Payload!.Diff);
             Assert.False(introspector.ListObjectsCalled);
             Assert.True(introspector.ListMatchingObjectsCalled);
-            var expectedCandidateTypes = new[] { "Function", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View" };
+            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "TableType", "UserDefinedType", "View", "XmlSchemaCollection" };
             Assert.Equal(
                 expectedCandidateTypes,
                 introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));
