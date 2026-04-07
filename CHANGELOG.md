@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Ensure `SqlDataReader` instances are closed after use in `SqlServerScripter` to prevent "There is already an open DataReader" errors (#25).
+
 ## [0.2.0] - 2026-04-07
 
 ### Added
