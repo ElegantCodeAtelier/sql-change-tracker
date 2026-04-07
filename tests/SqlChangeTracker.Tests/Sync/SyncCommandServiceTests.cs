@@ -550,6 +550,39 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunDiff_WithInvalidFilterPattern_ReturnsInvalidConfigError()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var service = new SyncCommandService();
+            var result = service.RunDiff(projectDir, "db", null, filterPatterns: ["[invalid"]);
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotNull(result.Error);
+            Assert.Equal(ErrorCodes.InvalidConfig, result.Error!.Code);
+            Assert.Equal("invalid filter pattern.", result.Error.Message);
+            Assert.Contains("[invalid", result.Error.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunPull_WithInvalidFilterPattern_ReturnsInvalidConfigError()
     {
         var tempDir = CreateTempDir();

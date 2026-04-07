@@ -281,6 +281,52 @@ public sealed class StatusDiffPullCommandTests
     }
 
     [Fact]
+    public void DiffCommand_WithFilterPatterns_PassesPatternsToService()
+    {
+        string[]? capturedPatterns = null;
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Ok(
+                new DiffResult(
+                    "diff",
+                    ".\\schema",
+                    "db",
+                    null,
+                    string.Empty,
+                    []),
+                ExitCodes.Success),
+            OnRunDiff = (_, _, _, patterns) => capturedPatterns = patterns
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var settings = new DiffCommandSettings { FilterPatterns = ["dbo\\.Customer", "dbo\\..*"] };
+        var exitCode = command.Execute(CreateContext("diff"), settings, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.NotNull(capturedPatterns);
+        Assert.Equal(2, capturedPatterns!.Length);
+        Assert.Equal("dbo\\.Customer", capturedPatterns[0]);
+        Assert.Equal("dbo\\..*", capturedPatterns[1]);
+    }
+
+    [Fact]
+    public void DiffCommand_WithInvalidFilterPattern_ReturnsInvalidConfigError()
+    {
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Failure(
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid filter pattern.", Detail: "'[invalid' is not a valid regular expression."),
+                ExitCodes.InvalidConfig)
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var settings = new DiffCommandSettings { FilterPatterns = ["[invalid"] };
+        var exitCode = command.Execute(CreateContext("diff"), settings, default);
+
+        Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+    }
+
+    [Fact]
     public void PullCommand_WithNoProgressFlag_ReturnsSuccess()
     {
         var stub = new StubSyncCommandService
@@ -442,13 +488,18 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
+        public Action<string?, string?, string?, string[]?>? OnRunDiff { get; set; }
+
         public Action<string?, string?, string[]?, Action<string>?>? OnRunPull { get; set; }
 
         public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
-        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
-            => DiffResult;
+        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, string[]? filterPatterns = null, Action<string>? progress = null)
+        {
+            OnRunDiff?.Invoke(projectDir, target, objectName, filterPatterns);
+            return DiffResult;
+        }
 
         public CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null)
         {

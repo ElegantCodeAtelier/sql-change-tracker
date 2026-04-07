@@ -12,7 +12,7 @@ internal interface ISyncCommandService
 {
     CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null);
 
-    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null);
+    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, string[]? filterPatterns = null, Action<string>? progress = null);
 
     CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null);
 }
@@ -110,7 +110,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<StatusResult>.Ok(status, exitCode);
     }
 
-    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, Action<string>? progress = null)
+    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, string[]? filterPatterns = null, Action<string>? progress = null)
     {
         if (!TryParseTarget(target, out var comparisonTarget))
         {
@@ -126,6 +126,27 @@ internal sealed class SyncCommandService : ISyncCommandService
         if (!projectResult.Success)
         {
             return CommandExecutionResult<DiffResult>.Failure(projectResult.Error!, projectResult.ExitCode);
+        }
+
+        IReadOnlyList<Regex>? compiledPatterns = null;
+        if (filterPatterns is { Length: > 0 })
+        {
+            var patternList = new List<Regex>(filterPatterns.Length);
+            foreach (var pattern in filterPatterns)
+            {
+                try
+                {
+                    patternList.Add(new Regex(pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1)));
+                }
+                catch (ArgumentException)
+                {
+                    return CommandExecutionResult<DiffResult>.Failure(
+                        new ErrorInfo(ErrorCodes.InvalidConfig, "invalid filter pattern.", Detail: $"'{pattern}' is not a valid regular expression."),
+                        ExitCodes.InvalidConfig);
+                }
+            }
+
+            compiledPatterns = patternList;
         }
 
         var sourceLabel = comparisonTarget == ComparisonTarget.Db ? "db" : "folder";
@@ -151,6 +172,19 @@ internal sealed class SyncCommandService : ISyncCommandService
                 return CommandExecutionResult<DiffResult>.Failure(selected.Error!, selected.ExitCode);
             }
 
+            if (compiledPatterns is not null && !MatchesObjectPatterns(selected.Payload!.DisplayName, compiledPatterns))
+            {
+                var emptyResult = new DiffResult(
+                    "diff",
+                    projectResult.Payload!.DisplayPath,
+                    comparisonTarget == ComparisonTarget.Db ? "db" : "folder",
+                    selected.Payload!.SelectorDisplayName,
+                    string.Empty,
+                    selectedSnapshotResult.Payload!.Warnings);
+
+                return CommandExecutionResult<DiffResult>.Ok(emptyResult, ExitCodes.Success);
+            }
+
             var entry = BuildChangeEntry(selectedSnapshotResult.Payload!, comparisonTarget, selected.Payload!);
             var diff = BuildDiffText(entry, sourceLabel, targetLabel);
 
@@ -173,7 +207,11 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         var changes = ComputeChanges(snapshotResult.Payload!, comparisonTarget);
-        var diffSections = changes
+        var filteredChanges = compiledPatterns is null
+            ? changes
+            : changes.Where(change => MatchesObjectPatterns(change.Object.DisplayName, compiledPatterns)).ToArray();
+
+        var diffSections = filteredChanges
             .Select(change => BuildDiffSection(change, sourceLabel, targetLabel))
             .Where(section => !string.IsNullOrWhiteSpace(section))
             .ToArray();

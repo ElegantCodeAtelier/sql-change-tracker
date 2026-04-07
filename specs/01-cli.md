@@ -178,7 +178,7 @@ Behavior:
 ### diff
 Show textual diffs.
 `
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...]
 `
 Behavior:
 - Compare object script from DB vs folder.
@@ -189,6 +189,9 @@ Behavior:
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
 - When `data.trackedTables` is configured, `diff` also supports data-script diffs for tracked tables.
+- When `--filter` is specified without `--object`, only objects whose display name matches at least one regex pattern are included in the diff output.
+- When `--filter` is specified with `--object`, the filter is also applied to the single selected object; if it does not match, an empty diff is returned.
+- An invalid regular expression in `--filter` returns exit code 2 (invalid config).
 - Exit codes follow `status`.
 
 ### pull
