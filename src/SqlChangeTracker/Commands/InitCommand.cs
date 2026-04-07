@@ -116,10 +116,11 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         string? password = null;
         if (string.Equals(auth, "sql", StringComparison.OrdinalIgnoreCase))
         {
+            Console.WriteLine("  Note: password will be stored in plain text in sqlct.config.json.");
             Console.Write("  Username: ");
             user = Console.ReadLine()?.Trim();
             Console.Write("  Password: ");
-            password = Console.ReadLine()?.Trim();
+            password = ReadPassword();
         }
 
         Console.Write("  Trust server certificate? [y/N]: ");
@@ -194,6 +195,44 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         config.Database.Password = setup.Password ?? string.Empty;
         config.Database.TrustServerCertificate = setup.TrustServerCertificate;
         return config;
+    }
+
+    private static string ReadPassword()
+    {
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine() ?? string.Empty;
+        }
+
+        var password = new System.Text.StringBuilder();
+        try
+        {
+            while (true)
+            {
+                var key = Console.ReadKey(intercept: true);
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    break;
+                }
+                if (key.Key == ConsoleKey.Backspace && password.Length > 0)
+                {
+                    password.Remove(password.Length - 1, 1);
+                    Console.Write("\b \b");
+                }
+                else if (key.Key != ConsoleKey.Backspace)
+                {
+                    password.Append(key.KeyChar);
+                    Console.Write('*');
+                }
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return Console.ReadLine() ?? string.Empty;
+        }
+
+        return password.ToString();
     }
 
     private static bool ConfirmCurrentDirectory(string displayProjectDir)

@@ -146,14 +146,24 @@ public sealed class InitAndConfigCommandTests
         try
         {
             Environment.CurrentDirectory = tempDir;
-            // Answer "y" to directory confirmation; interactive connection prompts are
-            // skipped because stdin is not a TTY in the test environment.
-            Console.SetIn(new StringReader("y" + Environment.NewLine));
+            // Use a stub connection tester to avoid slow real-connection attempts.
+            // Interactive prompts receive null/default responses (stdin exhausted after "y").
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "no server");
+            try
+            {
+                // "y" answers the directory confirmation; subsequent prompts receive
+                // null (stdin exhausted) and fall back to defaults (server = localhost).
+                Console.SetIn(new StringReader("y" + Environment.NewLine));
 
-            var exitCode = Program.Main(["init"]);
+                var exitCode = Program.Main(["init"]);
 
-            Assert.Equal(ExitCodes.Success, exitCode);
-            Assert.True(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+                Assert.Equal(ExitCodes.Success, exitCode);
+                Assert.True(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
         }
         finally
         {
