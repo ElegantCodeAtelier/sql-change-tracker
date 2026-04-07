@@ -59,7 +59,6 @@ Common flag behavior across commands.
 - Default: `db`.
 
 ### --object <selector>
-- Identifies a single object for diff output.
 - Supported selector forms:
   - `schema.name` for schema-scoped active object types.
   - `name` for schema-less active object types.
@@ -68,6 +67,17 @@ Common flag behavior across commands.
   - `data:schema.name` for tracked table-data scripts.
 - Bare `name` selectors search only schema-less active object types.
 - Bare-name or `schema.name` collisions across object types return an error that instructs the user to use the type-qualified form.
+
+### --filter <pattern>
+- Patterns are .NET regular expressions matched against the full object display name (full-string match, not substring).
+- Display name format: `schema.name` (e.g. `dbo.Customer`) or bare `name` for schema-less types (e.g. `AppReader`).
+- Multiple `--filter` values may be provided; an object is included if any pattern matches (OR semantics).
+- Matching is case-insensitive.
+- Examples:
+  - `dbo\.Customer` — exact match on `dbo.Customer`.
+  - `dbo\..*` — all objects in the `dbo` schema.
+  - `.*Order.*` — all objects with "Order" anywhere in the name.
+  - `AppReader` — schema-less object named `AppReader`.
 
 ### --no-progress
 - Disables the progress spinner for `status`, `diff`, and `pull`.
@@ -209,7 +219,7 @@ Behavior:
 - When `data.trackedTables` is configured, `pull` also synchronizes `Data/*.sql` scripts for tracked tables.
 - `pull` MUST delete `Data/*.sql` files for tables that are no longer present in `data.trackedTables`.
 - Pull output MUST report schema and data summaries separately.
-- When `--object` is specified, only objects matching the selector exactly (same forms as `diff --object`) are considered for reconciliation.
+- When `--object` is specified, only objects matching the selector exactly are considered for reconciliation.
 - When `--filter` is specified, only objects whose display name matches at least one regex pattern are considered for reconciliation.
 - `--object` and `--filter` may be combined; both filters are applied (AND semantics).
 - An invalid selector in `--object` returns exit code 2 (invalid config).
@@ -217,25 +227,6 @@ Behavior:
 - Exit codes:
   - `0` success.
   - `2/3/4` invalid config / connection failure / execution failure.
-
-#### --object selector for pull
-Uses the same selector forms as `diff --object`:
-- `schema.name` for schema-scoped active object types.
-- `name` for schema-less active object types.
-- `type:name` for explicit schema-less selection.
-- `type:schema.name` for explicit schema-scoped selection.
-- `data:schema.name` for tracked table-data scripts.
-
-#### --filter pattern syntax for pull
-- Patterns are .NET regular expressions matched against the full object display name (full-string match, not substring).
-- Display name format: `schema.name` (e.g. `dbo.Customer`) or bare `name` for schema-less types (e.g. `AppReader`).
-- Multiple `--filter` values may be provided; an object is included if any pattern matches.
-- Matching is case-insensitive.
-- Examples:
-  - `dbo\.Customer` — exact match on `dbo.Customer`.
-  - `dbo\..*` — all objects in the `dbo` schema.
-  - `.*Order.*` — all objects with "Order" anywhere in the name.
-  - `AppReader` — schema-less object named `AppReader`.
 
 ## Usage
 Common flows using the simplified CLI.

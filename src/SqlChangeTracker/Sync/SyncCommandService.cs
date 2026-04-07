@@ -12,7 +12,7 @@ internal interface ISyncCommandService
 {
     CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null);
 
-    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, string[]? filterPatterns = null, Action<string>? progress = null);
+    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, Action<string>? progress = null);
 
     CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null);
 }
@@ -110,7 +110,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<StatusResult>.Ok(status, exitCode);
     }
 
-    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, string[]? filterPatterns = null, Action<string>? progress = null)
+    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, Action<string>? progress = null)
     {
         if (!TryParseTarget(target, out var comparisonTarget))
         {
@@ -152,9 +152,9 @@ internal sealed class SyncCommandService : ISyncCommandService
         var sourceLabel = comparisonTarget == ComparisonTarget.Db ? "db" : "folder";
         var targetLabel = comparisonTarget == ComparisonTarget.Db ? "folder" : "db";
 
-        if (!string.IsNullOrWhiteSpace(objectName))
+        if (!string.IsNullOrWhiteSpace(objectSelector))
         {
-            var parsedObject = ParseObjectSelector(objectName!);
+            var parsedObject = ParseObjectSelector(objectSelector!);
             if (!parsedObject.Success)
             {
                 return CommandExecutionResult<DiffResult>.Failure(parsedObject.Error!, parsedObject.ExitCode);

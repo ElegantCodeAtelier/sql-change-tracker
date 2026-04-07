@@ -85,7 +85,7 @@ public sealed class StatusDiffPullCommandTests
         };
 
         var command = new DiffCommand { SyncService = stub };
-        var exitCode = command.Execute(CreateContext("diff"), new DiffCommandSettings { ObjectName = "dbo" }, default);
+        var exitCode = command.Execute(CreateContext("diff"), new DiffCommandSettings { ObjectSelector = "dbo" }, default);
 
         Assert.Equal(ExitCodes.InvalidConfig, exitCode);
     }
@@ -107,7 +107,7 @@ public sealed class StatusDiffPullCommandTests
         };
 
         var command = new DiffCommand { SyncService = stub };
-        var exitCode = command.Execute(CreateContext("diff"), new DiffCommandSettings { ObjectName = "dbo.Customer" }, default);
+        var exitCode = command.Execute(CreateContext("diff"), new DiffCommandSettings { ObjectSelector = "dbo.Customer" }, default);
 
         Assert.Equal(ExitCodes.DiffExists, exitCode);
     }
@@ -495,9 +495,9 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
-        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectName, string[]? filterPatterns = null, Action<string>? progress = null)
+        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, Action<string>? progress = null)
         {
-            OnRunDiff?.Invoke(projectDir, target, objectName, filterPatterns);
+            OnRunDiff?.Invoke(projectDir, target, objectSelector, filterPatterns);
             return DiffResult;
         }
 
