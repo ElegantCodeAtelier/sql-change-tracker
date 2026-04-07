@@ -264,6 +264,59 @@ public sealed class InitAndConfigCommandTests
     }
 
     [Fact]
+    public void Init_WithInvalidAuthFlag_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            var exitCode = Program.Main([
+                "init",
+                "--project-dir", projectDir,
+                "--server", "myserver",
+                "--database", "mydb",
+                "--auth", "kerberos",
+                "--skip-connection-test"
+            ]);
+
+            Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithSqlAuthAndNoUserFlag_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            var exitCode = Program.Main([
+                "init",
+                "--project-dir", projectDir,
+                "--server", "myserver",
+                "--database", "mydb",
+                "--auth", "sql",
+                "--skip-connection-test"
+            ]);
+
+            Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+
+    [Fact]
     public void Init_WithServerFlag_WhenConnectionFails_StillReturnsSuccess()
     {
         var tempDir = CreateTempDir();

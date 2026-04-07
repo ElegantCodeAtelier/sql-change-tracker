@@ -41,6 +41,14 @@ internal sealed class InitCommand : Command<InitCommandSettings>
 
         var connectionSetup = ResolveConnectionSetup(settings,
             promptInteractively: projectDirFromCurrentDirectory && string.IsNullOrWhiteSpace(settings.Server) && !settings.Json);
+
+        var authValidation = ValidateConnectionSetup(connectionSetup);
+        if (!authValidation.Success)
+        {
+            output.WriteError(new ErrorResult("init", authValidation.Error!));
+            return authValidation.ExitCode;
+        }
+
         var config = BuildConfig(connectionSetup);
         var configWriter = new SqlctConfigWriter();
         var configPath = SqlctConfigWriter.GetDefaultPath(projectDir);
@@ -183,6 +191,35 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             "Run 'sqlct config' to validate your configuration.",
             "Run 'sqlct pull' to pull the current database schema into your folder.",
         ];
+    }
+
+    private static (bool Success, ErrorInfo? Error, int ExitCode) ValidateConnectionSetup(ConnectionSetup setup)
+    {
+        // Only validate when a server is provided (empty setup = no connection configured yet).
+        if (string.IsNullOrWhiteSpace(setup.Server))
+        {
+            return (true, null, ExitCodes.Success);
+        }
+
+        if (!string.Equals(setup.Auth, "integrated", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(setup.Auth, "sql", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false,
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid auth value.",
+                    Detail: "database.auth must be 'integrated' or 'sql'."),
+                ExitCodes.InvalidConfig);
+        }
+
+        if (string.Equals(setup.Auth, "sql", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(setup.User))
+        {
+            return (false,
+                new ErrorInfo(ErrorCodes.InvalidConfig, "missing required field.",
+                    Detail: "database.user is required when auth is 'sql'."),
+                ExitCodes.InvalidConfig);
+        }
+
+        return (true, null, ExitCodes.Success);
     }
 
     private static SqlctConfig BuildConfig(ConnectionSetup setup)
