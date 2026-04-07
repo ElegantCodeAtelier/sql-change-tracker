@@ -22,7 +22,16 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         var projectDir = resolvedProjectDir.FullPath;
         var displayProjectDir = resolvedProjectDir.DisplayPath;
         var configAlreadyExists = File.Exists(SqlctConfigWriter.GetDefaultPath(projectDir));
-        var isInteractive = projectDirFromCurrentDirectory && !settings.Json && !configAlreadyExists;
+        var isInteractive = projectDirFromCurrentDirectory && !settings.Json;
+
+        if (configAlreadyExists)
+        {
+            output.WriteError(new ErrorResult("init", new ErrorInfo(
+                ErrorCodes.InvalidConfig,
+                "project already initialized.",
+                Detail: $"'{ConfigFileNames.SqlctConfigFileName}' already exists in '{displayProjectDir}'. Remove it to re-initialize the project.")));
+            return ExitCodes.InvalidConfig;
+        }
 
         if (projectDirFromCurrentDirectory && !ConfirmCurrentDirectory(displayProjectDir))
         {

@@ -97,7 +97,7 @@ Behavior:
 - Requires only schema directory context.
 - If `--project-dir` is omitted, assume current working directory and prompt for confirmation.
 - On first-time setup (when `sqlct.config.json` does not yet exist in the target directory), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
-- If `sqlct.config.json` already exists in the target directory, the connection setup prompts are skipped.
+- If `sqlct.config.json` already exists in the target directory, exit with an error and suggest removing the file to re-initialize the project.
 - Auth accepts `integrated` (Windows/Entra Authentication, default) or `sql` (SQL Server Authentication).
 - Password input during interactive prompts is masked.
 - When connection details are collected, attempt a connection test **before** creating any project files (5-second timeout).
@@ -105,8 +105,9 @@ Behavior:
 - After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure.
 - Exit codes:
   - `0` success.
+  - `2` invalid config (e.g., `sqlct.config.json` already exists, or connection test declined).
 
-### config
+
 Parse, validate, and write configuration from the project directory.
 `
 sqlct config [--project-dir <path>]
@@ -254,7 +255,7 @@ Result:
 - Prompts for directory confirmation.
 - On first-time setup (no existing config), prompts for connection details, runs a connection test, and on success creates the project directory structure and writes config; prints next steps.
 - On connection failure, prints troubleshooting hints and prompts to proceed or abort.
-- If config already exists, skips connection prompts and creates any missing directories.
+- If `sqlct.config.json` already exists, exits with an error and suggests removing it to re-initialize.
 
 ### Validate and normalize configuration
 `

@@ -137,6 +137,28 @@ public sealed class InitAndConfigCommandTests
     }
 
     [Fact]
+    public void Init_WhenConfigAlreadyExists_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            Directory.CreateDirectory(projectDir);
+            File.WriteAllText(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName), "{}");
+
+            var exitCode = Program.Main(["init", "--project-dir", projectDir]);
+
+            Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+
+    [Fact]
     public void Init_WithoutProjectDir_WhenAccepted_CreatesProjectStructureAndConfig()
     {
         var tempDir = CreateTempDir();
