@@ -141,7 +141,7 @@ Object: dbo.NewView (View)
 Config: project-dir=.\schema
 Config file: .\schema\sqlct.config.json
 Database: server=localhost; name=MyDb; auth=integrated
-Options: orderByDependencies=true
+Options: parallelism=0
 Config validation: ok
 ```
 
@@ -319,7 +319,7 @@ Error fields:
       "trustServerCertificate": false
     },
     "options": {
-      "orderByDependencies": true
+      "parallelism": 0
     },
     "data": {
       "trackedTables": [

@@ -25,7 +25,6 @@ Current shape:
     "trustServerCertificate": false
   },
   "options": {
-    "orderByDependencies": true,
     "parallelism": 0
   },
   "data": {

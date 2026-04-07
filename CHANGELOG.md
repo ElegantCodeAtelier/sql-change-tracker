@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 - Change `status` and `pull` output to report schema and data summaries separately when tracked-table data scripting is configured (#15).
 
+### Removed
+- Remove unused `options.orderByDependencies` config option; legacy configs containing this field continue to load without error but the field is stripped on save.
+
 ### Fixed
 - Parameter-level MS_Description extended properties are not scripted for procedures and functions (#5).
 - `sqlct config` should fail with a clear error if executed in a non-initialized project directory (#1).

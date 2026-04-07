@@ -68,7 +68,7 @@ internal sealed class OutputFormatter
         Console.WriteLine($"Config: project-dir={result.ProjectDir}");
         Console.WriteLine($"Config file: {result.ConfigPath}");
         Console.WriteLine($"Database: server={result.Config.Database.Server}; name={result.Config.Database.Name}; auth={result.Config.Database.Auth}");
-        Console.WriteLine($"Options: orderByDependencies={result.Config.Options.OrderByDependencies.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"Options: parallelism={result.Config.Options.Parallelism}");
     }
 
     public void WriteInit(InitResult result)
