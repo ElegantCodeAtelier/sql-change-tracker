@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add `--filter <pattern>` to `sqlct pull` for regex-based filtering; multiple patterns may be provided and matching is case-insensitive (#35).
 - Add `--filter <pattern>` to `sqlct diff` for regex-based filtering; without `--object` filters the output to matching objects, with `--object` additionally constrains the single-object result (#35).
 - SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
+- Add `--object <pattern>` to `sqlct data track` and `sqlct data untrack` as a flag alias for the positional pattern argument.
+- Add `--filter <regex>` to `sqlct data track` and `sqlct data untrack` for regex-based table matching; matched case-insensitively against the full `schema.table` display name. Exactly one of the positional pattern, `--object`, or `--filter` must be provided; combining any two returns exit code 2.
 
 ### Changed
 - In `diff --object` mode, database discovery and scripting are now limited to the selector-matching candidate set instead of scanning the full active object set, improving performance for targeted diffs (#28).

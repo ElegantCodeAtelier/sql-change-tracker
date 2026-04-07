@@ -13,7 +13,38 @@ internal sealed class DataUntrackCommand : Command<DataUntrackCommandSettings>
     public override int Execute(CommandContext context, DataUntrackCommandSettings settings, CancellationToken cancellationToken)
     {
         var output = new OutputFormatter(settings.Json);
-        var prepare = DataTrackingService.PrepareUntrack(settings.ProjectDir, settings.Pattern);
+
+        var hasPositional = !string.IsNullOrWhiteSpace(settings.Pattern);
+        var hasObject = !string.IsNullOrWhiteSpace(settings.ObjectPattern);
+        var hasFilter = !string.IsNullOrWhiteSpace(settings.FilterPattern);
+        var selectorCount = (hasPositional ? 1 : 0) + (hasObject ? 1 : 0) + (hasFilter ? 1 : 0);
+
+        if (selectorCount == 0)
+        {
+            output.WriteError(new ErrorResult(
+                "data untrack",
+                new ErrorInfo(
+                    ErrorCodes.InvalidConfig,
+                    "no selector provided.",
+                    Detail: "provide a pattern argument, --object, or --filter.")));
+            return ExitCodes.InvalidConfig;
+        }
+
+        if (selectorCount > 1)
+        {
+            output.WriteError(new ErrorResult(
+                "data untrack",
+                new ErrorInfo(
+                    ErrorCodes.InvalidConfig,
+                    "conflicting selectors.",
+                    Detail: "provide exactly one of: pattern argument, --object, or --filter.")));
+            return ExitCodes.InvalidConfig;
+        }
+
+        var effectiveObjectPattern = hasPositional ? settings.Pattern : hasObject ? settings.ObjectPattern : null;
+        var effectiveFilterPattern = hasFilter ? settings.FilterPattern : null;
+
+        var prepare = DataTrackingService.PrepareUntrack(settings.ProjectDir, effectiveObjectPattern, effectiveFilterPattern);
         if (!prepare.Success)
         {
             output.WriteError(new ErrorResult("data untrack", prepare.Error!));
