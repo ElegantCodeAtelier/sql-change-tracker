@@ -21,7 +21,8 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         var resolvedProjectDir = ProjectPathResolver.Resolve(settings.ProjectDir);
         var projectDir = resolvedProjectDir.FullPath;
         var displayProjectDir = resolvedProjectDir.DisplayPath;
-        var isInteractive = projectDirFromCurrentDirectory && !settings.Json;
+        var configAlreadyExists = File.Exists(SqlctConfigWriter.GetDefaultPath(projectDir));
+        var isInteractive = projectDirFromCurrentDirectory && !settings.Json && !configAlreadyExists;
 
         if (projectDirFromCurrentDirectory && !ConfirmCurrentDirectory(displayProjectDir))
         {

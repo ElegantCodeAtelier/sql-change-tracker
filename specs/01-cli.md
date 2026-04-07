@@ -96,12 +96,12 @@ Behavior:
 - Initialize configuration in an empty directory or existing project structure.
 - Requires only schema directory context.
 - If `--project-dir` is omitted, assume current working directory and prompt for confirmation.
-- When `--project-dir` is omitted (interactive first-time setup), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
+- On first-time setup (when `sqlct.config.json` does not yet exist in the target directory), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
+- If `sqlct.config.json` already exists in the target directory, the connection setup prompts are skipped.
 - Auth accepts `integrated` (Windows/Entra Authentication, default) or `sql` (SQL Server Authentication).
 - Password input during interactive prompts is masked.
-- When connection details are provided via interactive prompts, attempt a connection test **before** creating any project files (5-second timeout).
-- If the connection test fails in interactive mode, print troubleshooting hints and prompt `"Proceed anyway? [y/N]:"`. If declined, exit without creating any files. If confirmed, proceed to create the directory structure and write config.
-- When `--project-dir` is provided (non-interactive mode), no connection prompts are shown and no connection test is run; the config is written with empty connection fields.
+- When connection details are collected, attempt a connection test **before** creating any project files (5-second timeout).
+- If the connection test fails, print troubleshooting hints and prompt `"Proceed anyway? [y/N]:"`. If declined, exit without creating any files. If confirmed, proceed to create the directory structure and write config.
 - After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure.
 - Exit codes:
   - `0` success.
@@ -245,26 +245,10 @@ Common flows using the simplified CLI.
 sqlct init
 `
 Result:
-- Prompts for directory confirmation, then connection details (server, database, auth, credentials, trust-server-certificate).
-- Runs a connection test before creating any files.
-- On success, creates the project directory structure and writes config; prints next steps.
+- Prompts for directory confirmation.
+- On first-time setup (no existing config), prompts for connection details, runs a connection test, and on success creates the project directory structure and writes config; prints next steps.
 - On connection failure, prints troubleshooting hints and prompts to proceed or abort.
-
-### First-time setup (scripted / non-interactive)
-`
-sqlct init --project-dir ./schema
-`
-Result:
-- Initializes config and schema folder structure in the target directory.
-- No connection prompts; config is written with empty connection fields to be filled in manually.
-
-### Initialize in current directory
-`
-sqlct init
-`
-Result:
-- Prompts for confirmation.
-- Initializes config and schema folder structure in the current directory if confirmed.
+- If config already exists, skips connection prompts and creates any missing directories.
 
 ### Validate and normalize configuration
 `
