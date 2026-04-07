@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- In `diff --object` mode, database discovery and scripting are now limited to the selector-matching candidate set instead of scanning the full active object set, improving performance for targeted diffs (#28).
+
 ## [0.2.1] - 2026-04-07
 
 ### Added

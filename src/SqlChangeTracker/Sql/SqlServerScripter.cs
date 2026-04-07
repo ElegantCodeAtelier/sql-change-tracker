@@ -7,7 +7,7 @@ using System.Globalization;
 
 namespace SqlChangeTracker.Sql;
 
-internal sealed class SqlServerScripter
+internal class SqlServerScripter
 {
     private static readonly Regex ReferenceColumnTypeTokenRegex = new(
         @"^\s*\[(?<name>[^\]]+)\]\s+(?<type>(?:\[[^\]]+\](?:\.\[[^\]]+\])?|\w+)(?:\s*\([^)]*\))?)",
@@ -52,12 +52,12 @@ internal sealed class SqlServerScripter
         string ValueAlias,
         string? SrsIdAlias);
 
-    public string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj)
+    public virtual string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj)
     {
         return ScriptObject(options, obj, null);
     }
 
-    public string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj, string? referencePath)
+    public virtual string ScriptObject(SqlConnectionOptions options, DbObjectInfo obj, string? referencePath)
     {
         using var connection = SqlConnectionFactory.Create(options);
         connection.Open();
@@ -102,7 +102,7 @@ internal sealed class SqlServerScripter
         };
     }
 
-    public string ScriptTableData(SqlConnectionOptions options, ObjectIdentifier table)
+    public virtual string ScriptTableData(SqlConnectionOptions options, ObjectIdentifier table)
     {
         using var connection = SqlConnectionFactory.Create(options);
         connection.Open();
