@@ -125,22 +125,28 @@ Tracked-table rules:
 - Tracked tables MUST be unique case-insensitively and persisted in stable sorted order.
 - Top-level `status`, `diff`, and `pull` process `TableData` only for tables explicitly listed in `data.trackedTables`.
 
-Pattern forms for `track` and `untrack`:
-- exact table: `schema.table`
-- schema wildcard: `schema.*`
-- name wildcard: `*.table`
-- Pattern matching is case-insensitive.
-- Bare table names without schema are not supported.
+Selector forms for `track` and `untrack`:
+- Positional `<pattern>` or `--object <pattern>`: glob-style table selector.
+  - exact table: `schema.table`
+  - schema wildcard: `schema.*`
+  - name wildcard: `*.table`
+  - Matching is case-insensitive.
+  - Bare table names without schema are not supported.
+- `--filter <regex>`: .NET regular expression matched case-insensitively against the full display name (`schema.table`).
+  - Use `.*` for substring matching.
+  - An invalid regular expression returns exit code 2 (invalid config).
+- Exactly one of: positional `<pattern>`, `--object`, or `--filter` must be provided.
+  - Combining any two or omitting all three returns exit code 2 (invalid config).
 
 #### track
 `
-sqlct data track <pattern> [--project-dir <path>]
+sqlct data track [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
 `
 
 Behavior:
-- Match user tables in the current database against `<pattern>`.
+- Match user tables in the current database against the provided selector.
 - List matched tables in stable sorted order before any config change is made.
-- When `<pattern>` matches no user tables, return success with an informational message and leave config unchanged.
+- When the selector matches no user tables, return success with an informational message and leave config unchanged.
 - When one or more tables match, prompt for confirmation before updating `sqlct.config.json`.
 - If confirmed, add matched tables to `data.trackedTables` in `sqlct.config.json` as explicit `schema.table` entries.
 - Normalize ordering and deduplicate tracked tables case-insensitively.
@@ -150,13 +156,13 @@ Behavior:
 
 #### untrack
 `
-sqlct data untrack <pattern> [--project-dir <path>]
+sqlct data untrack [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
 `
 
 Behavior:
-- Match against existing tracked entries case-insensitively.
+- Match against existing tracked entries using the provided selector.
 - List matched tracked tables in stable sorted order before any config change is made.
-- When `<pattern>` matches no tracked tables, return success with an informational message and leave config unchanged.
+- When the selector matches no tracked tables, return success with an informational message and leave config unchanged.
 - When one or more tracked tables match, prompt for confirmation before updating `sqlct.config.json`.
 - If confirmed, remove matched tracked tables from `data.trackedTables` in `sqlct.config.json`.
 - If confirmation is declined, return success with an informational message and leave config unchanged.
@@ -261,6 +267,8 @@ Result:
 ### Manage tracked data tables
 `
 sqlct data track Sales.* --project-dir ./schema
+sqlct data track --object Sales.Orders --project-dir ./schema
+sqlct data track --filter '^Sales\.' --project-dir ./schema
 sqlct data list --project-dir ./schema
 `
 Result:
