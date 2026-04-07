@@ -533,6 +533,147 @@ public sealed class SyncCommandServiceTests
         }
     }
 
+    [Fact]
+    public void RunStatus_WithInvalidAuthMode_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "kerberos", user: null, password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.Equal("database.auth must be 'integrated' or 'sql'.", result.Error!.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithSqlAuthAndNoUser_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "sql", user: null, password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.Equal("missing required field: database.user for sql authentication.", result.Error!.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithSqlAuthAndEmptyUser_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "sql", user: "  ", password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.False(result.Success);
+            Assert.Equal(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.Equal("missing required field: database.user for sql authentication.", result.Error!.Detail);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithSqlAuthAndValidUser_PassesAuthValidation()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "sql", user: "sa", password: "secret");
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            // Auth validation passes; failure here is a runtime error, not a config validation error.
+            Assert.False(result.Success);
+            Assert.NotEqual(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotEqual(ErrorCodes.InvalidConfig, result.Error!.Code);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_WithIntegratedAuth_PassesAuthValidation()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            WriteConfigWithAuth(projectDir, "integrated", user: null, password: null);
+
+            var service = new SyncCommandService();
+            var result = service.RunStatus(projectDir, "db");
+
+            // Auth validation passes; failure here is a runtime error, not a config validation error.
+            Assert.False(result.Success);
+            Assert.NotEqual(ExitCodes.InvalidConfig, result.ExitCode);
+            Assert.NotEqual(ErrorCodes.InvalidConfig, result.Error!.Code);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    private static void WriteConfigWithAuth(string projectDir, string auth, string? user, string? password)
+    {
+        Directory.CreateDirectory(projectDir);
+        var configPath = Path.Combine(projectDir, "sqlct.config.json");
+        var userLine = user != null ? $"""
+                "user": "{user}",
+        """ : string.Empty;
+        var passwordLine = password != null ? $"""
+                "password": "{password}",
+        """ : string.Empty;
+        File.WriteAllText(configPath, $$"""
+            {
+              "database": {
+                "server": "non-existent-server-for-auth-test",
+                "name": "TestDb",
+                "auth": "{{auth}}",
+                {{userLine}}
+                {{passwordLine}}
+                "trustServerCertificate": true
+              }
+            }
+            """);
+    }
+
     private static string CreateFile(string root, string relativePath, string content)
     {
         var fullPath = Path.Combine(root, relativePath);
