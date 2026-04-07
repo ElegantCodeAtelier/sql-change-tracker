@@ -128,13 +128,6 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<DiffResult>.Failure(projectResult.Error!, projectResult.ExitCode);
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
-        if (!snapshotResult.Success)
-        {
-            return CommandExecutionResult<DiffResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
-        }
-
-        var changes = ComputeChanges(snapshotResult.Payload!, comparisonTarget);
         var sourceLabel = comparisonTarget == ComparisonTarget.Db ? "db" : "folder";
         var targetLabel = comparisonTarget == ComparisonTarget.Db ? "folder" : "db";
 
@@ -146,13 +139,19 @@ internal sealed class SyncCommandService : ISyncCommandService
                 return CommandExecutionResult<DiffResult>.Failure(parsedObject.Error!, parsedObject.ExitCode);
             }
 
-            var selected = SelectObject(snapshotResult.Payload!, parsedObject.Payload!);
+            var selectedSnapshotResult = BuildSelectedObjectSnapshot(projectResult.Payload!, parsedObject.Payload!, progress);
+            if (!selectedSnapshotResult.Success)
+            {
+                return CommandExecutionResult<DiffResult>.Failure(selectedSnapshotResult.Error!, selectedSnapshotResult.ExitCode);
+            }
+
+            var selected = SelectObject(selectedSnapshotResult.Payload!, parsedObject.Payload!);
             if (!selected.Success)
             {
                 return CommandExecutionResult<DiffResult>.Failure(selected.Error!, selected.ExitCode);
             }
 
-            var entry = BuildChangeEntry(snapshotResult.Payload!, comparisonTarget, selected.Payload!);
+            var entry = BuildChangeEntry(selectedSnapshotResult.Payload!, comparisonTarget, selected.Payload!);
             var diff = BuildDiffText(entry, sourceLabel, targetLabel);
 
             var result = new DiffResult(
@@ -161,12 +160,19 @@ internal sealed class SyncCommandService : ISyncCommandService
                 comparisonTarget == ComparisonTarget.Db ? "db" : "folder",
                 selected.Payload!.SelectorDisplayName,
                 diff,
-                snapshotResult.Payload!.Warnings);
+                selectedSnapshotResult.Payload!.Warnings);
 
             var exitCode = string.IsNullOrWhiteSpace(diff) ? ExitCodes.Success : ExitCodes.DiffExists;
             return CommandExecutionResult<DiffResult>.Ok(result, exitCode);
         }
 
+        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
+        if (!snapshotResult.Success)
+        {
+            return CommandExecutionResult<DiffResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
+        }
+
+        var changes = ComputeChanges(snapshotResult.Payload!, comparisonTarget);
         var diffSections = changes
             .Select(change => BuildDiffSection(change, sourceLabel, targetLabel))
             .Where(section => !string.IsNullOrWhiteSpace(section))
@@ -432,6 +438,34 @@ internal sealed class SyncCommandService : ISyncCommandService
             new ComparisonSnapshot(dbResult.Payload!.Objects, folderResult.Payload!.Objects, warnings),
             ExitCodes.Success);
     }
+
+    private CommandExecutionResult<ComparisonSnapshot> BuildSelectedObjectSnapshot(
+        ProjectContext context,
+        ObjectSelector selector,
+        Action<string>? progress = null)
+    {
+        progress?.Invoke("Scanning schema folder...");
+        var folderResult = ScanFolder(context.ProjectDir);
+        if (!folderResult.Success)
+        {
+            return CommandExecutionResult<ComparisonSnapshot>.Failure(folderResult.Error!, folderResult.ExitCode);
+        }
+
+        var dbResult = ScanDatabaseForSelector(context, selector, progress);
+        if (!dbResult.Success)
+        {
+            return CommandExecutionResult<ComparisonSnapshot>.Failure(dbResult.Error!, dbResult.ExitCode);
+        }
+
+        var warnings = folderResult.Payload!.Warnings.Concat(dbResult.Payload!.Warnings)
+            .OrderBy(entry => entry.Code, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.Message, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return CommandExecutionResult<ComparisonSnapshot>.Ok(
+            new ComparisonSnapshot(dbResult.Payload!.Objects, folderResult.Payload!.Objects, warnings),
+            ExitCodes.Success);
+    }
     private CommandExecutionResult<ScanResult> ScanFolder(string projectDir)
     {
         var objects = new Dictionary<string, InternalObject>(StringComparer.OrdinalIgnoreCase);
@@ -682,6 +716,157 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, warnings), ExitCodes.Success);
+    }
+
+    private CommandExecutionResult<ScanResult> ScanDatabaseForSelector(
+        ProjectContext context,
+        ObjectSelector selector,
+        Action<string>? progress = null)
+    {
+        var dop = SqlServerIntrospector.ResolveParallelism(context.Config.Options.Parallelism);
+
+        progress?.Invoke("Connecting to database...");
+        IReadOnlyList<DbObjectInfo> matchedObjects;
+        try
+        {
+            matchedObjects = _introspector.ListMatchingObjects(
+                context.ConnectionOptions,
+                GetCandidateDbObjectTypes(selector),
+                selector.Schema,
+                selector.Name,
+                dop);
+        }
+        catch (Exception ex)
+        {
+            return ToRuntimeFailure<ScanResult>(ex, "failed to read database objects.");
+        }
+
+        var objects = new ConcurrentDictionary<string, InternalObject>(StringComparer.OrdinalIgnoreCase);
+        CommandExecutionResult<ScanResult>? firstFailure = null;
+
+        if (string.Equals(selector.ObjectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase))
+        {
+            var trackedTableKeys = new HashSet<string>(
+                context.Config.Data.TrackedTables,
+                StringComparer.OrdinalIgnoreCase);
+            var trackedName = FormatDisplayName(selector.Schema, selector.Name);
+            if (!trackedTableKeys.Contains(trackedName))
+            {
+                return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, []), ExitCodes.Success);
+            }
+
+            var trackedTables = matchedObjects
+                .Where(item => string.Equals(item.ObjectType, "Table", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var dataScriptIndex = 0;
+            var dataScriptTotal = trackedTables.Length;
+            Parallel.ForEach(trackedTables, new ParallelOptions { MaxDegreeOfParallelism = dop }, (table, loopState) =>
+            {
+                if (firstFailure != null)
+                {
+                    loopState.Stop();
+                    return;
+                }
+
+                var index = Interlocked.Increment(ref dataScriptIndex);
+                progress?.Invoke($"Scripting data ({index}/{dataScriptTotal}): {FormatDisplayName(table.Schema, table.Name)}");
+
+                var relativePath = _mapper.GetObjectPath(
+                    table.ObjectType,
+                    new ObjectIdentifier(table.Schema, table.Name),
+                    isData: true);
+                var fullPath = Path.Combine(context.ProjectDir, relativePath);
+
+                string script;
+                try
+                {
+                    script = _scripter.ScriptTableData(context.ConnectionOptions, new ObjectIdentifier(table.Schema, table.Name));
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref firstFailure, ToRuntimeFailure<ScanResult>(ex, "failed to script data from database."), null);
+                    loopState.Stop();
+                    return;
+                }
+
+                var key = BuildObjectKey(TableDataObjectType, table.Schema, table.Name);
+                objects.TryAdd(key, new InternalObject(
+                    key,
+                    table.Schema,
+                    table.Name,
+                    TableDataObjectType,
+                    script,
+                    relativePath,
+                    fullPath));
+            });
+        }
+        else
+        {
+            var total = matchedObjects.Count;
+            var scriptIndex = 0;
+
+            Parallel.ForEach(matchedObjects, new ParallelOptions { MaxDegreeOfParallelism = dop }, (dbObject, loopState) =>
+            {
+                if (firstFailure != null)
+                {
+                    loopState.Stop();
+                    return;
+                }
+
+                var index = Interlocked.Increment(ref scriptIndex);
+                progress?.Invoke($"Scripting objects ({index}/{total}): {FormatDisplayName(dbObject.Schema, dbObject.Name)}");
+
+                string relativePath;
+                try
+                {
+                    relativePath = _mapper.GetObjectPath(
+                        dbObject.ObjectType,
+                        new ObjectIdentifier(dbObject.Schema, dbObject.Name),
+                        isData: false);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref firstFailure, ToRuntimeFailure<ScanResult>(ex, "failed to map object path."), null);
+                    loopState.Stop();
+                    return;
+                }
+
+                var fullPath = Path.Combine(context.ProjectDir, relativePath);
+                var referencePath = File.Exists(fullPath) ? fullPath : null;
+
+                string script;
+                try
+                {
+                    script = _scripter.ScriptObject(context.ConnectionOptions, dbObject, referencePath);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref firstFailure, ToRuntimeFailure<ScanResult>(ex, "failed to script object from database."), null);
+                    loopState.Stop();
+                    return;
+                }
+
+                var key = BuildObjectKey(dbObject.ObjectType, dbObject.Schema, dbObject.Name);
+                objects.TryAdd(key, new InternalObject(
+                    key,
+                    dbObject.Schema,
+                    dbObject.Name,
+                    dbObject.ObjectType,
+                    script,
+                    relativePath,
+                    fullPath));
+            });
+        }
+
+        if (firstFailure != null)
+        {
+            return firstFailure;
+        }
+
+        return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, []), ExitCodes.Success);
     }
 
     private CommandExecutionResult<ScanResult> ScanDataFolder(
@@ -1295,6 +1480,24 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     private static bool ScriptsEqualForComparison(string left, string right)
         => string.Equals(NormalizeForComparison(left), NormalizeForComparison(right), StringComparison.Ordinal);
+
+    private static IReadOnlyList<string> GetCandidateDbObjectTypes(ObjectSelector selector)
+    {
+        if (string.Equals(selector.ObjectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase))
+        {
+            return ["Table"];
+        }
+
+        if (selector.ObjectType is not null)
+        {
+            return [selector.ObjectType];
+        }
+
+        return SupportedSqlObjectTypes.ActiveSync
+            .Where(entry => entry.IsSchemaLess == selector.IsSchemaLess)
+            .Select(entry => entry.ObjectType)
+            .ToArray();
+    }
 
     internal static string NormalizeForComparison(string script)
     {

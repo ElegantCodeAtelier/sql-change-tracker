@@ -183,6 +183,7 @@ sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>]
 Behavior:
 - Compare object script from DB vs folder.
 - `--object` mode diffs one object and validates uniqueness across active object types.
+- In `--object` mode, database discovery and scripting MUST be limited to the selector-matching candidate object set rather than scanning the full active database object set.
 - Without `--object`, output concatenated per-object diffs in stable order.
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
