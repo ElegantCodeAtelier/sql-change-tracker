@@ -851,10 +851,12 @@ ORDER BY rv.boundary_id";
         command.Parameters.AddWithValue("@functionId", functionId);
 
         var values = new List<string>();
-        using var valueReader = command.ExecuteReader();
-        while (valueReader.Read())
+        using (var valueReader = command.ExecuteReader())
         {
-            values.Add(valueReader.GetValue(0).ToString() ?? string.Empty);
+            while (valueReader.Read())
+            {
+                values.Add(valueReader.GetValue(0).ToString() ?? string.Empty);
+            }
         }
 
         var valuesList = values.Count == 0 ? string.Empty : string.Join(", ", values);
@@ -940,10 +942,12 @@ ORDER BY dds.destination_id";
         command.Parameters.AddWithValue("@dataSpaceId", dataSpaceId);
 
         var groups = new List<string>();
-        using var groupReader = command.ExecuteReader();
-        while (groupReader.Read())
+        using (var groupReader = command.ExecuteReader())
         {
-            groups.Add($"[{groupReader.GetString(0)}]");
+            while (groupReader.Read())
+            {
+                groups.Add($"[{groupReader.GetString(0)}]");
+            }
         }
 
         var groupList = groups.Count == 0 ? string.Empty : string.Join(", ", groups);
@@ -1037,10 +1041,12 @@ WHERE s.name = @schema AND tt.name = @name;";
         command.Parameters.AddWithValue("@schema", obj.Schema);
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Table type not found: {fullName}.");
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Table type not found: {fullName}.");
+            }
         }
 
         var columns = ReadTableColumns(connection, fullName, null);
@@ -1689,15 +1695,20 @@ JOIN sys.external_file_formats ff ON ff.file_format_id = et.file_format_id
 WHERE et.object_id = OBJECT_ID(@full);";
         command.Parameters.AddWithValue("@full", fullName);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        string location;
+        string dataSource;
+        string fileFormat;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"External table not found: {fullName}.");
-        }
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"External table not found: {fullName}.");
+            }
 
-        var location = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-        var dataSource = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-        var fileFormat = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            location = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+            dataSource = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            fileFormat = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+        }
 
         var columns = ReadTableColumns(connection, fullName, null);
         var lines = new List<string>
