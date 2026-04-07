@@ -1,4 +1,6 @@
 using SqlChangeTracker.Config;
+using SqlChangeTracker.Commands;
+using SqlChangeTracker.Sql;
 using Xunit;
 
 namespace SqlChangeTracker.Tests.Commands;
@@ -135,6 +137,188 @@ public sealed class InitAndConfigCommandTests
     }
 
     [Fact]
+    public void Init_WithoutProjectDir_WhenAccepted_CreatesProjectStructureAndConfig()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            // Answer "y" to directory confirmation; interactive connection prompts are
+            // skipped because stdin is not a TTY in the test environment.
+            Console.SetIn(new StringReader("y" + Environment.NewLine));
+
+            var exitCode = Program.Main(["init"]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+            Assert.True(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithServerAndDatabaseFlags_WritesConnectionDetailsToConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            var exitCode = Program.Main([
+                "init",
+                "--project-dir", projectDir,
+                "--server", "myserver",
+                "--database", "mydb",
+                "--auth", "integrated",
+                "--skip-connection-test"
+            ]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+
+            var configPath = Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName);
+            Assert.True(File.Exists(configPath));
+
+            var configJson = File.ReadAllText(configPath);
+            Assert.Contains("myserver", configJson);
+            Assert.Contains("mydb", configJson);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithServerFlag_AndSkipConnectionTest_ReturnsSuccess()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            var exitCode = Program.Main([
+                "init",
+                "--project-dir", projectDir,
+                "--server", "myserver",
+                "--database", "mydb",
+                "--skip-connection-test"
+            ]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithSqlAuth_WritesUserToConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            var exitCode = Program.Main([
+                "init",
+                "--project-dir", projectDir,
+                "--server", "myserver",
+                "--database", "mydb",
+                "--auth", "sql",
+                "--user", "sa",
+                "--password", "secret",
+                "--skip-connection-test"
+            ]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+
+            var configJson = File.ReadAllText(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName));
+            Assert.Contains("\"sql\"", configJson);
+            Assert.Contains("sa", configJson);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithServerFlag_WhenConnectionFails_StillReturnsSuccess()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "Connection refused by server.");
+            try
+            {
+                var exitCode = Program.Main([
+                    "init",
+                    "--project-dir", projectDir,
+                    "--server", "myserver",
+                    "--database", "mydb"
+                ]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+                Assert.True(File.Exists(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName)));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithServerFlag_WhenConnectionSucceeds_ReturnsSuccess()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(true, null);
+            try
+            {
+                var exitCode = Program.Main([
+                    "init",
+                    "--project-dir", projectDir,
+                    "--server", "myserver",
+                    "--database", "mydb"
+                ]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void Config_WhenConfigMissing_ReturnsInvalidConfig()
     {
         var tempDir = CreateTempDir();
@@ -190,4 +374,19 @@ public sealed class InitAndConfigCommandTests
             Directory.Delete(tempDir, true);
         }
     }
+}
+
+file sealed class StubConnectionTester : IConnectionTester
+{
+    private readonly bool _success;
+    private readonly string? _errorMessage;
+
+    public StubConnectionTester(bool success, string? errorMessage)
+    {
+        _success = success;
+        _errorMessage = errorMessage;
+    }
+
+    public ConnectionTestResult Test(SqlConnectionOptions options)
+        => new(_success, _errorMessage);
 }

@@ -80,7 +80,11 @@ internal sealed class OutputFormatter
                 result.Command,
                 result.ProjectDir,
                 result.Created,
-                result.Skipped
+                result.Skipped,
+                connectionTest = result.ConnectionTest != null
+                    ? new { result.ConnectionTest.Success, result.ConnectionTest.ErrorMessage }
+                    : (object?)null,
+                nextSteps = result.NextSteps
             };
             WriteJson(payload);
             return;
@@ -110,6 +114,26 @@ internal sealed class OutputFormatter
             foreach (var skipped in result.Skipped)
             {
                 Console.WriteLine($"  {skipped}");
+            }
+        }
+
+        if (result.ConnectionTest != null)
+        {
+            Console.WriteLine(result.ConnectionTest.Success
+                ? "Connection test: ok"
+                : "Connection test: failed");
+            if (!result.ConnectionTest.Success && !string.IsNullOrWhiteSpace(result.ConnectionTest.ErrorMessage))
+            {
+                Console.WriteLine($"  {result.ConnectionTest.ErrorMessage}");
+            }
+        }
+
+        if (result.NextSteps != null && result.NextSteps.Count > 0)
+        {
+            Console.WriteLine("Next steps:");
+            foreach (var step in result.NextSteps)
+            {
+                Console.WriteLine($"  {step}");
             }
         }
     }

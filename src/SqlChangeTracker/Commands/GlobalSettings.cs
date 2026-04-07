@@ -26,6 +26,26 @@ internal sealed class ConfigCommandSettings : ProjectCommandSettings
 
 internal sealed class InitCommandSettings : ProjectCommandSettings
 {
+    [CommandOption("--server <SERVER>")]
+    public string? Server { get; set; }
+
+    [CommandOption("--database <DATABASE>")]
+    public string? Database { get; set; }
+
+    [CommandOption("--auth <AUTH>")]
+    public string? Auth { get; set; }
+
+    [CommandOption("--user <USER>")]
+    public string? User { get; set; }
+
+    [CommandOption("--password <PASSWORD>")]
+    public string? Password { get; set; }
+
+    [CommandOption("--trust-server-certificate")]
+    public bool TrustServerCertificate { get; set; }
+
+    [CommandOption("--skip-connection-test")]
+    public bool SkipConnectionTest { get; set; }
 }
 
 internal class StatusCommandSettings : ProjectCommandSettings

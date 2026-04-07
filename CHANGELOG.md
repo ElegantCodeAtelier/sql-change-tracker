@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `sqlct init` now prompts interactively for connection details (server, database, auth, credentials, trust-server-certificate) when run without flags in a new project directory.
+- Connection flags (`--server`, `--database`, `--auth`, `--user`, `--password`, `--trust-server-certificate`) for non-interactive/scripted `init` use.
+- `--skip-connection-test` flag for `sqlct init` to bypass the connection test step.
+- After `sqlct init`, a connection test is attempted when a server is configured, reporting success or failure with troubleshooting tips.
+- Next-steps suggestions are printed after `sqlct init` to guide users toward `pull`, `status`, and `diff`.
+
 ## [0.2.1] - 2026-04-07
 
 ### Added
