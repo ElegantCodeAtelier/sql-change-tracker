@@ -12,9 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add `--filter <pattern>` to `sqlct pull` for regex-based filtering; multiple patterns may be provided and matching is case-insensitive (#35).
 - Add `--filter <pattern>` to `sqlct diff` for regex-based filtering; without `--object` filters the output to matching objects, with `--object` additionally constrains the single-object result (#35).
 - SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
+- Support additional active object types: `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
 
 ### Changed
 - In `diff --object` mode, database discovery and scripting are now limited to the selector-matching candidate set instead of scanning the full active object set, improving performance for targeted diffs (#28).
+- Extend scripting for the newly supported securables to emit permissions and extended properties where SQL Server exposes them, with platform-limited cases documented in specs and package docs.
+
+### Fixed
+- Close additional `SqlDataReader` scopes in object-type scripting paths to avoid `There is already an open DataReader associated with this Connection` failures during `status`, `diff`, and `pull`.
 
 ## [0.2.1] - 2026-04-07
 
