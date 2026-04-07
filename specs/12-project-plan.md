@@ -13,6 +13,7 @@ This plan reflects the current repository state and defines execution order to r
   - `database` (existing fields)
   - `options.parallelism`
 - Deprecated runtime fields are removed from current contract:
+  - `options.orderByDependencies`
   - `options.includeSchemas`
   - `options.excludeObjects`
   - `options.comparison.*`

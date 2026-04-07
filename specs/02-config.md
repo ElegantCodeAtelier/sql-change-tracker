@@ -51,6 +51,7 @@ Current shape:
 - Deprecated fields are tolerated on read and omitted on rewrite.
 
 Deprecated runtime fields removed from v1 contract:
+- `options.orderByDependencies`
 - `options.includeSchemas`
 - `options.excludeObjects`
 - `options.comparison.*`
