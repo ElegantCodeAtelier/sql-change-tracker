@@ -148,7 +148,7 @@ public sealed class InitAndConfigCommandTests
             Environment.CurrentDirectory = tempDir;
             // Use a stub connection tester to avoid slow real-connection attempts.
             // Interactive prompts receive null/default responses (stdin exhausted after "y").
-            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "no server");
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(true, null);
             try
             {
                 // "y" answers the directory confirmation; subsequent prompts receive
@@ -317,7 +317,89 @@ public sealed class InitAndConfigCommandTests
 
 
     [Fact]
-    public void Init_WithServerFlag_WhenConnectionFails_StillReturnsSuccess()
+    public void Init_Interactive_ConnectionFailed_ProceedDeclined_NoFilesCreated()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "Connection refused.");
+            try
+            {
+                // "y" confirms directory; empty lines use prompt defaults; "n" declines proceed-anyway.
+                Console.SetIn(new StringReader(
+                    "y" + Environment.NewLine +   // confirm directory
+                    Environment.NewLine +          // server → localhost
+                    Environment.NewLine +          // database → empty
+                    Environment.NewLine +          // auth → integrated
+                    Environment.NewLine +          // trust cert → n
+                    "n" + Environment.NewLine));   // proceed anyway → no
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+                Assert.False(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+                Assert.False(Directory.Exists(Path.Combine(tempDir, "Tables")));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_Interactive_ConnectionFailed_ProceedConfirmed_CreatesFiles()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "Connection refused.");
+            try
+            {
+                // "y" confirms directory; empty lines use prompt defaults; "y" confirms proceed-anyway.
+                Console.SetIn(new StringReader(
+                    "y" + Environment.NewLine +   // confirm directory
+                    Environment.NewLine +          // server → localhost
+                    Environment.NewLine +          // database → empty
+                    Environment.NewLine +          // auth → integrated
+                    Environment.NewLine +          // trust cert → n
+                    "y" + Environment.NewLine));   // proceed anyway → yes
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+                Assert.True(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+                Assert.True(Directory.Exists(Path.Combine(tempDir, "Tables")));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_NonInteractive_ConnectionFailed_CreatesFiles()
     {
         var tempDir = CreateTempDir();
 

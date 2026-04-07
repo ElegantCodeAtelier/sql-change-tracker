@@ -21,6 +21,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         var resolvedProjectDir = ProjectPathResolver.Resolve(settings.ProjectDir);
         var projectDir = resolvedProjectDir.FullPath;
         var displayProjectDir = resolvedProjectDir.DisplayPath;
+        var isInteractive = projectDirFromCurrentDirectory && !settings.Json;
 
         if (projectDirFromCurrentDirectory && !ConfirmCurrentDirectory(displayProjectDir))
         {
@@ -31,22 +32,46 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             return ExitCodes.InvalidConfig;
         }
 
-        var projectSeeder = new BaselineProjectSeeder();
-        var projectSeedResult = projectSeeder.Seed(projectDir);
-        if (!projectSeedResult.Success)
-        {
-            output.WriteError(new ErrorResult("init", projectSeedResult.Error!));
-            return projectSeedResult.ExitCode;
-        }
-
         var connectionSetup = ResolveConnectionSetup(settings,
-            promptInteractively: projectDirFromCurrentDirectory && string.IsNullOrWhiteSpace(settings.Server) && !settings.Json);
+            promptInteractively: isInteractive && string.IsNullOrWhiteSpace(settings.Server));
 
         var authValidation = ValidateConnectionSetup(connectionSetup);
         if (!authValidation.Success)
         {
             output.WriteError(new ErrorResult("init", authValidation.Error!));
             return authValidation.ExitCode;
+        }
+
+        // Run connection test before creating any files so that a bad configuration
+        // is caught early and the user is not left with a partially-initialised directory.
+        InitConnectionTestResult? connectionTestResult = null;
+        if (!settings.SkipConnectionTest && !string.IsNullOrWhiteSpace(connectionSetup.Server))
+        {
+            connectionTestResult = RunConnectionTest(connectionSetup, GetConnectionTester());
+            if (!connectionTestResult.Success)
+            {
+                if (!settings.Json)
+                {
+                    PrintConnectionFailureHints(connectionSetup);
+                }
+
+                if (isInteractive && !ConfirmProceedDespiteFailure())
+                {
+                    output.WriteError(new ErrorResult("init", new ErrorInfo(
+                        ErrorCodes.InvalidConfig,
+                        "init cancelled.",
+                        Detail: "connection test failed. Fix your connection settings and run 'sqlct init' again.")));
+                    return ExitCodes.InvalidConfig;
+                }
+            }
+        }
+
+        var projectSeeder = new BaselineProjectSeeder();
+        var projectSeedResult = projectSeeder.Seed(projectDir);
+        if (!projectSeedResult.Success)
+        {
+            output.WriteError(new ErrorResult("init", projectSeedResult.Error!));
+            return projectSeedResult.ExitCode;
         }
 
         var config = BuildConfig(connectionSetup);
@@ -57,16 +82,6 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         {
             output.WriteError(new ErrorResult("init", configResult.Error!));
             return configResult.ExitCode;
-        }
-
-        InitConnectionTestResult? connectionTestResult = null;
-        if (!settings.SkipConnectionTest && !string.IsNullOrWhiteSpace(connectionSetup.Server))
-        {
-            connectionTestResult = RunConnectionTest(connectionSetup, GetConnectionTester());
-            if (!connectionTestResult.Success && !settings.Json)
-            {
-                PrintConnectionFailureHints(connectionSetup);
-            }
         }
 
         var nextSteps = GetNextSteps(connectionTestResult);
@@ -275,6 +290,14 @@ internal sealed class InitCommand : Command<InitCommandSettings>
     private static bool ConfirmCurrentDirectory(string displayProjectDir)
     {
         Console.Write($"Initialize project in current directory '{displayProjectDir}'? [y/N]: ");
+        var response = Console.ReadLine();
+        return string.Equals(response?.Trim(), "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(response?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ConfirmProceedDespiteFailure()
+    {
+        Console.Write("Proceed anyway? [y/N]: ");
         var response = Console.ReadLine();
         return string.Equals(response?.Trim(), "y", StringComparison.OrdinalIgnoreCase)
             || string.Equals(response?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
