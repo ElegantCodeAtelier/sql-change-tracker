@@ -496,16 +496,20 @@ public sealed class SyncCommandServiceTests
     {
         Directory.CreateDirectory(projectDir);
         var configPath = Path.Combine(projectDir, "sqlct.config.json");
-        var userValue = user ?? string.Empty;
-        var passwordValue = password ?? string.Empty;
+        var userLine = user != null ? $"""
+                "user": "{user}",
+        """ : string.Empty;
+        var passwordLine = password != null ? $"""
+                "password": "{password}",
+        """ : string.Empty;
         File.WriteAllText(configPath, $$"""
             {
               "database": {
                 "server": "non-existent-server-for-auth-test",
                 "name": "TestDb",
                 "auth": "{{auth}}",
-                "user": "{{userValue}}",
-                "password": "{{passwordValue}}",
+                {{userLine}}
+                {{passwordLine}}
                 "trustServerCertificate": true
               }
             }
