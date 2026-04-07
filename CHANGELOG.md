@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--skip-connection-test` flag for `sqlct init` to bypass the connection test step.
 - After `sqlct init`, a connection test is attempted when a server is configured, reporting success or failure with troubleshooting tips.
 - Next-steps suggestions are printed after `sqlct init` to guide users toward `pull`, `status`, and `diff`.
+- Add `--object <selector>` to `sqlct pull` for exact-match filtering using the same selector forms as `diff --object` (#35).
+- Add `--filter <pattern>` to `sqlct pull` for regex-based filtering; multiple patterns may be provided and matching is case-insensitive (#35).
+- Add `--filter <pattern>` to `sqlct diff` for regex-based filtering; without `--object` filters the output to matching objects, with `--object` additionally constrains the single-object result (#35).
 - SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
 
 ### Changed
