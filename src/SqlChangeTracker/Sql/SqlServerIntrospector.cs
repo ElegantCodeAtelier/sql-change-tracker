@@ -72,13 +72,17 @@ WHERE s.name NOT IN ('sys','INFORMATION_SCHEMA')
 ORDER BY s.name, x.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT 'dbo' AS schema_name, mt.name AS object_name, 'MT' AS type
+SELECT '' AS schema_name, mt.name AS object_name, 'MT' AS type
 FROM sys.service_message_types mt
+WHERE mt.name <> 'DEFAULT'
+  AND mt.name NOT LIKE 'http://schemas.microsoft.com/SQL/%'
 ORDER BY mt.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT 'dbo' AS schema_name, c.name AS object_name, 'CT' AS type
+SELECT '' AS schema_name, c.name AS object_name, 'CT' AS type
 FROM sys.service_contracts c
+WHERE c.name <> 'DEFAULT'
+  AND c.name NOT LIKE 'http://schemas.microsoft.com/SQL/%'
 ORDER BY c.name;", MapObjectType),
 
             () => RunQuery(options, @"
@@ -86,41 +90,45 @@ SELECT s.name AS schema_name, q.name AS object_name, 'Q' AS type
 FROM sys.service_queues q
 JOIN sys.objects o ON o.object_id = q.object_id
 JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE q.name NOT IN ('ServiceBrokerQueue', 'QueryNotificationErrorsQueue', 'EventNotificationErrorsQueue')
 ORDER BY s.name, q.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT 'dbo' AS schema_name, sv.name AS object_name, 'SRV' AS type
+SELECT '' AS schema_name, sv.name AS object_name, 'SRV' AS type
 FROM sys.services sv
+WHERE sv.name NOT LIKE 'http://schemas.microsoft.com/SQL/%'
 ORDER BY sv.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT 'dbo' AS schema_name, r.name AS object_name, 'ROUTE' AS type
+SELECT '' AS schema_name, r.name AS object_name, 'ROUTE' AS type
 FROM sys.routes r
+WHERE r.name <> 'AutoCreatedLocal'
 ORDER BY r.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT 'dbo' AS schema_name, en.name AS object_name, 'EN' AS type
+SELECT '' AS schema_name, en.name AS object_name, 'EN' AS type
 FROM sys.event_notifications en
 ORDER BY en.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT 'dbo' AS schema_name, rsb.name AS object_name, 'RSB' AS type
+SELECT '' AS schema_name, rsb.name AS object_name, 'RSB' AS type
 FROM sys.remote_service_bindings rsb
 ORDER BY rsb.name;", MapObjectType),
 
             () => RunQueryIfExists(options, "sys.fulltext_catalogs", @"
-SELECT 'dbo' AS schema_name, fc.name AS object_name, 'FTC' AS type
+SELECT '' AS schema_name, fc.name AS object_name, 'FTC' AS type
 FROM sys.fulltext_catalogs fc
 ORDER BY fc.name;", MapObjectType),
 
             () => RunQueryIfExists(options, "sys.fulltext_stoplists", @"
-SELECT 'dbo' AS schema_name, fs.name AS object_name, 'FTS' AS type
+SELECT '' AS schema_name, fs.name AS object_name, 'FTS' AS type
 FROM sys.fulltext_stoplists fs
+WHERE fs.stoplist_id > 0
 ORDER BY fs.name;", MapObjectType),
 
-            () => RunQueryIfExists(options, "sys.fulltext_search_property_lists", @"
-SELECT 'dbo' AS schema_name, sp.name AS object_name, 'SPL' AS type
-FROM sys.fulltext_search_property_lists sp
+            () => RunQueryIfExists(options, "sys.registered_search_property_lists", @"
+SELECT '' AS schema_name, sp.name AS object_name, 'SPL' AS type
+FROM sys.registered_search_property_lists sp
 ORDER BY sp.name;", MapObjectType),
 
             () => RunQueryIfExists(options, "sys.security_policies", @"
@@ -464,6 +472,104 @@ ORDER BY s.name, t.name;
                 command.Parameters.AddWithValue("@name", name);
                 break;
 
+            case "TableType":
+                command.CommandText = """
+SELECT s.name AS schema_name, tt.name AS object_name
+FROM sys.table_types tt
+JOIN sys.schemas s ON s.schema_id = tt.schema_id
+WHERE s.name = @schema
+  AND tt.name = @name
+ORDER BY s.name, tt.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "XmlSchemaCollection":
+                command.CommandText = """
+SELECT s.name AS schema_name, x.name AS object_name
+FROM sys.xml_schema_collections x
+JOIN sys.schemas s ON s.schema_id = x.schema_id
+WHERE s.name = @schema
+  AND x.name = @name
+  AND s.name NOT IN ('sys','INFORMATION_SCHEMA')
+ORDER BY s.name, x.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "MessageType":
+                command.CommandText = """
+SELECT '' AS schema_name, mt.name AS object_name
+FROM sys.service_message_types mt
+WHERE mt.name = @name
+  AND mt.name <> 'DEFAULT'
+  AND mt.name NOT LIKE 'http://schemas.microsoft.com/SQL/%'
+ORDER BY mt.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Contract":
+                command.CommandText = """
+SELECT '' AS schema_name, c.name AS object_name
+FROM sys.service_contracts c
+WHERE c.name = @name
+  AND c.name <> 'DEFAULT'
+  AND c.name NOT LIKE 'http://schemas.microsoft.com/SQL/%'
+ORDER BY c.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Queue":
+                command.CommandText = """
+SELECT s.name AS schema_name, q.name AS object_name
+FROM sys.service_queues q
+JOIN sys.objects o ON o.object_id = q.object_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE s.name = @schema
+  AND q.name = @name
+  AND q.name NOT IN ('ServiceBrokerQueue', 'QueryNotificationErrorsQueue', 'EventNotificationErrorsQueue')
+ORDER BY s.name, q.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Service":
+                command.CommandText = """
+SELECT '' AS schema_name, sv.name AS object_name
+FROM sys.services sv
+WHERE sv.name = @name
+  AND sv.name NOT LIKE 'http://schemas.microsoft.com/SQL/%'
+ORDER BY sv.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "Route":
+                command.CommandText = """
+SELECT '' AS schema_name, r.name AS object_name
+FROM sys.routes r
+WHERE r.name = @name
+  AND r.name <> 'AutoCreatedLocal'
+ORDER BY r.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "EventNotification":
+                command.CommandText = """
+SELECT '' AS schema_name, en.name AS object_name
+FROM sys.event_notifications en
+WHERE en.name = @name
+ORDER BY en.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
             case "Role":
                 command.CommandText = """
 SELECT '' AS schema_name, dp.name AS object_name
@@ -482,6 +588,16 @@ WHERE dp.type = 'R'
     )
   )
 ORDER BY dp.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "ServiceBinding":
+                command.CommandText = """
+SELECT '' AS schema_name, rsb.name AS object_name
+FROM sys.remote_service_bindings rsb
+WHERE rsb.name = @name
+ORDER BY rsb.name;
 """;
                 command.Parameters.AddWithValue("@name", name);
                 break;
@@ -514,6 +630,42 @@ SELECT '' AS schema_name, ps.name AS object_name
 FROM sys.partition_schemes ps
 WHERE ps.name = @name
 ORDER BY ps.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "FullTextCatalog":
+                command.CommandText = """
+SELECT '' AS schema_name, fc.name AS object_name
+FROM sys.fulltext_catalogs fc
+WHERE fc.name = @name
+ORDER BY fc.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "FullTextStoplist":
+                command.CommandText = """
+SELECT '' AS schema_name, fs.name AS object_name
+FROM sys.fulltext_stoplists fs
+WHERE fs.name = @name
+  AND fs.stoplist_id > 0
+ORDER BY fs.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
+            case "SearchPropertyList":
+                if (!ObjectExists(connection, "sys.registered_search_property_lists"))
+                {
+                    yield break;
+                }
+
+                command.CommandText = """
+SELECT '' AS schema_name, sp.name AS object_name
+FROM sys.registered_search_property_lists sp
+WHERE sp.name = @name
+ORDER BY sp.name;
 """;
                 command.Parameters.AddWithValue("@name", name);
                 break;

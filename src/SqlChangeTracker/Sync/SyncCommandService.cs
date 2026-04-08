@@ -1441,7 +1441,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         if (isSchemaLess)
         {
             schema = string.Empty;
-            name = fileNameWithoutExtension.Trim();
+            name = UnescapeFileNamePart(fileNameWithoutExtension.Trim());
             return name.Length > 0;
         }
 
@@ -1471,10 +1471,42 @@ internal sealed class SyncCommandService : ISyncCommandService
             return false;
         }
 
-        schema = fileNameWithoutExtension[..separatorIndex];
-        name = fileNameWithoutExtension[(separatorIndex + 1)..];
+        schema = UnescapeFileNamePart(fileNameWithoutExtension[..separatorIndex]);
+        name = UnescapeFileNamePart(fileNameWithoutExtension[(separatorIndex + 1)..]);
         return schema.Length > 0 && name.Length > 0;
     }
+
+    internal static string UnescapeFileNamePart(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var builder = new StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] == '%' &&
+                i + 2 < value.Length &&
+                IsHexDigit(value[i + 1]) &&
+                IsHexDigit(value[i + 2]))
+            {
+                var decoded = Convert.ToInt32(value.Substring(i + 1, 2), 16);
+                builder.Append((char)decoded);
+                i += 2;
+                continue;
+            }
+
+            builder.Append(value[i]);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsHexDigit(char value)
+        => (value >= '0' && value <= '9')
+           || (value >= 'A' && value <= 'F')
+           || (value >= 'a' && value <= 'f');
 
     internal static IReadOnlyList<ComparableChange> ComputeChangesForComparison(
         IReadOnlyList<ComparableObject> source,

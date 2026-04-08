@@ -78,17 +78,17 @@ internal class SqlServerScripter
             "Synonym" => ScriptSynonym(connection, obj, referenceLines),
             "UserDefinedType" => ScriptUserDefinedType(connection, obj, referenceLines),
             "TableType" => ScriptTableType(connection, obj),
-            "XmlSchemaCollection" => ScriptXmlSchemaCollection(connection, obj),
-            "MessageType" => ScriptMessageType(connection, obj),
-            "Contract" => ScriptContract(connection, obj),
-            "Queue" => ScriptQueue(connection, obj),
-            "Service" => ScriptService(connection, obj),
-            "Route" => ScriptRoute(connection, obj),
-            "EventNotification" => ScriptEventNotification(connection, obj),
-            "ServiceBinding" => ScriptServiceBinding(connection, obj),
-            "FullTextCatalog" => ScriptFullTextCatalog(connection, obj),
-            "FullTextStoplist" => ScriptFullTextStoplist(connection, obj),
-            "SearchPropertyList" => ScriptSearchPropertyList(connection, obj),
+            "XmlSchemaCollection" => ScriptXmlSchemaCollection(connection, obj, referenceLines),
+            "MessageType" => ScriptMessageType(connection, obj, referenceLines),
+            "Contract" => ScriptContract(connection, obj, referenceLines),
+            "Queue" => ScriptQueue(connection, obj, referenceLines),
+            "Service" => ScriptService(connection, obj, referenceLines),
+            "Route" => ScriptRoute(connection, obj, referenceLines),
+            "EventNotification" => ScriptEventNotification(connection, obj, referenceLines),
+            "ServiceBinding" => ScriptServiceBinding(connection, obj, referenceLines),
+            "FullTextCatalog" => ScriptFullTextCatalog(connection, obj, referenceLines),
+            "FullTextStoplist" => ScriptFullTextStoplist(connection, obj, referenceLines),
+            "SearchPropertyList" => ScriptSearchPropertyList(connection, obj, referenceLines),
             "SecurityPolicy" => ScriptSecurityPolicy(connection, obj),
             "ExternalDataSource" => ScriptExternalDataSource(connection, obj),
             "ExternalFileFormat" => ScriptExternalFileFormat(connection, obj),
@@ -1031,35 +1031,42 @@ WHERE t.is_user_defined = 1 AND t.is_table_type = 0 AND s.name = @schema AND t.n
 
     private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj)
     {
-        var fullName = $"[{obj.Schema}].[{obj.Name}]";
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT tt.name, s.name AS schema_name
+SELECT tt.name, s.name AS schema_name, tt.type_table_object_id
 FROM sys.table_types tt
 JOIN sys.schemas s ON s.schema_id = tt.schema_id
 WHERE s.name = @schema AND tt.name = @name;";
         command.Parameters.AddWithValue("@schema", obj.Schema);
         command.Parameters.AddWithValue("@name", obj.Name);
 
+        var fullName = $"{QuoteIdentifier(obj.Schema)}.{QuoteIdentifier(obj.Name)}";
+        int tableObjectId;
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read())
             {
                 throw new InvalidOperationException($"Table type not found: {fullName}.");
             }
+
+            tableObjectId = reader.GetInt32(2);
         }
 
-        var columns = ReadTableColumns(connection, fullName, null);
+        var entries = new List<string>();
+        entries.AddRange(ReadTableColumns(connection, tableObjectId, null));
+        entries.AddRange(ReadTableTypeCheckConstraints(connection, tableObjectId));
+        entries.AddRange(ReadTableTypeKeyConstraints(connection, tableObjectId));
+
         var lines = new List<string>
         {
             $"CREATE TYPE {fullName} AS TABLE",
             "("
         };
 
-        for (var i = 0; i < columns.Count; i++)
+        for (var i = 0; i < entries.Count; i++)
         {
-            var suffix = i < columns.Count - 1 ? "," : string.Empty;
-            lines.Add(columns[i] + suffix);
+            var suffix = i < entries.Count - 1 ? "," : string.Empty;
+            lines.Add(entries[i] + suffix);
         }
 
         lines.Add(")");
@@ -1067,7 +1074,7 @@ WHERE s.name = @schema AND tt.name = @name;";
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptXmlSchemaCollection(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptXmlSchemaCollection(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -1079,82 +1086,109 @@ WHERE s.name = @schema AND x.name = @name;";
         command.Parameters.AddWithValue("@schema", obj.Schema);
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
-        {
-            throw new InvalidOperationException($"XML schema collection not found: [{obj.Schema}].[{obj.Name}].");
-        }
-
-        var name = reader.GetString(0);
-        var schema = reader.GetString(1);
-        var definition = reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim();
-
-        return $"CREATE XML SCHEMA COLLECTION [{schema}].[{name}] AS {definition}{Environment.NewLine}GO";
-    }
-
-    private static string ScriptMessageType(SqlConnection connection, DbObjectInfo obj)
-    {
-        using var command = connection.CreateCommand();
-        if (ColumnExists(connection, "sys.service_message_types", "schema_id"))
-        {
-            command.CommandText = @"
-SELECT mt.name, mt.validation_desc
-FROM sys.service_message_types mt
-JOIN sys.schemas s ON s.schema_id = mt.schema_id
-WHERE s.name = @schema AND mt.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT mt.name, mt.validation_desc
-FROM sys.service_message_types mt
-WHERE mt.name = @name;";
-        }
-        command.Parameters.AddWithValue("@name", obj.Name);
-
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
-        {
-            throw new InvalidOperationException($"Message type not found: [{obj.Schema}].[{obj.Name}].");
-        }
-
-        var name = reader.GetString(0);
-        var validation = reader.GetString(1);
-        return $"CREATE MESSAGE TYPE [{obj.Schema}].[{name}] VALIDATION = {validation}{Environment.NewLine}GO";
-    }
-
-    private static string ScriptContract(SqlConnection connection, DbObjectInfo obj)
-    {
-        using var command = connection.CreateCommand();
-        if (ColumnExists(connection, "sys.service_contracts", "schema_id"))
-        {
-            command.CommandText = @"
-SELECT c.contract_id, c.name
-FROM sys.service_contracts c
-JOIN sys.schemas s ON s.schema_id = c.schema_id
-WHERE s.name = @schema AND c.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT c.service_contract_id, c.name
-FROM sys.service_contracts c
-WHERE c.name = @name;";
-        }
-        command.Parameters.AddWithValue("@name", obj.Name);
-
-        int contractId;
         string name;
+        string schema;
+        string definition;
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read())
             {
-                throw new InvalidOperationException($"Contract not found: [{obj.Schema}].[{obj.Name}].");
+                throw new InvalidOperationException($"XML schema collection not found: [{obj.Schema}].[{obj.Name}].");
             }
+
+            name = reader.GetString(0);
+            schema = reader.GetString(1);
+            definition = reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim();
+        }
+
+        var lines = new List<string>
+        {
+            $"CREATE XML SCHEMA COLLECTION [{schema}].[{name}] AS {definition}",
+            "GO"
+        };
+        lines.AddRange(ReadXmlSchemaCollectionPermissions(connection, schema, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadXmlSchemaCollectionExtendedProperties(connection, schema, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string ScriptMessageType(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT mt.name,
+       owner_principal.name AS owner_name,
+       mt.validation_desc,
+       xss.name AS xml_collection_schema,
+       xsc.name AS xml_collection_name
+FROM sys.service_message_types mt
+LEFT JOIN sys.database_principals owner_principal ON owner_principal.principal_id = mt.principal_id
+LEFT JOIN sys.xml_schema_collections xsc ON xsc.xml_collection_id = mt.xml_collection_id
+LEFT JOIN sys.schemas xss ON xss.schema_id = xsc.schema_id
+WHERE mt.name = @name;";
+        command.Parameters.AddWithValue("@name", obj.Name);
+
+        string name;
+        string ownerName;
+        string validation;
+        string? xmlCollectionSchema;
+        string? xmlCollectionName;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Message type not found: {QuoteIdentifier(obj.Name)}.");
+            }
+
+            name = reader.GetString(0);
+            ownerName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            validation = reader.GetString(2);
+            xmlCollectionSchema = reader.IsDBNull(3) ? null : reader.GetString(3);
+            xmlCollectionName = reader.IsDBNull(4) ? null : reader.GetString(4);
+        }
+        var validationKeyword = string.Equals(validation, "BINARY", StringComparison.OrdinalIgnoreCase)
+            ? "NONE"
+            : validation;
+
+        var validationClause = !string.IsNullOrWhiteSpace(xmlCollectionSchema) && !string.IsNullOrWhiteSpace(xmlCollectionName)
+            ? $"VALIDATION = VALID_XML WITH SCHEMA COLLECTION {QuoteIdentifier(xmlCollectionSchema)}.{QuoteIdentifier(xmlCollectionName)}"
+            : $"VALIDATION = {validationKeyword}";
+
+        var lines = new List<string> { $"CREATE MESSAGE TYPE {QuoteIdentifier(name)}" };
+        if (!string.IsNullOrWhiteSpace(ownerName))
+        {
+            lines.Add($"AUTHORIZATION {QuoteIdentifier(ownerName)}");
+        }
+
+        lines.Add(validationClause);
+        lines.Add("GO");
+        lines.AddRange(ReadMessageTypePermissions(connection, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadMessageTypeExtendedProperties(connection, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string ScriptContract(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT c.service_contract_id, c.name, owner_principal.name AS owner_name
+FROM sys.service_contracts c
+LEFT JOIN sys.database_principals owner_principal ON owner_principal.principal_id = c.principal_id
+WHERE c.name = @name;";
+        command.Parameters.AddWithValue("@name", obj.Name);
+
+        int contractId;
+        string name;
+        string ownerName;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Contract not found: {QuoteIdentifier(obj.Name)}.");
+            }
+
             contractId = reader.GetInt32(0);
             name = reader.GetString(1);
+            ownerName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
         }
 
         command.CommandText = @"
@@ -1177,210 +1211,256 @@ ORDER BY mt.name;";
                 var sentBy = sentByInitiator && sentByTarget
                     ? "ANY"
                     : sentByInitiator ? "INITIATOR" : "TARGET";
-                items.Add($"[{messageName}] SENT BY {sentBy}");
+                items.Add($"{QuoteIdentifier(messageName)} SENT BY {sentBy}");
             }
         }
 
-        var body = items.Count == 0 ? string.Empty : string.Join(", ", items);
-        return $"CREATE CONTRACT [{obj.Schema}].[{name}] ({body}){Environment.NewLine}GO";
+        var lines = new List<string> { $"CREATE CONTRACT {QuoteIdentifier(name)}" };
+        if (!string.IsNullOrWhiteSpace(ownerName))
+        {
+            lines.Add($"AUTHORIZATION {QuoteIdentifier(ownerName)}");
+        }
+
+        lines.Add("(");
+        for (var i = 0; i < items.Count; i++)
+        {
+            var suffix = i < items.Count - 1 ? "," : string.Empty;
+            lines.Add(items[i] + suffix);
+        }
+
+        lines.Add(")");
+        lines.Add("GO");
+        lines.AddRange(ReadContractPermissions(connection, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadContractExtendedProperties(connection, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptQueue(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptQueue(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
-        if (ColumnExists(connection, "sys.service_queues", "schema_id"))
-        {
-            command.CommandText = @"
-SELECT q.name, s.name AS schema_name, q.is_enqueue_enabled, q.is_retention_enabled,
-       q.is_poison_message_handling_enabled, q.is_activation_enabled, q.activation_procedure,
-       q.max_readers, dp.name AS execute_as_name
-FROM sys.service_queues q
-JOIN sys.schemas s ON s.schema_id = q.schema_id
-LEFT JOIN sys.database_principals dp ON dp.principal_id = q.execute_as_principal_id
-WHERE s.name = @schema AND q.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT q.name, s.name AS schema_name, q.is_enqueue_enabled, q.is_retention_enabled,
-       q.is_poison_message_handling_enabled, q.is_activation_enabled, q.activation_procedure,
-       q.max_readers, dp.name AS execute_as_name
+        command.CommandText = @"
+SELECT q.name,
+       s.name AS schema_name,
+       q.is_enqueue_enabled,
+       q.is_retention_enabled,
+       q.is_poison_message_handling_enabled,
+       q.is_activation_enabled,
+       q.activation_procedure,
+       q.max_readers,
+       q.execute_as_principal_id,
+       dp.name AS execute_as_name,
+       storage.data_space_name
 FROM sys.service_queues q
 JOIN sys.objects o ON o.object_id = q.object_id
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 LEFT JOIN sys.database_principals dp ON dp.principal_id = q.execute_as_principal_id
-WHERE s.name = @schema AND q.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
+OUTER APPLY (
+    SELECT TOP (1) ds.name AS data_space_name
+    FROM sys.indexes i
+    JOIN sys.data_spaces ds ON ds.data_space_id = i.data_space_id
+    WHERE i.object_id = q.object_id
+      AND i.index_id IN (0, 1)
+    ORDER BY i.index_id DESC
+) storage
+WHERE s.name = @schema
+  AND q.name = @name;";
+        command.Parameters.AddWithValue("@schema", obj.Schema);
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        string name;
+        string schema;
+        string status;
+        string retention;
+        string poison;
+        bool activationEnabled;
+        string activationProcedure;
+        int maxReaders;
+        int? executeAsPrincipalId;
+        string executeAsName;
+        string dataSpaceName;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Queue not found: [{obj.Schema}].[{obj.Name}].");
-        }
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Queue not found: {QuoteIdentifier(obj.Schema)}.{QuoteIdentifier(obj.Name)}.");
+            }
 
-        var name = reader.GetString(0);
-        var schema = reader.GetString(1);
-        var status = reader.GetBoolean(2) ? "ON" : "OFF";
-        var retention = reader.GetBoolean(3) ? "ON" : "OFF";
-        var poison = reader.GetBoolean(4) ? "ON" : "OFF";
-        var activationEnabled = reader.GetBoolean(5);
-        var activationProcedure = reader.IsDBNull(6) ? string.Empty : reader.GetString(6);
-        var maxReaders = reader.IsDBNull(7) ? 0 : Convert.ToInt32(reader.GetValue(7), System.Globalization.CultureInfo.InvariantCulture);
-        var executeAs = reader.IsDBNull(8) ? string.Empty : reader.GetString(8);
+            name = reader.GetString(0);
+            schema = reader.GetString(1);
+            status = reader.GetBoolean(2) ? "ON" : "OFF";
+            retention = reader.GetBoolean(3) ? "ON" : "OFF";
+            poison = reader.GetBoolean(4) ? "ON" : "OFF";
+            activationEnabled = reader.GetBoolean(5);
+            activationProcedure = reader.IsDBNull(6) ? string.Empty : reader.GetString(6);
+            maxReaders = reader.IsDBNull(7) ? 0 : Convert.ToInt32(reader.GetValue(7), System.Globalization.CultureInfo.InvariantCulture);
+            executeAsPrincipalId = reader.IsDBNull(8) ? (int?)null : Convert.ToInt32(reader.GetValue(8), CultureInfo.InvariantCulture);
+            executeAsName = reader.IsDBNull(9) ? string.Empty : reader.GetString(9);
+            dataSpaceName = reader.IsDBNull(10) ? string.Empty : reader.GetString(10);
+        }
 
         var options = new List<string>
         {
             $"STATUS = {status}",
             $"RETENTION = {retention}",
-            $"POISON_MESSAGE_HANDLING = {poison}"
+            $"POISON_MESSAGE_HANDLING (STATUS = {poison})"
         };
 
-        if (activationEnabled)
+        if (activationEnabled || !string.IsNullOrWhiteSpace(activationProcedure) || maxReaders > 0 || executeAsPrincipalId.HasValue)
         {
-            var activation = new List<string> { "STATUS = ON" };
+            var activation = new List<string> { $"STATUS = {(activationEnabled ? "ON" : "OFF")}" };
             if (!string.IsNullOrWhiteSpace(activationProcedure))
             {
                 activation.Add($"PROCEDURE_NAME = {activationProcedure}");
             }
+
             if (maxReaders > 0)
             {
                 activation.Add($"MAX_QUEUE_READERS = {maxReaders}");
             }
-            if (!string.IsNullOrWhiteSpace(executeAs))
+
+            var executeAsClause = executeAsPrincipalId switch
             {
-                activation.Add($"EXECUTE AS {executeAs}");
+                -2 => "OWNER",
+                _ when !string.IsNullOrWhiteSpace(executeAsName) => $"'{EscapeSqlStringLiteral(executeAsName)}'",
+                _ => string.Empty
+            };
+
+            if (!string.IsNullOrWhiteSpace(executeAsClause))
+            {
+                activation.Add($"EXECUTE AS {executeAsClause}");
             }
+
             options.Add($"ACTIVATION ({string.Join(", ", activation)})");
         }
 
-        return $"CREATE QUEUE [{schema}].[{name}] WITH {string.Join(", ", options)}{Environment.NewLine}GO";
+        var lines = new List<string> { $"CREATE QUEUE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}" };
+        if (options.Count > 0)
+        {
+            lines.Add($"WITH {string.Join(", ", options)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(dataSpaceName))
+        {
+            lines.Add($"ON {QuoteIdentifier(dataSpaceName)}");
+        }
+
+        lines.Add("GO");
+        var fullName = $"{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}";
+        lines.AddRange(ReadSchemaScopedObjectPermissions(connection, fullName, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadQueueExtendedProperties(connection, schema, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptService(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptService(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
-        var hasSchemaId = ColumnExists(connection, "sys.services", "schema_id");
-        if (hasSchemaId)
-        {
-            command.CommandText = @"
-SELECT sv.name, s.name AS schema_name, q.name AS queue_name, qs.name AS queue_schema
+        command.CommandText = @"
+SELECT sv.service_id,
+       sv.name,
+       owner_principal.name AS owner_name,
+       q.name AS queue_name,
+       qs.name AS queue_schema
 FROM sys.services sv
-JOIN sys.schemas s ON s.schema_id = sv.schema_id
-JOIN sys.service_queues q ON q.object_id = sv.service_queue_id
-JOIN sys.schemas qs ON qs.schema_id = q.schema_id
-WHERE s.name = @schema AND sv.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT sv.service_id, sv.name, q.name AS queue_name, qs.name AS queue_schema
-FROM sys.services sv
+LEFT JOIN sys.database_principals owner_principal ON owner_principal.principal_id = sv.principal_id
 JOIN sys.service_queues q ON q.object_id = sv.service_queue_id
 JOIN sys.objects qo ON qo.object_id = q.object_id
 JOIN sys.schemas qs ON qs.schema_id = qo.schema_id
 WHERE sv.name = @name;";
-        }
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        int serviceId = 0;
+        int serviceId;
         string name;
-        string schema = obj.Schema;
+        string ownerName;
         string queueName;
         string queueSchema;
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read())
             {
-                throw new InvalidOperationException($"Service not found: [{obj.Schema}].[{obj.Name}].");
+                throw new InvalidOperationException($"Service not found: {QuoteIdentifier(obj.Name)}.");
             }
-            if (hasSchemaId)
-            {
-                name = reader.GetString(0);
-                schema = reader.GetString(1);
-                queueName = reader.GetString(2);
-                queueSchema = reader.GetString(3);
-            }
-            else
-            {
-                serviceId = reader.GetInt32(0);
-                name = reader.GetString(1);
-                queueName = reader.GetString(2);
-                queueSchema = reader.GetString(3);
-            }
+
+            serviceId = reader.GetInt32(0);
+            name = reader.GetString(1);
+            ownerName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            queueName = reader.GetString(3);
+            queueSchema = reader.GetString(4);
         }
 
-        command.CommandText = hasSchemaId
-            ? @"
-SELECT c.name
-FROM sys.service_contract_usages scu
-JOIN sys.service_contracts c ON c.service_contract_id = scu.service_contract_id
-WHERE scu.service_id = SERVICE_ID(@serviceName);"
-            : @"
+        command.CommandText = @"
 SELECT c.name
 FROM sys.service_contract_usages scu
 JOIN sys.service_contracts c ON c.service_contract_id = scu.service_contract_id
 WHERE scu.service_id = @serviceId;";
         command.Parameters.Clear();
-        if (hasSchemaId)
-        {
-            command.Parameters.AddWithValue("@serviceName", name);
-        }
-        else
-        {
-            command.Parameters.AddWithValue("@serviceId", serviceId);
-        }
+        command.Parameters.AddWithValue("@serviceId", serviceId);
 
         var contracts = new List<string>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
             {
-                contracts.Add($"[{reader.GetString(0)}]");
+                contracts.Add(QuoteIdentifier(reader.GetString(0)));
             }
         }
 
-        var contractList = contracts.Count == 0 ? string.Empty : $"({string.Join(", ", contracts)})";
-        return $"CREATE SERVICE [{schema}].[{name}] ON QUEUE [{queueSchema}].[{queueName}] {contractList}{Environment.NewLine}GO";
+        var lines = new List<string> { $"CREATE SERVICE {QuoteIdentifier(name)}" };
+        if (!string.IsNullOrWhiteSpace(ownerName))
+        {
+            lines.Add($"AUTHORIZATION {QuoteIdentifier(ownerName)}");
+        }
+
+        var queueLine = $"ON QUEUE {QuoteIdentifier(queueSchema)}.{QuoteIdentifier(queueName)}";
+        if (contracts.Count > 0)
+        {
+            queueLine += $" ({string.Join(", ", contracts)})";
+        }
+
+        lines.Add(queueLine);
+        lines.Add("GO");
+        lines.AddRange(ReadServicePermissions(connection, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadServiceExtendedProperties(connection, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptRoute(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptRoute(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
-        var hasSchemaId = ColumnExists(connection, "sys.routes", "schema_id");
-        if (hasSchemaId)
-        {
-            command.CommandText = @"
-SELECT r.name, s.name AS schema_name, r.remote_service_name, r.broker_instance, r.address
+        command.CommandText = @"
+SELECT r.name,
+       owner_principal.name AS owner_name,
+       r.remote_service_name,
+       r.broker_instance,
+       r.lifetime,
+       r.address,
+       r.mirror_address
 FROM sys.routes r
-JOIN sys.schemas s ON s.schema_id = r.schema_id
-WHERE s.name = @schema AND r.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT r.name, r.remote_service_name, r.broker_instance, r.address
-FROM sys.routes r
+LEFT JOIN sys.database_principals owner_principal ON owner_principal.principal_id = r.principal_id
 WHERE r.name = @name;";
-        }
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        string name;
+        string ownerName;
+        string serviceName;
+        string brokerInstance;
+        long? lifetime;
+        string address;
+        string mirrorAddress;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Route not found: [{obj.Schema}].[{obj.Name}].");
-        }
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Route not found: {QuoteIdentifier(obj.Name)}.");
+            }
 
-        var name = reader.GetString(0);
-        var schema = hasSchemaId ? reader.GetString(1) : obj.Schema;
-        var offset = hasSchemaId ? 2 : 1;
-        var serviceName = reader.IsDBNull(offset) ? string.Empty : reader.GetString(offset);
-        var brokerInstance = reader.IsDBNull(offset + 1) ? string.Empty : reader.GetString(offset + 1);
-        var address = reader.IsDBNull(offset + 2) ? string.Empty : reader.GetString(offset + 2);
+            name = reader.GetString(0);
+            ownerName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            serviceName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            brokerInstance = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+            lifetime = reader.IsDBNull(4) ? (long?)null : Convert.ToInt64(reader.GetValue(4), CultureInfo.InvariantCulture);
+            address = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
+            mirrorAddress = reader.IsDBNull(6) ? string.Empty : reader.GetString(6);
+        }
 
         var options = new List<string>();
         if (!string.IsNullOrWhiteSpace(serviceName))
@@ -1391,47 +1471,96 @@ WHERE r.name = @name;";
         {
             options.Add($"BROKER_INSTANCE = '{brokerInstance}'");
         }
+
+        if (lifetime.HasValue)
+        {
+            options.Add($"LIFETIME = {lifetime.Value.ToString(CultureInfo.InvariantCulture)}");
+        }
+
         if (!string.IsNullOrWhiteSpace(address))
         {
             options.Add($"ADDRESS = '{address.Replace("'", "''", StringComparison.Ordinal)}'");
         }
 
-        return $"CREATE ROUTE [{schema}].[{name}] WITH {string.Join(", ", options)}{Environment.NewLine}GO";
+        if (!string.IsNullOrWhiteSpace(mirrorAddress))
+        {
+            options.Add($"MIRROR_ADDRESS = '{mirrorAddress.Replace("'", "''", StringComparison.Ordinal)}'");
+        }
+
+        var lines = new List<string> { $"CREATE ROUTE {QuoteIdentifier(name)}" };
+        if (!string.IsNullOrWhiteSpace(ownerName))
+        {
+            lines.Add($"AUTHORIZATION {QuoteIdentifier(ownerName)}");
+        }
+
+        lines.Add($"WITH {string.Join(", ", options)}");
+        lines.Add("GO");
+        lines.AddRange(ReadRoutePermissions(connection, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadRouteExtendedProperties(connection, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptEventNotification(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptEventNotification(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
-        if (ColumnExists(connection, "sys.event_notifications", "schema_id"))
-        {
-            command.CommandText = @"
-SELECT en.name, en.parent_class_desc, en.parent_id, en.type_desc, en.service_name, en.broker_instance
-FROM sys.event_notifications en
-JOIN sys.schemas s ON s.schema_id = en.schema_id
-WHERE s.name = @schema AND en.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT en.name, en.parent_class_desc, en.parent_id, en.type_desc, en.service_name, en.broker_instance
+        command.CommandText = @"
+SELECT en.object_id,
+       en.name,
+       en.parent_class_desc,
+       en.parent_id,
+       en.service_name,
+       en.broker_instance
 FROM sys.event_notifications en
 WHERE en.name = @name;";
-        }
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        int objectId;
+        string name;
+        string parentClass;
+        var parentId = 0;
+        string serviceName;
+        string brokerInstance;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Event notification not found: [{obj.Schema}].[{obj.Name}].");
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Event notification not found: {QuoteIdentifier(obj.Name)}.");
+            }
+
+            objectId = reader.GetInt32(0);
+            name = reader.GetString(1);
+            parentClass = reader.GetString(2);
+            if (!reader.IsDBNull(3))
+            {
+                parentId = reader.GetInt32(3);
+            }
+
+            serviceName = reader.GetString(4);
+            brokerInstance = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
         }
 
-        var name = reader.GetString(0);
-        var parentClass = reader.GetString(1);
-        var parentId = reader.GetInt32(2);
-        var eventType = reader.GetString(3);
-        var serviceName = reader.GetString(4);
-        var brokerInstance = reader.IsDBNull(5) ? string.Empty : reader.GetString(5);
+        command.CommandText = @"
+SELECT DISTINCT e.type_desc
+FROM sys.events e
+WHERE e.object_id = @objectId
+  AND e.type_desc IS NOT NULL
+ORDER BY e.type_desc;";
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("@objectId", objectId);
+
+        var events = new List<string>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                events.Add(reader.GetString(0));
+            }
+        }
+
+        if (events.Count == 0)
+        {
+            throw new InvalidOperationException($"Event notification {QuoteIdentifier(obj.Name)} does not expose any event metadata.");
+        }
 
         var scope = parentClass switch
         {
@@ -1441,52 +1570,67 @@ WHERE en.name = @name;";
             _ => "ON DATABASE"
         };
 
-        var brokerClause = string.IsNullOrWhiteSpace(brokerInstance) ? string.Empty : $", '{brokerInstance}'";
-        return $"CREATE EVENT NOTIFICATION [{obj.Schema}].[{name}] {scope} FOR {eventType} TO SERVICE '{serviceName}'{brokerClause}{Environment.NewLine}GO";
+        var brokerClause = string.IsNullOrWhiteSpace(brokerInstance)
+            ? string.Empty
+            : $", N'{EscapeSqlStringLiteral(brokerInstance)}'";
+        var lines = new List<string>
+        {
+            $"CREATE EVENT NOTIFICATION {QuoteIdentifier(name)} {scope} FOR {string.Join(", ", events)} TO SERVICE N'{EscapeSqlStringLiteral(serviceName)}'{brokerClause}",
+            "GO"
+        };
+        AppendExtendedPropertyLines(lines, ReadEventNotificationExtendedProperties(connection, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptServiceBinding(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptServiceBinding(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
-        var hasSchemaId = ColumnExists(connection, "sys.remote_service_bindings", "schema_id");
-        if (hasSchemaId)
-        {
-            command.CommandText = @"
-SELECT rsb.name, s.name AS schema_name, rsb.remote_service_name, dp.name AS user_name, rsb.is_anonymous
+        command.CommandText = @"
+SELECT rsb.name, rsb.remote_service_name, dp.name AS user_name, rsb.is_anonymous_on
 FROM sys.remote_service_bindings rsb
-JOIN sys.schemas s ON s.schema_id = rsb.schema_id
-LEFT JOIN sys.database_principals dp ON dp.principal_id = rsb.user_id
-WHERE s.name = @schema AND rsb.name = @name;";
-            command.Parameters.AddWithValue("@schema", obj.Schema);
-        }
-        else
-        {
-            command.CommandText = @"
-SELECT rsb.name, rsb.remote_service_name, dp.name AS user_name, rsb.is_anonymous
-FROM sys.remote_service_bindings rsb
-LEFT JOIN sys.database_principals dp ON dp.principal_id = rsb.user_id
+LEFT JOIN sys.database_principals dp ON dp.principal_id = rsb.remote_principal_id
 WHERE rsb.name = @name;";
-        }
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        string name;
+        string remoteService;
+        string userName;
+        bool isAnonymous;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Remote service binding not found: [{obj.Schema}].[{obj.Name}].");
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Remote service binding not found: {QuoteIdentifier(obj.Name)}.");
+            }
+
+            name = reader.GetString(0);
+            remoteService = reader.GetString(1);
+            userName = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            isAnonymous = reader.GetBoolean(3);
         }
 
-        var name = reader.GetString(0);
-        var schema = hasSchemaId ? reader.GetString(1) : obj.Schema;
-        var offset = hasSchemaId ? 2 : 1;
-        var remoteService = reader.GetString(offset);
-        var userName = reader.IsDBNull(offset + 1) ? string.Empty : reader.GetString(offset + 1);
-        var isAnonymous = reader.GetBoolean(offset + 2);
+        if (string.IsNullOrWhiteSpace(userName))
+        {
+            throw new InvalidOperationException($"Remote service binding {QuoteIdentifier(obj.Name)} is missing remote principal metadata.");
+        }
 
-        var userClause = isAnonymous ? "ANONYMOUS" : $"USER = [{userName}]";
-        return $"CREATE REMOTE SERVICE BINDING [{schema}].[{name}] TO SERVICE '{remoteService}' WITH {userClause}{Environment.NewLine}GO";
+        var options = new List<string> { $"USER = {QuoteIdentifier(userName)}" };
+        if (isAnonymous)
+        {
+            options.Add("ANONYMOUS = ON");
+        }
+
+        var lines = new List<string>
+        {
+            $"CREATE REMOTE SERVICE BINDING {QuoteIdentifier(name)} TO SERVICE N'{EscapeSqlStringLiteral(remoteService)}' WITH {string.Join(", ", options)}",
+            "GO"
+        };
+        lines.AddRange(ReadServiceBindingPermissions(connection, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadServiceBindingExtendedProperties(connection, name, referenceLines), referenceLines);
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptFullTextCatalog(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptFullTextCatalog(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -1495,57 +1639,147 @@ FROM sys.fulltext_catalogs
 WHERE name = @name;";
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        string name;
+        bool isDefault;
+        string accent;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Full-text catalog not found: [{obj.Name}].");
-        }
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Full-text catalog not found: [{obj.Name}].");
+            }
 
-        var name = reader.GetString(0);
-        var isDefault = reader.GetBoolean(1);
-        var accent = reader.GetBoolean(2) ? "ON" : "OFF";
+            name = reader.GetString(0);
+            isDefault = reader.GetBoolean(1);
+            accent = reader.GetBoolean(2) ? "ON" : "OFF";
+        }
         var defaultClause = isDefault ? " AS DEFAULT" : string.Empty;
 
-        return $"CREATE FULLTEXT CATALOG [{name}]{defaultClause} WITH ACCENT_SENSITIVITY = {accent}{Environment.NewLine}GO";
+        var lines = new List<string>
+        {
+            $"CREATE FULLTEXT CATALOG {QuoteIdentifier(name)}{defaultClause} WITH ACCENT_SENSITIVITY = {accent}",
+            "GO"
+        };
+        lines.AddRange(ReadFullTextCatalogPermissions(connection, name, referenceLines));
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptFullTextStoplist(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptFullTextStoplist(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT name, is_system
+SELECT stoplist_id, name
 FROM sys.fulltext_stoplists
-WHERE name = @name;";
+WHERE name = @name
+  AND stoplist_id > 0;";
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        int stoplistId;
+        string name;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Full-text stoplist not found: [{obj.Name}].");
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Full-text stoplist not found: [{obj.Name}].");
+            }
+
+            stoplistId = reader.GetInt32(0);
+            name = reader.GetString(1);
         }
 
-        var name = reader.GetString(0);
-        var isSystem = reader.GetBoolean(1);
-        var fromSystem = isSystem ? " FROM SYSTEM STOPLIST" : string.Empty;
-        return $"CREATE FULLTEXT STOPLIST [{name}]{fromSystem}{Environment.NewLine}GO";
+        command.CommandText = @"
+  SELECT sw.stopword, sw.language_id
+  FROM sys.fulltext_stopwords sw
+  WHERE sw.stoplist_id = @stoplistId
+  ORDER BY sw.language_id, sw.stopword;";
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("@stoplistId", stoplistId);
+
+        var lines = new List<string>
+        {
+            $"CREATE FULLTEXT STOPLIST {QuoteIdentifier(name)}",
+            "GO"
+        };
+
+        using (var stopwordReader = command.ExecuteReader())
+        {
+            while (stopwordReader.Read())
+            {
+                var stopword = stopwordReader.GetString(0);
+                var languageId = stopwordReader.GetInt32(1);
+                lines.Add($"ALTER FULLTEXT STOPLIST {QuoteIdentifier(name)} ADD '{EscapeSqlStringLiteral(stopword)}' LANGUAGE {languageId.ToString(CultureInfo.InvariantCulture)}");
+                lines.Add("GO");
+            }
+        }
+
+        lines.AddRange(ReadFullTextStoplistPermissions(connection, name, referenceLines));
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string ScriptSearchPropertyList(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptSearchPropertyList(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT name
-FROM sys.fulltext_search_property_lists
+SELECT property_list_id, name
+FROM sys.registered_search_property_lists
 WHERE name = @name;";
         command.Parameters.AddWithValue("@name", obj.Name);
 
-        var name = command.ExecuteScalar() as string;
-        if (string.IsNullOrWhiteSpace(name))
+        int propertyListId;
+        string name;
+        using (var reader = command.ExecuteReader())
         {
-            throw new InvalidOperationException($"Search property list not found: [{obj.Name}].");
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Search property list not found: [{obj.Name}].");
+            }
+
+            propertyListId = reader.GetInt32(0);
+            name = reader.GetString(1);
         }
 
-        return $"CREATE SEARCH PROPERTY LIST [{name}]{Environment.NewLine}GO";
+        command.CommandText = @"
+SELECT property_name, property_set_guid, property_int_id, property_description
+FROM sys.registered_search_properties
+WHERE property_list_id = @propertyListId
+ORDER BY property_name, property_set_guid, property_int_id;";
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("@propertyListId", propertyListId);
+
+        var lines = new List<string>
+        {
+            $"CREATE SEARCH PROPERTY LIST {QuoteIdentifier(name)}",
+            "GO"
+        };
+
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var propertyName = reader.GetString(0);
+                var propertySetGuid = reader.GetGuid(1).ToString().ToUpperInvariant();
+                var propertyIntId = reader.GetInt32(2);
+                var propertyDescription = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+
+                var options = new List<string>
+                {
+                    $"PROPERTY_SET_GUID = '{propertySetGuid}'",
+                    $"PROPERTY_INT_ID = {propertyIntId.ToString(CultureInfo.InvariantCulture)}"
+                };
+
+                if (!string.IsNullOrWhiteSpace(propertyDescription))
+                {
+                    options.Add($"PROPERTY_DESCRIPTION = N'{EscapeSqlStringLiteral(propertyDescription)}'");
+                }
+
+                lines.Add(
+                    $"ALTER SEARCH PROPERTY LIST {QuoteIdentifier(name)} ADD N'{EscapeSqlStringLiteral(propertyName)}' WITH ({string.Join(", ", options)})");
+                lines.Add("GO");
+            }
+        }
+
+        lines.AddRange(ReadSearchPropertyListPermissions(connection, name, referenceLines));
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static string ScriptSecurityPolicy(SqlConnection connection, DbObjectInfo obj)
@@ -2378,6 +2612,17 @@ WHERE name = @name;";
 
     private static List<string> ReadTableColumns(SqlConnection connection, string fullName, string[]? referenceLines)
     {
+        var objectId = ResolveObjectId(connection, fullName);
+        if (!objectId.HasValue)
+        {
+            return [];
+        }
+
+        return ReadTableColumns(connection, objectId.Value, referenceLines);
+    }
+
+    private static List<string> ReadTableColumns(SqlConnection connection, int objectId, string[]? referenceLines)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = @"
 SELECT c.name AS column_name, c.is_nullable, c.is_identity, ic.seed_value, ic.increment_value, ic.is_not_for_replication,
@@ -2395,9 +2640,9 @@ LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id
 LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
 LEFT JOIN sys.xml_schema_collections xsc ON xsc.xml_collection_id = c.xml_collection_id
 LEFT JOIN sys.schemas xss ON xss.schema_id = xsc.schema_id
-WHERE c.object_id = OBJECT_ID(@full)
+WHERE c.object_id = @objectId
 ORDER BY c.column_id;";
-        command.Parameters.AddWithValue("@full", fullName);
+        command.Parameters.AddWithValue("@objectId", objectId);
 
         var compatibilityTypeMap = BuildReferenceTableColumnTypeMap(referenceLines);
         var rows = new List<string>();
@@ -2450,6 +2695,73 @@ ORDER BY c.column_id;";
         }
 
         return rows;
+    }
+
+    private static IEnumerable<string> ReadTableTypeCheckConstraints(SqlConnection connection, int objectId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT cc.name, cc.definition, cc.is_not_for_replication
+FROM sys.check_constraints cc
+WHERE cc.parent_object_id = @objectId
+ORDER BY cc.name;";
+        command.Parameters.AddWithValue("@objectId", objectId);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var name = reader.GetString(0);
+            var definition = reader.GetString(1);
+            var notForReplication = !reader.IsDBNull(2) && reader.GetBoolean(2)
+                ? " NOT FOR REPLICATION"
+                : string.Empty;
+            lines.Add($"CONSTRAINT {QuoteIdentifier(name)} CHECK{notForReplication} {definition}");
+        }
+
+        return lines;
+    }
+
+    private static IEnumerable<string> ReadTableTypeKeyConstraints(SqlConnection connection, int objectId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT kc.name,
+       kc.type_desc,
+       i.type_desc AS index_type_desc,
+       STUFF((
+         SELECT ', ' + QUOTENAME(c.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
+         FROM sys.index_columns ic
+         JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+         WHERE ic.object_id = i.object_id
+           AND ic.index_id = i.index_id
+           AND ic.is_included_column = 0
+         ORDER BY ic.key_ordinal
+         FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, '') AS key_columns
+FROM sys.key_constraints kc
+JOIN sys.indexes i ON i.object_id = kc.parent_object_id AND i.index_id = kc.unique_index_id
+WHERE kc.parent_object_id = @objectId
+ORDER BY kc.name;";
+        command.Parameters.AddWithValue("@objectId", objectId);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var name = reader.GetString(0);
+            var typeDesc = reader.GetString(1);
+            var indexType = reader.GetString(2);
+            var keyColumns = reader.GetString(3);
+
+            var constraintType = typeDesc == "PRIMARY_KEY_CONSTRAINT" ? "PRIMARY KEY" : "UNIQUE";
+            var clustered = string.Equals(indexType, "CLUSTERED", StringComparison.OrdinalIgnoreCase)
+                ? "CLUSTERED"
+                : "NONCLUSTERED";
+
+            lines.Add($"CONSTRAINT {QuoteIdentifier(name)} {constraintType} {clustered} ({keyColumns})");
+        }
+
+        return lines;
     }
 
     internal static string ApplyXmlSchemaBinding(
@@ -3063,6 +3375,86 @@ ORDER BY pr.name, dp.permission_name;";
         }
 
         return lines;
+    }
+
+    private static IEnumerable<string> ReadSchemaScopedObjectPermissions(
+        SqlConnection connection,
+        string fullName,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+WHERE dp.major_id = OBJECT_ID(@full) AND dp.class_desc = 'OBJECT_OR_COLUMN'
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@full", fullName),
+            fullName,
+            referenceLines);
+
+    private static IEnumerable<string> ExecutePermissionQuery(
+        SqlConnection connection,
+        string commandText,
+        Action<SqlCommand> configureCommand,
+        string targetClause,
+        string[]? referenceLines)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        configureCommand(command);
+
+        var grantLineMap = BuildGrantLineMap(referenceLines);
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var permission = reader.GetString(0);
+            var normalizedState = NormalizePermissionState(reader.GetString(1));
+            var principal = reader.GetString(2);
+
+            if (grantLineMap != null &&
+                grantLineMap.TryGetValue($"{normalizedState}|{permission}|{principal}", out var line))
+            {
+                lines.Add(line);
+                lines.Add("GO");
+                continue;
+            }
+
+            lines.Add(FormatPermissionLine(permission, normalizedState, targetClause, principal));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static string NormalizePermissionState(string state)
+    {
+        if (string.Equals(state, "GRANT_WITH_GRANT_OPTION", StringComparison.OrdinalIgnoreCase))
+        {
+            return "GRANT_WITH_GRANT_OPTION";
+        }
+
+        if (string.Equals(state, "DENY", StringComparison.OrdinalIgnoreCase))
+        {
+            return "DENY";
+        }
+
+        return "GRANT";
+    }
+
+    private static string FormatPermissionLine(
+        string permission,
+        string normalizedState,
+        string targetClause,
+        string principal)
+    {
+        return normalizedState switch
+        {
+            "GRANT_WITH_GRANT_OPTION" => $"GRANT {permission} ON {targetClause} TO [{principal}] WITH GRANT OPTION",
+            "DENY" => $"DENY {permission} ON {targetClause} TO [{principal}]",
+            _ => $"GRANT {permission} ON {targetClause} TO [{principal}]"
+        };
     }
 
     private static bool UsesSysNamedExtendedProperties(string[]? referenceLines)
@@ -3812,6 +4204,43 @@ ORDER BY ep.name;";
         return lines;
     }
 
+    private static IEnumerable<string> ExecuteExtendedPropertyQuery(
+        SqlConnection connection,
+        string commandText,
+        Action<SqlCommand> configureCommand,
+        string[]? referenceLines,
+        string level0Type,
+        string level0Name,
+        string? level1Type,
+        string? level1Name)
+    {
+        var propertyProcedure = GetExtendedPropertyProcedure(referenceLines);
+        using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        configureCommand(command);
+
+        var lines = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var propName = reader.GetString(0);
+            var propValue = reader.GetValue(1).ToString() ?? string.Empty;
+            lines.Add(BuildExtendedPropertyStatement(
+                propertyProcedure,
+                propName,
+                propValue,
+                level0Type,
+                level0Name,
+                level1Type,
+                level1Name,
+                null,
+                null));
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
     private static IEnumerable<string> ReadSchemaScopedObjectExtendedProperties(
         SqlConnection connection,
         string schema,
@@ -3858,6 +4287,330 @@ ORDER BY ep.name;";
 
         return lines;
     }
+
+    private static IEnumerable<string> ReadXmlSchemaCollectionPermissions(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.xml_schema_collections x ON x.xml_collection_id = dp.major_id
+JOIN sys.schemas s ON s.schema_id = x.schema_id
+WHERE dp.class_desc = 'XML_SCHEMA_COLLECTION'
+  AND s.name = @schema
+  AND x.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command =>
+            {
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+            },
+            $"XML SCHEMA COLLECTION::{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadXmlSchemaCollectionExtendedProperties(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.xml_schema_collections x ON x.xml_collection_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = x.schema_id
+WHERE ep.class_desc = 'XML_SCHEMA_COLLECTION'
+  AND s.name = @schema
+  AND x.name = @name
+ORDER BY ep.name;",
+            command =>
+            {
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+            },
+            referenceLines,
+            "SCHEMA",
+            schema,
+            "XML SCHEMA COLLECTION",
+            name);
+
+    private static IEnumerable<string> ReadMessageTypePermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.service_message_types mt ON mt.message_type_id = dp.major_id
+WHERE dp.class_desc = 'MESSAGE_TYPE'
+  AND mt.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"MESSAGE TYPE::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadMessageTypeExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.service_message_types mt ON mt.message_type_id = ep.major_id
+WHERE ep.class_desc = 'MESSAGE_TYPE'
+  AND mt.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "MESSAGE TYPE",
+            name,
+            null,
+            null);
+
+    private static IEnumerable<string> ReadContractPermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.service_contracts c ON c.service_contract_id = dp.major_id
+WHERE dp.class_desc = 'SERVICE_CONTRACT'
+  AND c.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"CONTRACT::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadContractExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.service_contracts c ON c.service_contract_id = ep.major_id
+WHERE ep.class_desc = 'SERVICE_CONTRACT'
+  AND c.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "CONTRACT",
+            name,
+            null,
+            null);
+
+    private static IEnumerable<string> ReadQueueExtendedProperties(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ReadSchemaScopedObjectExtendedProperties(connection, schema, name, "SQ", "QUEUE", referenceLines);
+
+    private static IEnumerable<string> ReadServicePermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.services sv ON sv.service_id = dp.major_id
+WHERE dp.class_desc = 'SERVICE'
+  AND sv.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"SERVICE::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadServiceExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.services sv ON sv.service_id = ep.major_id
+WHERE ep.class_desc = 'SERVICE'
+  AND sv.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "SERVICE",
+            name,
+            null,
+            null);
+
+    private static IEnumerable<string> ReadRoutePermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.routes r ON r.route_id = dp.major_id
+WHERE dp.class_desc = 'ROUTE'
+  AND r.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"ROUTE::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadRouteExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.routes r ON r.route_id = ep.major_id
+WHERE ep.class_desc = 'ROUTE'
+  AND r.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "ROUTE",
+            name,
+            null,
+            null);
+
+    private static IEnumerable<string> ReadEventNotificationExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.event_notifications en ON en.object_id = ep.major_id
+WHERE ep.class_desc = 'OBJECT_OR_COLUMN'
+  AND ep.minor_id = 0
+  AND en.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "EVENT NOTIFICATION",
+            name,
+            null,
+            null);
+
+    private static IEnumerable<string> ReadServiceBindingPermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.remote_service_bindings rsb ON rsb.remote_service_binding_id = dp.major_id
+WHERE dp.class_desc = 'REMOTE_SERVICE_BINDING'
+  AND rsb.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"REMOTE SERVICE BINDING::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadServiceBindingExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.remote_service_bindings rsb ON rsb.remote_service_binding_id = ep.major_id
+WHERE ep.class_desc = 'REMOTE_SERVICE_BINDING'
+  AND rsb.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "REMOTE SERVICE BINDING",
+            name,
+            null,
+            null);
+
+    private static IEnumerable<string> ReadFullTextCatalogPermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.fulltext_catalogs fc ON fc.fulltext_catalog_id = dp.major_id
+WHERE dp.class_desc = 'FULLTEXT_CATALOG'
+  AND fc.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"FULLTEXT CATALOG::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadFullTextStoplistPermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.fulltext_stoplists fs ON fs.stoplist_id = dp.major_id
+WHERE dp.class_desc = 'FULLTEXT_STOPLIST'
+  AND fs.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"FULLTEXT STOPLIST::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadSearchPropertyListPermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.registered_search_property_lists spl ON spl.property_list_id = dp.major_id
+WHERE dp.class_desc = 'SEARCH_PROPERTY_LIST'
+  AND spl.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"SEARCH PROPERTY LIST::{QuoteIdentifier(name)}",
+            referenceLines);
 
     private static IEnumerable<string> ReadSequenceExtendedProperties(
         SqlConnection connection,
@@ -5479,6 +6232,17 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
 
     private static string EscapeSqlStringLiteral(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static int? ResolveObjectId(SqlConnection connection, string fullName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT OBJECT_ID(@fullName);";
+        command.Parameters.AddWithValue("@fullName", fullName);
+        var result = command.ExecuteScalar();
+        return result is null || result == DBNull.Value
+            ? null
+            : Convert.ToInt32(result, CultureInfo.InvariantCulture);
+    }
 
     private static string QuoteIdentifier(string value)
         => $"[{value.Replace("]", "]]", StringComparison.Ordinal)}]";
