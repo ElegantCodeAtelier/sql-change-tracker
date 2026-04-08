@@ -23,7 +23,7 @@ sqlct data track [<pattern>] [--object <pattern>] [--filter <regex>] [--project-
 sqlct data untrack [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
 sqlct data list [--project-dir <path>]
 sqlct status [--project-dir <path>] [--target <db|folder>] [--no-progress]
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--no-progress]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>] [--no-progress]
 sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...] [--no-progress]
 ```
 
