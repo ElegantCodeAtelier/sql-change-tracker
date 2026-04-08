@@ -1722,8 +1722,41 @@ internal sealed class SyncCommandService : ISyncCommandService
     {
         var normalized = script
             .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace("\r", "\n", StringComparison.Ordinal);
-        return normalized.TrimEnd('\n');
+            .Replace("\r", "\n", StringComparison.Ordinal)
+            .TrimEnd('\n');
+
+        // Strip trailing semicolons from INSERT statement lines so that scripts emitted with
+        // and without statement terminators compare as compatible. Different SQL tools may or
+        // may not append a semicolon to each INSERT; this normalization prevents superficial
+        // terminator differences from surfacing as false positives in status and diff output.
+        // Early exit for scripts with no INSERT lines (e.g. schema objects) to avoid split/join overhead.
+        if (!normalized.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
+        var lines = normalized.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.EndsWith(';') && LineStartsWithInsert(line))
+            {
+                lines[i] = line[..^1];
+            }
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    // Checks whether a line begins with "INSERT " (ignoring leading whitespace) without
+    // allocating a trimmed string.
+    private static bool LineStartsWithInsert(string line)
+    {
+        var pos = 0;
+        while (pos < line.Length && line[pos] is ' ' or '\t') pos++;
+        const int insertPrefixLength = 7; // "INSERT ".Length
+        return line.Length - pos >= insertPrefixLength &&
+               line.AsSpan(pos, insertPrefixLength).Equals("INSERT ", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static FileContentStyle DetectExistingStyle(string path)

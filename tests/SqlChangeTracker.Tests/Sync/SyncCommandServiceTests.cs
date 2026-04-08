@@ -662,6 +662,32 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_NormalizesTrailingSemicolonsOnInsertStatements()
+    {
+        // Trailing semicolons on INSERT statements are normalized away so that scripts emitted
+        // with and without statement terminators compare as compatible.
+        var withSemicolon = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Id]) VALUES (1);\nINSERT INTO [dbo].[T] ([Id]) VALUES (2);");
+        var withoutSemicolon = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Id]) VALUES (1)\nINSERT INTO [dbo].[T] ([Id]) VALUES (2)");
+
+        Assert.Equal(withSemicolon, withoutSemicolon);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_SuppressesTrailingSemicolonOnlyDifferencesInInsertStatements()
+    {
+        // A diff that consists solely of missing/added trailing semicolons on INSERT statements
+        // must produce an empty result — the difference is normalized away as compatible.
+        var source = "INSERT INTO [dbo].[T] ([Id]) VALUES (1);\nINSERT INTO [dbo].[T] ([Id]) VALUES (2);";
+        var target = "INSERT INTO [dbo].[T] ([Id]) VALUES (1)\nINSERT INTO [dbo].[T] ([Id]) VALUES (2)";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void DetectExistingStyle_AndApplyStyle_PreservesEncodingAndLineBehavior()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));

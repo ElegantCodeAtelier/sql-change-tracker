@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
+
 ### Added
 - `sqlct init` now prompts interactively for connection details (server, database, auth, credentials, trust-server-certificate) when run without flags in a new project directory (#36).
 - Connection flags (`--server`, `--database`, `--auth`, `--user`, `--password`, `--trust-server-certificate`) for non-interactive/scripted `init` use (#36).

@@ -749,6 +749,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Script generation MUST emit canonical scripting output per this document and MUST NOT include diff/status-specific normalization.
 - `status` and `diff` normalization behaviors are external contracts defined in `specs/01-cli.md` and `specs/05-output-formats.md`.
 - Scripting and comparison normalization responsibilities MUST remain decoupled.
+- Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.
