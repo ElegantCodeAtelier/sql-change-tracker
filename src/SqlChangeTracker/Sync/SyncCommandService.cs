@@ -85,7 +85,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<StatusResult>.Failure(projectResult.Error!, projectResult.ExitCode);
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
+        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress: progress);
         if (!snapshotResult.Success)
         {
             return CommandExecutionResult<StatusResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
@@ -200,7 +200,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<DiffResult>.Ok(result, exitCode);
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
+        var snapshotResult = BuildSnapshot(projectResult.Payload!, compiledPatterns, progress);
         if (!snapshotResult.Success)
         {
             return CommandExecutionResult<DiffResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
@@ -272,7 +272,9 @@ internal sealed class SyncCommandService : ISyncCommandService
             compiledPatterns = patternList;
         }
 
-        var snapshotResult = BuildSnapshot(projectResult.Payload!, progress);
+        var snapshotResult = parsedSelector is not null
+            ? BuildSelectedObjectSnapshot(projectResult.Payload!, parsedSelector, progress)
+            : BuildSnapshot(projectResult.Payload!, compiledPatterns, progress);
         if (!snapshotResult.Success)
         {
             return CommandExecutionResult<PullResult>.Failure(snapshotResult.Error!, snapshotResult.ExitCode);
@@ -465,7 +467,10 @@ internal sealed class SyncCommandService : ISyncCommandService
             ExitCodes.Success);
     }
 
-    private CommandExecutionResult<ComparisonSnapshot> BuildSnapshot(ProjectContext context, Action<string>? progress = null)
+    private CommandExecutionResult<ComparisonSnapshot> BuildSnapshot(
+        ProjectContext context,
+        IReadOnlyList<Regex>? filterPatterns = null,
+        Action<string>? progress = null)
     {
         progress?.Invoke("Scanning schema folder...");
         var folderResult = ScanFolder(context.ProjectDir);
@@ -474,7 +479,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return CommandExecutionResult<ComparisonSnapshot>.Failure(folderResult.Error!, folderResult.ExitCode);
         }
 
-        var dbResult = ScanDatabase(context, progress);
+        var dbResult = ScanDatabase(context, filterPatterns, progress);
         if (!dbResult.Success)
         {
             return CommandExecutionResult<ComparisonSnapshot>.Failure(dbResult.Error!, dbResult.ExitCode);
@@ -615,7 +620,10 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<ScanResult>.Ok(new ScanResult(objects, warnings), ExitCodes.Success);
     }
 
-    private CommandExecutionResult<ScanResult> ScanDatabase(ProjectContext context, Action<string>? progress = null)
+    private CommandExecutionResult<ScanResult> ScanDatabase(
+        ProjectContext context,
+        IReadOnlyList<Regex>? filterPatterns = null,
+        Action<string>? progress = null)
     {
         var dop = SqlServerIntrospector.ResolveParallelism(context.Config.Options.Parallelism);
 
@@ -644,6 +652,13 @@ internal sealed class SyncCommandService : ISyncCommandService
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        if (filterPatterns is not null)
+        {
+            activeObjects = activeObjects
+                .Where(obj => MatchesObjectPatterns(FormatDisplayName(obj.Schema, obj.Name), filterPatterns))
+                .ToArray();
+        }
 
         var total = activeObjects.Length;
         var scriptIndex = 0;
