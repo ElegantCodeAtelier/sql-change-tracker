@@ -2,11 +2,18 @@ using Spectre.Console.Cli;
 using System.Threading;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Output;
+using SqlChangeTracker.Sql;
 
 namespace SqlChangeTracker.Commands;
 
 internal sealed class InitCommand : Command<InitCommandSettings>
 {
+    // Test seam: set to a custom IConnectionTester before calling Program.Main in tests.
+    // Reset to null after use to restore the default.
+    internal static IConnectionTester? ConnectionTesterOverride { get; set; }
+
+    private IConnectionTester GetConnectionTester() => ConnectionTesterOverride ?? new SqlConnectionTester();
+
     public override int Execute(CommandContext context, InitCommandSettings settings, CancellationToken cancellationToken)
     {
         var output = new OutputFormatter(settings.Json);
@@ -14,6 +21,17 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         var resolvedProjectDir = ProjectPathResolver.Resolve(settings.ProjectDir);
         var projectDir = resolvedProjectDir.FullPath;
         var displayProjectDir = resolvedProjectDir.DisplayPath;
+        var configAlreadyExists = File.Exists(SqlctConfigWriter.GetDefaultPath(projectDir));
+        var isInteractive = projectDirFromCurrentDirectory && !settings.Json;
+
+        if (configAlreadyExists)
+        {
+            output.WriteError(new ErrorResult("init", new ErrorInfo(
+                ErrorCodes.InvalidConfig,
+                "project already initialized.",
+                Detail: $"'{ConfigFileNames.SqlctConfigFileName}' already exists in '{displayProjectDir}'. Remove it to re-initialize the project.")));
+            return ExitCodes.InvalidConfig;
+        }
 
         if (projectDirFromCurrentDirectory && !ConfirmCurrentDirectory(displayProjectDir))
         {
@@ -24,6 +42,40 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             return ExitCodes.InvalidConfig;
         }
 
+        var connectionSetup = ResolveConnectionSetup(
+            promptInteractively: isInteractive);
+
+        var authValidation = ValidateConnectionSetup(connectionSetup);
+        if (!authValidation.Success)
+        {
+            output.WriteError(new ErrorResult("init", authValidation.Error!));
+            return authValidation.ExitCode;
+        }
+
+        // Run connection test before creating any files so that a bad configuration
+        // is caught early and the user is not left with a partially-initialised directory.
+        InitConnectionTestResult? connectionTestResult = null;
+        if (!string.IsNullOrWhiteSpace(connectionSetup.Server))
+        {
+            connectionTestResult = RunConnectionTest(connectionSetup, GetConnectionTester());
+            if (!connectionTestResult.Success)
+            {
+                if (!settings.Json)
+                {
+                    PrintConnectionFailureHints(connectionSetup);
+                }
+
+                if (isInteractive && !ConfirmProceedDespiteFailure())
+                {
+                    output.WriteError(new ErrorResult("init", new ErrorInfo(
+                        ErrorCodes.InvalidConfig,
+                        "init cancelled.",
+                        Detail: "connection test failed. Fix your connection settings and run 'sqlct init' again.")));
+                    return ExitCodes.InvalidConfig;
+                }
+            }
+        }
+
         var projectSeeder = new BaselineProjectSeeder();
         var projectSeedResult = projectSeeder.Seed(projectDir);
         if (!projectSeedResult.Success)
@@ -32,7 +84,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             return projectSeedResult.ExitCode;
         }
 
-        var config = SqlctConfigWriter.CreateDefault();
+        var config = BuildConfig(connectionSetup);
         var configWriter = new SqlctConfigWriter();
         var configPath = SqlctConfigWriter.GetDefaultPath(projectDir);
         var configResult = configWriter.Write(configPath, config);
@@ -42,11 +94,196 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             return configResult.ExitCode;
         }
 
+        var nextSteps = GetNextSteps(connectionTestResult);
+
         var created = projectSeedResult.Created.Concat(configResult.Created).ToList();
         var skipped = projectSeedResult.Skipped.Concat(configResult.Skipped).ToList();
-        var result = new InitResult("init", displayProjectDir, created, skipped);
+        var result = new InitResult("init", displayProjectDir, created, skipped, connectionTestResult, nextSteps);
         output.WriteInit(result);
         return ExitCodes.Success;
+    }
+
+    private static ConnectionSetup ResolveConnectionSetup(bool promptInteractively)
+    {
+        if (promptInteractively)
+        {
+            return PromptForConnectionSetup();
+        }
+
+        return new ConnectionSetup(string.Empty, string.Empty, "integrated", null, null, false);
+    }
+
+    private static ConnectionSetup PromptForConnectionSetup()
+    {
+        Console.WriteLine();
+        Console.WriteLine("Connection setup:");
+        Console.Write("  Server [localhost]: ");
+        var server = Console.ReadLine()?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            server = "localhost";
+        }
+
+        Console.Write("  Database: ");
+        var database = Console.ReadLine()?.Trim() ?? string.Empty;
+
+        Console.Write("  Auth (integrated/sql) [integrated]: ");
+        var auth = Console.ReadLine()?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(auth))
+        {
+            auth = "integrated";
+        }
+
+        string? user = null;
+        string? password = null;
+        if (string.Equals(auth, "sql", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("  WARNING: password will be stored in plain text in sqlct.config.json.");
+            Console.Write("  Username: ");
+            user = Console.ReadLine()?.Trim();
+            Console.Write("  Password: ");
+            password = ReadPassword();
+        }
+
+        Console.Write("  Trust server certificate? [y/N]: ");
+        var trustResponse = Console.ReadLine()?.Trim() ?? string.Empty;
+        var trustServerCertificate =
+            string.Equals(trustResponse, "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(trustResponse, "yes", StringComparison.OrdinalIgnoreCase);
+
+        return new ConnectionSetup(server, database, auth, user, password, trustServerCertificate);
+    }
+
+    private static InitConnectionTestResult RunConnectionTest(ConnectionSetup setup, IConnectionTester tester)
+    {
+        var options = new SqlConnectionOptions(
+            setup.Server,
+            setup.Database,
+            setup.Auth,
+            setup.User,
+            setup.Password,
+            setup.TrustServerCertificate);
+        var result = tester.Test(options);
+        return new InitConnectionTestResult(result.Success, result.ErrorMessage);
+    }
+
+    private static void PrintConnectionFailureHints(ConnectionSetup setup)
+    {
+        Console.WriteLine("Troubleshooting tips:");
+        Console.WriteLine("  - Verify the server name and check that SQL Server is running.");
+        Console.WriteLine("  - Ensure the database exists and your account has access.");
+        if (string.Equals(setup.Auth, "sql", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("  - Check your SQL login username and password.");
+        }
+        else
+        {
+            Console.WriteLine("  - For integrated auth, ensure your Windows/AD account has database access.");
+        }
+        if (!setup.TrustServerCertificate)
+        {
+            Console.WriteLine("  - If using a self-signed certificate, run 'sqlct init' again and select 'yes' for trust server certificate.");
+        }
+        Console.WriteLine("  - Run 'sqlct config' to review or update connection settings.");
+    }
+
+    private static IReadOnlyList<string> GetNextSteps(InitConnectionTestResult? connectionTest)
+    {
+        if (connectionTest != null && connectionTest.Success)
+        {
+            return
+            [
+                "Run 'sqlct pull' to pull the current database schema into your folder.",
+                "Run 'sqlct status' to compare the database against your schema folder.",
+                "Run 'sqlct diff' to view schema differences.",
+            ];
+        }
+
+        return
+        [
+            "Edit 'sqlct.config.json' to configure your database connection.",
+            "Run 'sqlct config' to validate your configuration.",
+            "Run 'sqlct pull' to pull the current database schema into your folder.",
+        ];
+    }
+
+    private static (bool Success, ErrorInfo? Error, int ExitCode) ValidateConnectionSetup(ConnectionSetup setup)
+    {
+        // Only validate when a server is provided (empty setup = no connection configured yet).
+        if (string.IsNullOrWhiteSpace(setup.Server))
+        {
+            return (true, null, ExitCodes.Success);
+        }
+
+        if (!string.Equals(setup.Auth, "integrated", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(setup.Auth, "sql", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false,
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid auth value.",
+                    Detail: "database.auth must be 'integrated' or 'sql'."),
+                ExitCodes.InvalidConfig);
+        }
+
+        if (string.Equals(setup.Auth, "sql", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(setup.User))
+        {
+            return (false,
+                new ErrorInfo(ErrorCodes.InvalidConfig, "missing required field.",
+                    Detail: "database.user is required when auth is 'sql'."),
+                ExitCodes.InvalidConfig);
+        }
+
+        return (true, null, ExitCodes.Success);
+    }
+
+    private static SqlctConfig BuildConfig(ConnectionSetup setup)
+    {
+        var config = SqlctConfigWriter.CreateDefault();
+        config.Database.Server = setup.Server;
+        config.Database.Name = setup.Database;
+        config.Database.Auth = setup.Auth;
+        config.Database.User = setup.User ?? string.Empty;
+        config.Database.Password = setup.Password ?? string.Empty;
+        config.Database.TrustServerCertificate = setup.TrustServerCertificate;
+        return config;
+    }
+
+    private static string ReadPassword()
+    {
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine() ?? string.Empty;
+        }
+
+        var password = new System.Text.StringBuilder();
+        try
+        {
+            while (true)
+            {
+                var key = Console.ReadKey(intercept: true);
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    break;
+                }
+                if (key.Key == ConsoleKey.Backspace && password.Length > 0)
+                {
+                    password.Remove(password.Length - 1, 1);
+                    Console.Write("\b \b");
+                }
+                else if (key.Key != ConsoleKey.Backspace)
+                {
+                    password.Append(key.KeyChar);
+                    Console.Write('*');
+                }
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return Console.ReadLine() ?? string.Empty;
+        }
+
+        return password.ToString();
     }
 
     private static bool ConfirmCurrentDirectory(string displayProjectDir)
@@ -57,4 +294,19 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             || string.Equals(response?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool ConfirmProceedDespiteFailure()
+    {
+        Console.Write("Proceed anyway? [y/N]: ");
+        var response = Console.ReadLine();
+        return string.Equals(response?.Trim(), "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(response?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record ConnectionSetup(
+        string Server,
+        string Database,
+        string Auth,
+        string? User,
+        string? Password,
+        bool TrustServerCertificate);
 }

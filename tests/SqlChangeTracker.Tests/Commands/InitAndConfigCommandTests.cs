@@ -1,8 +1,11 @@
 using SqlChangeTracker.Config;
+using SqlChangeTracker.Commands;
+using SqlChangeTracker.Sql;
 using Xunit;
 
 namespace SqlChangeTracker.Tests.Commands;
 
+[Collection("GlobalConsoleTests")]
 public sealed class InitAndConfigCommandTests
 {
     [Theory]
@@ -143,6 +146,149 @@ public sealed class InitAndConfigCommandTests
     }
 
     [Fact]
+    public void Init_WhenConfigAlreadyExists_ReturnsInvalidConfig()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            Directory.CreateDirectory(projectDir);
+            File.WriteAllText(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName), "{}");
+
+            var exitCode = Program.Main(["init", "--project-dir", projectDir]);
+
+            Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+
+    [Fact]
+    public void Init_WithoutProjectDir_WhenAccepted_CreatesProjectStructureAndConfig()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            // Use a stub connection tester to avoid slow real-connection attempts.
+            // Interactive prompts receive null/default responses (stdin exhausted after "y").
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(true, null);
+            try
+            {
+                // "y" answers the directory confirmation; subsequent prompts receive
+                // null (stdin exhausted) and fall back to defaults (server = localhost).
+                Console.SetIn(new StringReader("y" + Environment.NewLine));
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+                Assert.True(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+
+    [Fact]
+    public void Init_Interactive_ConnectionFailed_ProceedDeclined_NoFilesCreated()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "Connection refused.");
+            try
+            {
+                // "y" confirms directory; empty lines use prompt defaults; "n" declines proceed-anyway.
+                Console.SetIn(new StringReader(
+                    "y" + Environment.NewLine +   // confirm directory
+                    Environment.NewLine +          // server → localhost
+                    Environment.NewLine +          // database → empty
+                    Environment.NewLine +          // auth → integrated
+                    Environment.NewLine +          // trust cert → n
+                    "n" + Environment.NewLine));   // proceed anyway → no
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.InvalidConfig, exitCode);
+                Assert.False(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+                Assert.False(Directory.Exists(Path.Combine(tempDir, "Tables")));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_Interactive_ConnectionFailed_ProceedConfirmed_CreatesFiles()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(false, "Connection refused.");
+            try
+            {
+                // "y" confirms directory; empty lines use prompt defaults; "y" confirms proceed-anyway.
+                Console.SetIn(new StringReader(
+                    "y" + Environment.NewLine +   // confirm directory
+                    Environment.NewLine +          // server → localhost
+                    Environment.NewLine +          // database → empty
+                    Environment.NewLine +          // auth → integrated
+                    Environment.NewLine +          // trust cert → n
+                    "y" + Environment.NewLine));   // proceed anyway → yes
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+                Assert.True(File.Exists(Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName)));
+                Assert.True(Directory.Exists(Path.Combine(tempDir, "Tables")));
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+
+    [Fact]
     public void Config_WhenConfigMissing_ReturnsInvalidConfig()
     {
         var tempDir = CreateTempDir();
@@ -198,4 +344,19 @@ public sealed class InitAndConfigCommandTests
             Directory.Delete(tempDir, true);
         }
     }
+}
+
+file sealed class StubConnectionTester : IConnectionTester
+{
+    private readonly bool _success;
+    private readonly string? _errorMessage;
+
+    public StubConnectionTester(bool success, string? errorMessage)
+    {
+        _success = success;
+        _errorMessage = errorMessage;
+    }
+
+    public ConnectionTestResult Test(SqlConnectionOptions options)
+        => new(_success, _errorMessage);
 }

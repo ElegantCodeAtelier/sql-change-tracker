@@ -96,8 +96,18 @@ Behavior:
 - Initialize configuration in an empty directory or existing project structure.
 - Requires only schema directory context.
 - If `--project-dir` is omitted, assume current working directory and prompt for confirmation.
+- On first-time setup (when `sqlct.config.json` does not yet exist in the target directory), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
+- If `sqlct.config.json` already exists in the target directory, exit with an error and suggest removing the file to re-initialize the project.
+- Auth accepts `integrated` (Windows/Entra Authentication, default) or `sql` (SQL Server Authentication).
+- Password input during interactive prompts is masked.
+- When connection details are collected, attempt a connection test **before** creating any project files (5-second timeout).
+- If the connection test fails, print troubleshooting hints and prompt `"Proceed anyway? [y/N]:"`. If declined, exit without creating any files. If confirmed, proceed to create the directory structure and write config.
+- After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure.
+- Exit codes:
+  - `0` success.
+  - `2` invalid config (e.g., `sqlct.config.json` already exists, or connection test declined).
 
-### config
+
 Parse, validate, and write configuration from the project directory.
 `
 sqlct config [--project-dir <path>]
@@ -116,22 +126,28 @@ Tracked-table rules:
 - Tracked tables MUST be unique case-insensitively and persisted in stable sorted order.
 - Top-level `status`, `diff`, and `pull` process `TableData` only for tables explicitly listed in `data.trackedTables`.
 
-Pattern forms for `track` and `untrack`:
-- exact table: `schema.table`
-- schema wildcard: `schema.*`
-- name wildcard: `*.table`
-- Pattern matching is case-insensitive.
-- Bare table names without schema are not supported.
+Selector forms for `track` and `untrack`:
+- Positional `<pattern>` or `--object <pattern>`: glob-style table selector.
+  - exact table: `schema.table`
+  - schema wildcard: `schema.*`
+  - name wildcard: `*.table`
+  - Matching is case-insensitive.
+  - Bare table names without schema are not supported.
+- `--filter <regex>`: .NET regular expression matched case-insensitively against the full display name (`schema.table`).
+  - Use `.*` for substring matching.
+  - An invalid regular expression returns exit code 2 (invalid config).
+- Exactly one of: positional `<pattern>`, `--object`, or `--filter` must be provided.
+  - Combining any two or omitting all three returns exit code 2 (invalid config).
 
 #### track
 `
-sqlct data track <pattern> [--project-dir <path>]
+sqlct data track [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
 `
 
 Behavior:
-- Match user tables in the current database against `<pattern>`.
+- Match user tables in the current database against the provided selector.
 - List matched tables in stable sorted order before any config change is made.
-- When `<pattern>` matches no user tables, return success with an informational message and leave config unchanged.
+- When the selector matches no user tables, return success with an informational message and leave config unchanged.
 - When one or more tables match, prompt for confirmation before updating `sqlct.config.json`.
 - If confirmed, add matched tables to `data.trackedTables` in `sqlct.config.json` as explicit `schema.table` entries.
 - Normalize ordering and deduplicate tracked tables case-insensitively.
@@ -141,13 +157,13 @@ Behavior:
 
 #### untrack
 `
-sqlct data untrack <pattern> [--project-dir <path>]
+sqlct data untrack [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]
 `
 
 Behavior:
-- Match against existing tracked entries case-insensitively.
+- Match against existing tracked entries using the provided selector.
 - List matched tracked tables in stable sorted order before any config change is made.
-- When `<pattern>` matches no tracked tables, return success with an informational message and leave config unchanged.
+- When the selector matches no tracked tables, return success with an informational message and leave config unchanged.
 - When one or more tracked tables match, prompt for confirmation before updating `sqlct.config.json`.
 - If confirmed, remove matched tracked tables from `data.trackedTables` in `sqlct.config.json`.
 - If confirmation is declined, return success with an informational message and leave config unchanged.
@@ -231,20 +247,15 @@ Behavior:
 ## Usage
 Common flows using the simplified CLI.
 
-### First-time setup
-`
-sqlct init --project-dir ./schema
-`
-Result:
-- Initializes config and schema folder structure in the target directory.
-
-### Initialize in current directory
+### First-time setup (interactive)
 `
 sqlct init
 `
 Result:
-- Prompts for confirmation.
-- Initializes config and schema folder structure in the current directory if confirmed.
+- Prompts for directory confirmation.
+- On first-time setup (no existing config), prompts for connection details, runs a connection test, and on success creates the project directory structure and writes config; prints next steps.
+- On connection failure, prints troubleshooting hints and prompts to proceed or abort.
+- If `sqlct.config.json` already exists, exits with an error and suggests removing it to re-initialize.
 
 ### Validate and normalize configuration
 `
@@ -257,6 +268,8 @@ Result:
 ### Manage tracked data tables
 `
 sqlct data track Sales.* --project-dir ./schema
+sqlct data track --object Sales.Orders --project-dir ./schema
+sqlct data track --filter '^Sales\.' --project-dir ./schema
 sqlct data list --project-dir ./schema
 `
 Result:
