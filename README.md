@@ -27,6 +27,7 @@ validate configuration, and generate reproducible scripts for Git and CI/CD.
 - `sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...]`
 
 Current runtime scope for `status`, `diff`, and `pull` covers:
+- `Assembly`
 - `Table`
 - `View`
 - `StoredProcedure`
@@ -37,8 +38,20 @@ Current runtime scope for `status`, `diff`, and `pull` covers:
 - `User`
 - `Synonym`
 - `UserDefinedType`
+- `TableType`
+- `XmlSchemaCollection`
 - `PartitionFunction`
 - `PartitionScheme`
+- `MessageType`
+- `Contract`
+- `Queue`
+- `Service`
+- `Route`
+- `EventNotification`
+- `ServiceBinding`
+- `FullTextCatalog`
+- `FullTextStoplist`
+- `SearchPropertyList`
 
 When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 

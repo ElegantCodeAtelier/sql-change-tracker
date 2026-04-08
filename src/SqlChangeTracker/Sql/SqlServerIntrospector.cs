@@ -14,6 +14,12 @@ internal class SqlServerIntrospector
         var queries = new List<Func<IEnumerable<DbObjectInfo>>>
         {
             () => RunQuery(options, @"
+SELECT '' AS schema_name, a.name AS object_name, 'ASSEMBLY' AS type
+FROM sys.assemblies a
+WHERE a.is_user_defined = 1
+ORDER BY a.name;", MapObjectType),
+
+            () => RunQuery(options, @"
 SELECT s.name AS schema_name, o.name AS object_name, o.type
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
@@ -348,6 +354,17 @@ ORDER BY ps.name;", MapObjectType),
 
         switch (objectType)
         {
+            case "Assembly":
+                command.CommandText = """
+SELECT '' AS schema_name, a.name AS object_name
+FROM sys.assemblies a
+WHERE a.is_user_defined = 1
+  AND a.name = @name
+ORDER BY a.name;
+""";
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
             case "Table":
                 command.CommandText = """
 SELECT s.name AS schema_name, t.name AS object_name
@@ -697,6 +714,7 @@ ORDER BY sp.name;
         var normalized = type.Trim();
         return normalized switch
         {
+            "ASSEMBLY" => "Assembly",
             "U" => "Table",
             "V" => "View",
             "P" => "StoredProcedure",

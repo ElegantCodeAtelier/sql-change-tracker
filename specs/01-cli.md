@@ -1,7 +1,7 @@
 # CLI
 
 Status: draft
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 ## Command Overview
 Binary: sqlct.
@@ -36,7 +36,7 @@ Use git-style verbs: short, task-oriented commands with clear intent.
 - pull
 
 ## v1 Scope
-- Active schema object types: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - `status`, `diff`, and `pull` process the active schema object types.
 - When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 - Unsupported object types discovered in DB introspection are skipped with warnings.

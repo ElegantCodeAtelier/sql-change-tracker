@@ -31,6 +31,7 @@ public sealed class InitAndConfigCommandTests
 
             Assert.Equal(ExitCodes.Success, exitCode);
             Assert.True(File.Exists(Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName)));
+            Assert.True(Directory.Exists(Path.Combine(projectDir, "Assemblies")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Tables")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Stored Procedures")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Synonyms")));

@@ -1,7 +1,7 @@
 # Architecture
 
 Status: draft
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 ## Goals
 - Deterministic, reproducible scripting.
@@ -50,7 +50,7 @@ Last updated: 2026-04-07
   - Internal orchestration for `status`, `diff`, and `pull`.
   - Responsibilities:
     - load project/config and validate DB config
-    - scan active schema folders (`Tables`, `Views`, `Stored Procedures`, `Functions`, `Sequences`, `Security/Schemas`, `Security/Roles`, `Security/Users`, `Synonyms`, `Types/User-defined Data Types`, `Types/Table Types`, `Types/XML Schema Collections`, `Storage/Partition Functions`, `Storage/Partition Schemes`, `Storage/Full Text Catalogs`, `Storage/Full Text Stoplists`, `Storage/Search Property Lists`, `Service Broker/Contracts`, `Service Broker/Event Notifications`, `Service Broker/Message Types`, `Service Broker/Queues`, `Service Broker/Remote Service Bindings`, `Service Broker/Routes`, `Service Broker/Services`)
+    - scan active schema folders (`Assemblies`, `Tables`, `Views`, `Stored Procedures`, `Functions`, `Sequences`, `Security/Schemas`, `Security/Roles`, `Security/Users`, `Synonyms`, `Types/User-defined Data Types`, `Types/Table Types`, `Types/XML Schema Collections`, `Storage/Partition Functions`, `Storage/Partition Schemes`, `Storage/Full Text Catalogs`, `Storage/Full Text Stoplists`, `Storage/Search Property Lists`, `Service Broker/Contracts`, `Service Broker/Event Notifications`, `Service Broker/Message Types`, `Service Broker/Queues`, `Service Broker/Remote Service Bindings`, `Service Broker/Routes`, `Service Broker/Services`)
     - snapshot DB objects for the same active types
     - classify objects (`added`, `changed`, `deleted`) in deterministic order
     - render unified diff text for single-object and aggregate modes
@@ -72,7 +72,7 @@ Last updated: 2026-04-07
 - SQL Server (SqlClient) handles connectivity, metadata discovery, and scripting. It returns raw scripts and metadata for downstream normalization and persistence.
 - Normalization and formatting follow `specs/04-scripting.md` and v1 runtime constraints.
 - Sync runtime compares normalized scripts between DB and folder sources, producing structured status/diff/pull results.
-- Active schema comparison scope is: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- Active schema comparison scope is: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - When `data.trackedTables` contains tracked tables, top-level `status`, `diff`, and `pull` also include `TableData` artifacts for those tracked tables.
 - Include/exclude filters and comparison ignore options are deferred to vNext.
 

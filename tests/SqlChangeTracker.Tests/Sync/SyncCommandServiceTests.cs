@@ -42,6 +42,7 @@ public sealed class SyncCommandServiceTests
     [InlineData("dbo.Customer", null, "dbo", "Customer", false)]
     [InlineData("ServiceUser", null, "", "ServiceUser", true)]
     [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
+    [InlineData("Assembly:AppClr", "Assembly", "", "AppClr", true)]
     [InlineData("SearchPropertyList:DocumentProperties", "SearchPropertyList", "", "DocumentProperties", true)]
     [InlineData("Synonym:Reporting.CurrentSales", "Synonym", "Reporting", "CurrentSales", false)]
     [InlineData("UserDefinedType:dbo.PhoneNumber", "UserDefinedType", "dbo", "PhoneNumber", false)]
@@ -474,6 +475,58 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunDiff_WithAssemblySelector_UsesTargetedDatabaseDiscoveryWithEmptySchema()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Assemblies", "AppClr.sql"), "CREATE ASSEMBLY [AppClr]\r\nFROM 0x00\r\nWITH PERMISSION_SET = SAFE\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo(string.Empty, "AppClr", "Assembly")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) => "CREATE ASSEMBLY [AppClr]\r\nFROM 0x00\r\nWITH PERMISSION_SET = SAFE\r\nGO\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "Assembly:AppClr");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Payload!.Diff);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(new[] { "Assembly" }, introspector.LastRequestedObjectTypes);
+            Assert.Equal(string.Empty, introspector.LastRequestedSchema);
+            Assert.Equal("AppClr", introspector.LastRequestedName);
+            Assert.Equal(new[] { "Assembly:.AppClr" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunStatus_WithProjectDirWrappedInSingleQuotes_ResolvesConfigPath()
     {
         var tempDir = CreateTempDir();
@@ -550,13 +603,14 @@ public sealed class SyncCommandServiceTests
             var supportedPartitionFunction = CreateFile(tempDir, Path.Combine("Storage", "Partition Functions", "FiscalYear_PF.sql"), "CREATE PARTITION FUNCTION [FiscalYear_PF]...");
             var supportedSynonym = CreateFile(tempDir, Path.Combine("Synonyms", "dbo.LegacyCustomer.sql"), "CREATE SYNONYM [dbo].[LegacyCustomer] FOR [dbo].[Customer]");
             var supportedUserDefinedType = CreateFile(tempDir, Path.Combine("Types", "User-defined Data Types", "dbo.PhoneNumber.sql"), "CREATE TYPE [dbo].[PhoneNumber] FROM [nvarchar] (20) NOT NULL");
+            var supportedAssembly = CreateFile(tempDir, Path.Combine("Assemblies", "AppClr.sql"), "CREATE ASSEMBLY [AppClr] FROM 0x00 WITH PERMISSION_SET = SAFE");
             var supportedData = CreateFile(tempDir, Path.Combine("Data", "dbo.Customer_Data.sql"), "SELECT 1;");
             CreateFile(tempDir, Path.Combine("Custom", "dbo.Legacy.sql"), "SELECT 1;");
             CreateFile(tempDir, Path.Combine("Data", "Invalid", "dbo.Customer_Data.sql"), "SELECT 1;");
 
             var warnings = SyncCommandService.CollectUnsupportedFolderWarnings(
                 tempDir,
-                [supported, supportedRole, supportedPartitionFunction, supportedSynonym, supportedUserDefinedType, supportedData]);
+                [supported, supportedRole, supportedPartitionFunction, supportedSynonym, supportedUserDefinedType, supportedAssembly, supportedData]);
 
             Assert.Collection(warnings,
                 warning =>

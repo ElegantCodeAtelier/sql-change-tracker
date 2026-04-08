@@ -28,6 +28,7 @@ sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...] 
 ```
 
 Current runtime scope for `status`, `diff`, and `pull` covers:
+- `Assembly`
 - `Table`
 - `View`
 - `StoredProcedure`

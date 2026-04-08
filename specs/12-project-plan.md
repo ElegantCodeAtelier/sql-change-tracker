@@ -1,14 +1,14 @@
 # Project Plan
 
 Status: draft
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 This plan reflects the current repository state and defines execution order to reach v1.
 
 ## Current State Summary
 - CLI entrypoint exists with commands: `init`, `config`, `status`, `diff`, `pull`.
 - `init`, `config`, `status`, `diff`, and `pull` are implemented.
-- `status`, `diff`, and `pull` are active for: `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- `status`, `diff`, and `pull` are active for: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - Additional defined-but-inactive object types remain tracked in `specs/04-scripting.md` Section 5.2.
 - Config runtime contract is simplified to:
   - `database` (existing fields)
@@ -28,7 +28,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 | S1 | CLI foundation and command wiring | done | Command registration and global settings are in place. |
 | S2 | Config and init flows | done | `sqlct.config.json` read/write and project seeding are functional. |
 | S3 | SQL adapter and schema mapping | done | Active object-type services are integrated into command runtime. |
-| S3b | Additional object-type activation | done | Active scope covers broker, full-text, XML schema collection, and search-property-list additions needed for current compatibility work. |
+| S3b | Additional object-type activation | done | Active scope covers broker, full-text, XML schema collection, search-property-list, and assembly support needed for current compatibility work. |
 | S4 | Status/diff engine | done | End-to-end behavior implemented for active object types. |
 | S5 | Pull workflow | done | End-to-end reconciliation implemented for active object types. |
 | S6 | Test and quality hardening | in_progress | Fast unit tests added; DB-backed local-only coverage still to expand. |
@@ -50,7 +50,8 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - `specs/09-architecture.md`
 
 ### Tasks
-- Activate folder mapping and project seeding for `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- Activate folder mapping and project seeding for `Assembly`, `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- Expand DB discovery and scripting so user-defined assemblies from `sys.assemblies` and `sys.assembly_files` are included in the active sync set with deterministic binary output.
 - Expand DB discovery filters so user-defined Service Broker objects and user-defined full-text stoplists are included while SQL Server-owned broker/system-stoplist artifacts remain excluded.
 - Use `sys.registered_search_property_lists` and `sys.registered_search_properties` when available instead of the stale `sys.fulltext_search_property_lists` catalog name.
 - Wire the new object types through `status`, `diff`, and `pull` comparison flows.
@@ -58,7 +59,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 - Add local-only DB-backed validation for CreditRiskDB Service Broker coverage, CreditRiskDB table types, XML schema collections, event notifications, remote service bindings, and AdventureWorks full-text/search-property-list storage objects when the feature surface is available.
 
 ### Acceptance Criteria
-- `status`, `diff`, and `pull` support `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- `status`, `diff`, and `pull` support `Assembly`, `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
 - CreditRiskDB compatibility runs no longer warn that those object types are unsupported.
 - SQL Server-owned Service Broker artifacts and system full-text stoplists remain excluded from the active sync set.
 - Full-text catalog, full-text stoplist, and search property list paths align with the `Storage/` folder taxonomy defined in `specs/03-schema-folder.md`.

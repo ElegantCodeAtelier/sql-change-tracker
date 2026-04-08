@@ -31,6 +31,15 @@ internal class SqlServerScripter
         string Name,
         List<string> Lines);
 
+    internal sealed record AssemblyBinaryFile(int FileId, string Name, byte[] Content);
+
+    internal sealed record AssemblyScriptingInfo(
+        string Name,
+        string? OwnerName,
+        string PermissionSetDesc,
+        bool IsVisible,
+        IReadOnlyList<AssemblyBinaryFile> Files);
+
     private readonly record struct TableStorageInfo(
         string? DataSpace,
         string? PartitionColumn,
@@ -65,6 +74,7 @@ internal class SqlServerScripter
 
         return obj.ObjectType switch
         {
+            "Assembly" => ScriptAssembly(connection, obj, referenceLines),
             "Table" => ScriptTable(connection, obj, referenceLines),
             "StoredProcedure" => ScriptModule(connection, obj, true, referenceLines),
             "View" => ScriptView(connection, obj, referenceLines),
@@ -369,6 +379,145 @@ FROM {QuoteIdentifier(table.Schema)}.{QuoteIdentifier(table.Name)}
     }
 
     private sealed record TableDataRow(IReadOnlyList<string> Literals, string SortKey);
+
+    private static string ScriptAssembly(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT a.assembly_id,
+       a.name,
+       owner_principal.name AS owner_name,
+       a.permission_set_desc,
+       a.is_visible
+FROM sys.assemblies a
+LEFT JOIN sys.database_principals owner_principal ON owner_principal.principal_id = a.principal_id
+WHERE a.is_user_defined = 1
+  AND a.name = @name;";
+        command.Parameters.AddWithValue("@name", obj.Name);
+
+        int assemblyId;
+        string name;
+        string? ownerName;
+        string permissionSetDesc;
+        bool isVisible;
+
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException($"Assembly not found: {QuoteIdentifier(obj.Name)}.");
+            }
+
+            assemblyId = reader.GetInt32(0);
+            name = reader.GetString(1);
+            ownerName = reader.IsDBNull(2) ? null : reader.GetString(2);
+            permissionSetDesc = reader.GetString(3);
+            isVisible = reader.GetBoolean(4);
+        }
+
+        var assembly = new AssemblyScriptingInfo(
+            name,
+            ownerName,
+            permissionSetDesc,
+            isVisible,
+            ReadAssemblyFiles(connection, assemblyId));
+
+        var lines = BuildAssemblyDefinitionLines(assembly).ToList();
+        lines.AddRange(ReadAssemblyPermissions(connection, name, referenceLines));
+        AppendExtendedPropertyLines(lines, ReadAssemblyExtendedProperties(connection, name, referenceLines), referenceLines);
+        AppendTrailingBlankLines(lines, referenceLines);
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    internal static IReadOnlyList<string> BuildAssemblyDefinitionLines(AssemblyScriptingInfo assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+
+        var orderedFiles = assembly.Files
+            .OrderBy(file => file.FileId)
+            .ToArray();
+        if (orderedFiles.Length == 0)
+        {
+            throw new InvalidOperationException($"Assembly [{assembly.Name}] has no assembly_files rows.");
+        }
+
+        var manifest = orderedFiles[0];
+        if (manifest.FileId != 1)
+        {
+            throw new InvalidOperationException($"Assembly [{assembly.Name}] is missing manifest file_id 1.");
+        }
+
+        var lines = new List<string>
+        {
+            $"CREATE ASSEMBLY {QuoteIdentifier(assembly.Name)}"
+        };
+        if (!string.IsNullOrWhiteSpace(assembly.OwnerName))
+        {
+            lines.Add($"AUTHORIZATION {QuoteIdentifier(assembly.OwnerName)}");
+        }
+
+        lines.Add($"FROM 0x{Convert.ToHexString(manifest.Content)}");
+        lines.Add($"WITH PERMISSION_SET = {NormalizeAssemblyPermissionSet(assembly.PermissionSetDesc)}");
+        lines.Add("GO");
+
+        foreach (var file in orderedFiles.Skip(1))
+        {
+            if (string.IsNullOrWhiteSpace(file.Name))
+            {
+                throw new InvalidOperationException($"Assembly [{assembly.Name}] has an additional file with no name.");
+            }
+
+            lines.Add($"ALTER ASSEMBLY {QuoteIdentifier(assembly.Name)} ADD FILE FROM 0x{Convert.ToHexString(file.Content)} AS {QuoteIdentifier(file.Name)}");
+            lines.Add("GO");
+        }
+
+        if (!assembly.IsVisible)
+        {
+            lines.Add($"ALTER ASSEMBLY {QuoteIdentifier(assembly.Name)} WITH VISIBILITY = OFF");
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    internal static string NormalizeAssemblyPermissionSet(string permissionSetDesc)
+    {
+        var normalized = permissionSetDesc.Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "SAFE" or "SAFE_ACCESS" => "SAFE",
+            "EXTERNAL_ACCESS" => "EXTERNAL_ACCESS",
+            "UNSAFE" or "UNSAFE_ACCESS" => "UNSAFE",
+            _ => throw new InvalidOperationException($"Unsupported assembly permission set '{permissionSetDesc}'.")
+        };
+    }
+
+    private static IReadOnlyList<AssemblyBinaryFile> ReadAssemblyFiles(SqlConnection connection, int assemblyId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT af.file_id,
+       af.name,
+       af.content
+FROM sys.assembly_files af
+WHERE af.assembly_id = @assemblyId
+ORDER BY af.file_id;";
+        command.Parameters.AddWithValue("@assemblyId", assemblyId);
+
+        var files = new List<AssemblyBinaryFile>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            files.Add(new AssemblyBinaryFile(
+                reader.GetInt32(0),
+                reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                reader.IsDBNull(2)
+                    ? throw new InvalidOperationException($"Assembly file content is missing for assembly_id {assemblyId}.")
+                    : reader.GetFieldValue<byte[]>(2)));
+        }
+
+        return files;
+    }
 
     private static string ScriptModule(
         SqlConnection connection,
@@ -4339,6 +4488,44 @@ ORDER BY ep.name;",
             schema,
             "XML SCHEMA COLLECTION",
             name);
+
+    private static IEnumerable<string> ReadAssemblyPermissions(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.assemblies a ON a.assembly_id = dp.major_id
+WHERE dp.class_desc = 'ASSEMBLY'
+  AND a.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            $"ASSEMBLY::{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadAssemblyExtendedProperties(
+        SqlConnection connection,
+        string name,
+        string[]? referenceLines)
+        => ExecuteExtendedPropertyQuery(
+            connection,
+            @"
+SELECT ep.name AS prop_name, ep.value AS prop_value
+FROM sys.extended_properties ep
+JOIN sys.assemblies a ON a.assembly_id = ep.major_id
+WHERE ep.class_desc = 'ASSEMBLY'
+  AND a.name = @name
+ORDER BY ep.name;",
+            command => command.Parameters.AddWithValue("@name", name),
+            referenceLines,
+            "ASSEMBLY",
+            name,
+            null,
+            null);
 
     private static IEnumerable<string> ReadMessageTypePermissions(
         SqlConnection connection,
