@@ -5,6 +5,7 @@ using Xunit;
 
 namespace SqlChangeTracker.Tests.Commands;
 
+[Collection("GlobalConsoleTests")]
 public sealed class InitAndConfigCommandTests
 {
     [Theory]
