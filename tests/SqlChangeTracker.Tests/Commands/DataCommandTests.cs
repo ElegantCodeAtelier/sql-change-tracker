@@ -7,6 +7,7 @@ using Xunit;
 
 namespace SqlChangeTracker.Tests.Commands;
 
+[Collection("GlobalConsoleTests")]
 public sealed class DataCommandTests
 {
     [Fact]

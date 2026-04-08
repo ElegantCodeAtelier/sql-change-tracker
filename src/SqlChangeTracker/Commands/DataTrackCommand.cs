@@ -41,8 +41,23 @@ internal sealed class DataTrackCommand : Command<DataTrackCommandSettings>
             return ExitCodes.InvalidConfig;
         }
 
-        var effectiveObjectPattern = hasPositional ? settings.Pattern : hasObject ? settings.ObjectPattern : null;
-        var effectiveFilterPattern = hasFilter ? settings.FilterPattern : null;
+        string? effectiveObjectPattern;
+        string? effectiveFilterPattern;
+        if (hasPositional)
+        {
+            effectiveObjectPattern = settings.Pattern;
+            effectiveFilterPattern = null;
+        }
+        else if (hasObject)
+        {
+            effectiveObjectPattern = settings.ObjectPattern;
+            effectiveFilterPattern = null;
+        }
+        else
+        {
+            effectiveObjectPattern = null;
+            effectiveFilterPattern = settings.FilterPattern;
+        }
 
         var prepare = DataTrackingService.PrepareTrack(settings.ProjectDir, effectiveObjectPattern, effectiveFilterPattern);
         if (!prepare.Success)

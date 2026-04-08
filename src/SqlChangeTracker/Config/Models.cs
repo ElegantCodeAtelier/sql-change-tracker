@@ -13,7 +13,13 @@ internal sealed record InitResult(
     string Command,
     string ProjectDir,
     IReadOnlyList<string> Created,
-    IReadOnlyList<string> Skipped);
+    IReadOnlyList<string> Skipped,
+    InitConnectionTestResult? ConnectionTest = null,
+    IReadOnlyList<string>? NextSteps = null);
+
+internal sealed record InitConnectionTestResult(
+    bool Success,
+    string? ErrorMessage);
 
 internal sealed record ConfigValidateResult(
     string Command,

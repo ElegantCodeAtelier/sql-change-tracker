@@ -96,8 +96,18 @@ Behavior:
 - Initialize configuration in an empty directory or existing project structure.
 - Requires only schema directory context.
 - If `--project-dir` is omitted, assume current working directory and prompt for confirmation.
+- On first-time setup (when `sqlct.config.json` does not yet exist in the target directory), prompt step-by-step for connection details: server, database, auth mode, credentials (when auth is `sql`), and trust-server-certificate.
+- If `sqlct.config.json` already exists in the target directory, exit with an error and suggest removing the file to re-initialize the project.
+- Auth accepts `integrated` (Windows/Entra Authentication, default) or `sql` (SQL Server Authentication).
+- Password input during interactive prompts is masked.
+- When connection details are collected, attempt a connection test **before** creating any project files (5-second timeout).
+- If the connection test fails, print troubleshooting hints and prompt `"Proceed anyway? [y/N]:"`. If declined, exit without creating any files. If confirmed, proceed to create the directory structure and write config.
+- After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure.
+- Exit codes:
+  - `0` success.
+  - `2` invalid config (e.g., `sqlct.config.json` already exists, or connection test declined).
 
-### config
+
 Parse, validate, and write configuration from the project directory.
 `
 sqlct config [--project-dir <path>]
@@ -237,20 +247,15 @@ Behavior:
 ## Usage
 Common flows using the simplified CLI.
 
-### First-time setup
-`
-sqlct init --project-dir ./schema
-`
-Result:
-- Initializes config and schema folder structure in the target directory.
-
-### Initialize in current directory
+### First-time setup (interactive)
 `
 sqlct init
 `
 Result:
-- Prompts for confirmation.
-- Initializes config and schema folder structure in the current directory if confirmed.
+- Prompts for directory confirmation.
+- On first-time setup (no existing config), prompts for connection details, runs a connection test, and on success creates the project directory structure and writes config; prints next steps.
+- On connection failure, prints troubleshooting hints and prompts to proceed or abort.
+- If `sqlct.config.json` already exists, exits with an error and suggests removing it to re-initialize.
 
 ### Validate and normalize configuration
 `
