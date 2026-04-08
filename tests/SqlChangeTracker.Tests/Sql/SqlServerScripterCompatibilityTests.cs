@@ -41,6 +41,79 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void ApplyDefinitionFormatting_PreservesReferenceCommentBeforeCreate()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "\t/* =============================================",
+            string.Empty,
+            "\tAuthor: example",
+            "CREATE PROCEDURE [dbo].[Sample]",
+            "\t@ExecutionID int",
+            "AS",
+            "SELECT 1"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER ON",
+            "GO",
+            "SET ANSI_NULLS ON",
+            "GO",
+            "/* =============================================",
+            string.Empty,
+            "\tAuthor: example",
+            "CREATE PROCEDURE [dbo].[Sample]",
+            "\t@ExecutionID int",
+            "AS",
+            "SELECT 1",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+        var firstLine = formatted.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)[0];
+
+        Assert.Equal("/* =============================================", firstLine);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesReferenceCreateLineIdentifierQuoting()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE PROCEDURE Reporting.Sample_Proc",
+            "\t@ModelConfigID int",
+            "AS",
+            "BEGIN",
+            "\tSELECT @ModelConfigID",
+            "END"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER ON",
+            "GO",
+            "SET ANSI_NULLS ON",
+            "GO",
+            string.Empty,
+            "CREATE PROCEDURE [Reporting].[Sample_Proc]",
+            "\t@ModelConfigID int",
+            "AS",
+            "BEGIN",
+            "\tSELECT @ModelConfigID",
+            "END",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+        var createLine = formatted
+            .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+            .First(line => line.Length > 0);
+
+        Assert.Equal("CREATE PROCEDURE [Reporting].[Sample_Proc]", createLine);
+    }
+
+    [Fact]
     public void BuildReferenceTableColumnTypeMap_ReadsCompatibleTypeTokens()
     {
         var referenceLines = new[]

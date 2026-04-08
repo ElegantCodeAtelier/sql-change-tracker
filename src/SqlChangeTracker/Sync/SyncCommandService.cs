@@ -355,7 +355,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 continue;
             }
 
-            if (ScriptsEqualForComparison(dbObject.Script, folderObject.Script))
+            if (ScriptsEqualForComparison(dbObject.ObjectType, dbObject.Script, folderObject.Script))
             {
                 IncrementPullCounter(dbObject.ObjectType, ref schemaUnchanged, ref dataUnchanged);
                 continue;
@@ -1296,7 +1296,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 continue;
             }
 
-            if (ScriptsEqualForComparison(sourceObject.Script, targetObject.Script))
+            if (ScriptsEqualForComparison(sourceObject.ObjectType, sourceObject.Script, targetObject.Script))
             {
                 continue;
             }
@@ -1330,7 +1330,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return new ChangeEntry(selected, null, null, "unchanged");
         }
 
-        if (ScriptsEqualForComparison(sourceObject.Script, targetObject.Script))
+        if (ScriptsEqualForComparison(sourceObject.ObjectType, sourceObject.Script, targetObject.Script))
         {
             return new ChangeEntry(sourceObject, sourceObject, targetObject, "unchanged");
         }
@@ -1359,13 +1359,16 @@ internal sealed class SyncCommandService : ISyncCommandService
             return string.Empty;
         }
 
-        return BuildUnifiedDiff(sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
+        return BuildUnifiedDiff(entry.Object.ObjectType, sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
     }
 
     internal static string BuildUnifiedDiff(string sourceLabel, string targetLabel, string sourceScript, string targetScript, int contextLines = 3)
+        => BuildUnifiedDiff(null, sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
+
+    internal static string BuildUnifiedDiff(string? objectType, string sourceLabel, string targetLabel, string sourceScript, string targetScript, int contextLines = 3)
     {
-        var normalizedSource = NormalizeForComparison(sourceScript);
-        var normalizedTarget = NormalizeForComparison(targetScript);
+        var normalizedSource = NormalizeForComparison(sourceScript, objectType);
+        var normalizedTarget = NormalizeForComparison(targetScript, objectType);
         if (string.Equals(normalizedSource, normalizedTarget, StringComparison.Ordinal))
         {
             return string.Empty;
@@ -1739,7 +1742,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 continue;
             }
 
-            if (!ScriptsEqualForComparison(sourceObject.Script, targetObject.Script))
+            if (!ScriptsEqualForComparison(sourceObject.ObjectType, sourceObject.Script, targetObject.Script))
             {
                 results.Add(new ComparableChange(sourceObject, "changed"));
             }
@@ -1748,8 +1751,8 @@ internal sealed class SyncCommandService : ISyncCommandService
         return results;
     }
 
-    private static bool ScriptsEqualForComparison(string left, string right)
-        => string.Equals(NormalizeForComparison(left), NormalizeForComparison(right), StringComparison.Ordinal);
+    private static bool ScriptsEqualForComparison(string? objectType, string left, string right)
+        => string.Equals(NormalizeForComparison(left, objectType), NormalizeForComparison(right, objectType), StringComparison.Ordinal);
 
     private static IReadOnlyList<string> GetCandidateDbObjectTypes(ObjectSelector selector)
     {
@@ -1770,18 +1773,18 @@ internal sealed class SyncCommandService : ISyncCommandService
     }
 
     internal static string NormalizeForComparison(string script)
+        => NormalizeForComparison(script, null);
+
+    internal static string NormalizeForComparison(string script, string? objectType)
     {
         var normalized = script
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace("\r", "\n", StringComparison.Ordinal)
             .TrimEnd('\n');
 
-        // Strip trailing semicolons from INSERT statement lines so that scripts emitted with
-        // and without statement terminators compare as compatible. Different SQL tools may or
-        // may not append a semicolon to each INSERT; this normalization prevents superficial
-        // terminator differences from surfacing as false positives in status and diff output.
-        // Early exit for scripts with no INSERT lines (e.g. schema objects) to avoid split/join overhead.
-        if (!normalized.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
+        var isTableData = string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
+        if (!normalized.Contains("INSERT ", StringComparison.OrdinalIgnoreCase) &&
+            (!isTableData || !normalized.Contains("SET IDENTITY_INSERT ", StringComparison.OrdinalIgnoreCase)))
         {
             return normalized;
         }
@@ -1790,10 +1793,17 @@ internal sealed class SyncCommandService : ISyncCommandService
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (line.EndsWith(';') && LineStartsWithInsert(line))
+            if (line.EndsWith(';') && (LineStartsWithInsert(line) || (isTableData && LineStartsWithIdentityInsert(line))))
             {
-                lines[i] = line[..^1];
+                line = line[..^1];
             }
+
+            if (isTableData && LineStartsWithInsert(line))
+            {
+                line = NormalizeLegacyTableDataInsertLine(line);
+            }
+
+            lines[i] = line;
         }
 
         return string.Join("\n", lines);
@@ -1808,6 +1818,127 @@ internal sealed class SyncCommandService : ISyncCommandService
         const int insertPrefixLength = 7; // "INSERT ".Length
         return line.Length - pos >= insertPrefixLength &&
                line.AsSpan(pos, insertPrefixLength).Equals("INSERT ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LineStartsWithIdentityInsert(string line)
+    {
+        var pos = 0;
+        while (pos < line.Length && line[pos] is ' ' or '\t') pos++;
+        const string prefix = "SET IDENTITY_INSERT ";
+        return line.Length - pos >= prefix.Length &&
+               line.AsSpan(pos, prefix.Length).Equals(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeLegacyTableDataInsertLine(string line)
+    {
+        var valuesKeywordIndex = line.IndexOf("VALUES", StringComparison.OrdinalIgnoreCase);
+        if (valuesKeywordIndex < 0)
+        {
+            return line;
+        }
+
+        var valuesOpenParenIndex = line.IndexOf('(', valuesKeywordIndex);
+        if (valuesOpenParenIndex < 0)
+        {
+            return line;
+        }
+
+        var builder = new StringBuilder(line.Length);
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+        var parenDepth = 0;
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (inSingleQuotedString)
+            {
+                builder.Append(ch);
+                if (ch == '\'')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '\'')
+                    {
+                        builder.Append(line[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                builder.Append(ch);
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                parenDepth--;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuotedString = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if ((ch == 'N' || ch == 'n') &&
+                i > valuesOpenParenIndex &&
+                parenDepth == 1 &&
+                i + 1 < line.Length &&
+                line[i + 1] == '\'' &&
+                IsTopLevelInsertStringPrefixBoundary(line, valuesOpenParenIndex, i))
+            {
+                continue;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsTopLevelInsertStringPrefixBoundary(string line, int valuesOpenParenIndex, int prefixIndex)
+    {
+        for (var i = prefixIndex - 1; i > valuesOpenParenIndex; i--)
+        {
+            var ch = line[i];
+            if (ch is ' ' or '\t')
+            {
+                continue;
+            }
+
+            return ch is '(' or ',';
+        }
+
+        return true;
     }
 
     internal static FileContentStyle DetectExistingStyle(string path)

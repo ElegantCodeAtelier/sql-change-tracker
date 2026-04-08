@@ -18,6 +18,9 @@ internal class SqlServerScripter
     private static readonly Regex ComputedColumnLineRegex = new(
         @"^\s*\[[^\]]+\]\s+AS\s+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ModuleDeclarationLineRegex = new(
+        @"^(?<prefix>CREATE\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private enum TablePostCreateStatementKind
     {
@@ -5372,7 +5375,7 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
         return string.Join(Environment.NewLine, trimmed);
     }
 
-    private static string ApplyDefinitionFormatting(string definition, string[]? referenceLines)
+    internal static string ApplyDefinitionFormatting(string definition, string[]? referenceLines)
     {
         var referenceBlock = GetReferenceDefinitionBlock(referenceLines);
         if (referenceBlock != null && DefinitionMatchesReference(definition, referenceBlock))
@@ -5406,48 +5409,14 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
 
     private static string[]? GetReferenceDefinitionBlock(string[]? referenceLines)
     {
-        if (referenceLines == null || referenceLines.Length == 0)
+        var range = TryGetReferenceDefinitionRange(referenceLines);
+        if (range == null)
         {
             return null;
         }
 
-        var start = -1;
-        for (var i = 0; i < referenceLines.Length; i++)
-        {
-            if (referenceLines[i].TrimStart().StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase))
-            {
-                start = i;
-                break;
-            }
-        }
-
-        if (start < 0)
-        {
-            return null;
-        }
-
-        var end = -1;
-        for (var i = start + 1; i < referenceLines.Length; i++)
-        {
-            if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
-            {
-                end = i;
-                break;
-            }
-        }
-
-        if (end < 0)
-        {
-            end = referenceLines.Length;
-        }
-
-        if (end <= start)
-        {
-            return null;
-        }
-
-        var block = new string[end - start];
-        Array.Copy(referenceLines, start, block, 0, end - start);
+        var block = new string[range.Value.End - range.Value.Start];
+        Array.Copy(referenceLines!, range.Value.Start, block, 0, block.Length);
         return block;
     }
 
@@ -5511,51 +5480,17 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
 
     private static Dictionary<string, string>? BuildDefinitionLineMap(string[]? referenceLines)
     {
-        if (referenceLines == null || referenceLines.Length == 0)
-        {
-            return null;
-        }
-
-        var start = -1;
-        for (var i = 0; i < referenceLines.Length; i++)
-        {
-            if (referenceLines[i].TrimStart().StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase))
-            {
-                start = i;
-                break;
-            }
-        }
-
-        if (start < 0)
-        {
-            return null;
-        }
-
-        var end = -1;
-        for (var i = start + 1; i < referenceLines.Length; i++)
-        {
-            if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
-            {
-                end = i;
-                break;
-            }
-        }
-
-        if (end < 0)
-        {
-            end = referenceLines.Length;
-        }
-
-        if (end <= start)
+        var range = TryGetReferenceDefinitionRange(referenceLines);
+        if (range == null)
         {
             return null;
         }
 
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = start; i < end; i++)
+        for (var i = range.Value.Start; i < range.Value.End; i++)
         {
-            var key = NormalizeDefinitionLineKey(referenceLines[i]);
+            var key = NormalizeDefinitionLineKey(referenceLines![i]);
             if (key.Length == 0)
             {
                 continue;
@@ -5614,7 +5549,96 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             normalized = "CREATE " + normalized.Substring(createOrAlter.Length);
         }
 
+        normalized = NormalizeModuleDeclarationLineKey(normalized);
         return normalized;
+    }
+
+    private static string NormalizeModuleDeclarationLineKey(string normalized)
+    {
+        var match = ModuleDeclarationLineRegex.Match(normalized);
+        if (!match.Success)
+        {
+            return normalized;
+        }
+
+        var canonicalName = NormalizeMultipartIdentifierToken(match.Groups["name"].Value);
+        return match.Groups["prefix"].Value + canonicalName + match.Groups["suffix"].Value;
+    }
+
+    private static string NormalizeMultipartIdentifierToken(string identifier)
+    {
+        var parts = SplitMultipartIdentifier(identifier);
+        if (parts.Count == 0)
+        {
+            return identifier;
+        }
+
+        return string.Join(".", parts.Select(UnquoteIdentifierPart));
+    }
+
+    private static List<string> SplitMultipartIdentifier(string identifier)
+    {
+        var parts = new List<string>();
+        var current = new StringBuilder();
+        var inBracketedIdentifier = false;
+
+        for (var i = 0; i < identifier.Length; i++)
+        {
+            var ch = identifier[i];
+            if (inBracketedIdentifier)
+            {
+                current.Append(ch);
+                if (ch == ']')
+                {
+                    if (i + 1 < identifier.Length && identifier[i + 1] == ']')
+                    {
+                        current.Append(identifier[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        inBracketedIdentifier = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                current.Append(ch);
+                continue;
+            }
+
+            if (ch == '.')
+            {
+                parts.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        if (current.Length > 0)
+        {
+            parts.Add(current.ToString());
+        }
+
+        return parts;
+    }
+
+    private static string UnquoteIdentifierPart(string part)
+    {
+        if (part.Length >= 2 &&
+            part[0] == '[' &&
+            part[^1] == ']')
+        {
+            return part.Substring(1, part.Length - 2).Replace("]]", "]");
+        }
+
+        return part;
     }
 
     private static List<string> BuildSetHeaderLines(string[]? referenceLines, string quotedLine, string ansiLine)
@@ -5961,14 +5985,99 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
         }
 
         var indentPrefix = string.Empty;
-        if (createIndex >= 0)
+        var firstDefinitionIndex = goIndex + 1;
+        while (firstDefinitionIndex < referenceLines.Length &&
+               referenceLines[firstDefinitionIndex].Trim().Length == 0)
         {
-            var line = referenceLines[createIndex];
+            firstDefinitionIndex++;
+        }
+
+        if (firstDefinitionIndex < referenceLines.Length)
+        {
+            var line = referenceLines[firstDefinitionIndex];
             var firstNonSpace = line.Length - line.TrimStart().Length;
             indentPrefix = firstNonSpace > 0 ? line.Substring(0, firstNonSpace) : string.Empty;
         }
 
         return new ModuleFormat(leadingBlank, blankBeforeGo, indentPrefix, hasGoAfterDefinition);
+    }
+
+    private static (int Start, int End)? TryGetReferenceDefinitionRange(string[]? referenceLines)
+    {
+        if (referenceLines == null || referenceLines.Length == 0)
+        {
+            return null;
+        }
+
+        var start = TryGetReferenceDefinitionStart(referenceLines);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var end = -1;
+        for (var i = start + 1; i < referenceLines.Length; i++)
+        {
+            if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            {
+                end = i;
+                break;
+            }
+        }
+
+        if (end < 0)
+        {
+            end = referenceLines.Length;
+        }
+
+        return end > start ? (start, end) : null;
+    }
+
+    private static int TryGetReferenceDefinitionStart(string[] referenceLines)
+    {
+        var ansiIndex = -1;
+        var quotedIndex = -1;
+        for (var i = 0; i < referenceLines.Length; i++)
+        {
+            var normalized = NormalizeStatementTerminator(referenceLines[i]);
+            if (ansiIndex < 0 &&
+                normalized.StartsWith("SET ANSI_NULLS ", StringComparison.OrdinalIgnoreCase))
+            {
+                ansiIndex = i;
+            }
+            else if (quotedIndex < 0 &&
+                     normalized.StartsWith("SET QUOTED_IDENTIFIER ", StringComparison.OrdinalIgnoreCase))
+            {
+                quotedIndex = i;
+            }
+
+            if (ansiIndex >= 0 && quotedIndex >= 0)
+            {
+                break;
+            }
+        }
+
+        var lastSetIndex = Math.Max(ansiIndex, quotedIndex);
+        if (lastSetIndex >= 0)
+        {
+            for (var i = lastSetIndex + 1; i < referenceLines.Length; i++)
+            {
+                if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                {
+                    return i + 1;
+                }
+            }
+        }
+
+        for (var i = 0; i < referenceLines.Length; i++)
+        {
+            if (referenceLines[i].Trim().Length > 0)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static string NormalizeStatementTerminator(string line)

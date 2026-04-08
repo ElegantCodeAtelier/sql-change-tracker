@@ -750,6 +750,8 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - `status` and `diff` normalization behaviors are external contracts defined in `specs/01-cli.md` and `specs/05-output-formats.md`.
 - Scripting and comparison normalization responsibilities MUST remain decoupled.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
+- For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
+- For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside `INSERT ... VALUES (...)` as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.

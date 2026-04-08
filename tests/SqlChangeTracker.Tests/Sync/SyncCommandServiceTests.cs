@@ -783,6 +783,56 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_TableData_NormalizesLegacyIdentityInsertAndUnicodeLiteralPrefixes()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[Customer] ON;\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, 'A', 'Alpha');\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF;",
+            SyncCommandService.TableDataObjectType);
+        var legacy = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[Customer] ON\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, N'A', N'Alpha')\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, legacy);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesLegacyIdentityInsertAndUnicodeLiteralPrefixDifferences()
+    {
+        var source =
+            "SET IDENTITY_INSERT [dbo].[Customer] ON;\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, 'A', 'Alpha');\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF;";
+        var target =
+            "SET IDENTITY_INSERT [dbo].[Customer] ON\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, N'A', N'Alpha')\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void NormalizeForComparison_DoesNotNormalizeUnicodeLiteralPrefixesOutsideTableData()
+    {
+        var plain = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Name]) VALUES ('Alpha')");
+        var prefixed = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Name]) VALUES (N'Alpha')");
+
+        Assert.NotEqual(plain, prefixed);
+    }
+
+    [Fact]
     public void DetectExistingStyle_AndApplyStyle_PreservesEncodingAndLineBehavior()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
