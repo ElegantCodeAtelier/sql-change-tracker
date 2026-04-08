@@ -279,7 +279,7 @@ public sealed class SyncCommandServiceTests
         Assert.Contains("+CHANGE_B_NEW", diff);
 
         // Two @@ hunk headers appear
-        var hunkHeaderCount = diff.Split('\n').Count(line => line.StartsWith("@@"));
+        var hunkHeaderCount = CountHunkHeaders(diff);
         Assert.True(hunkHeaderCount >= 2, $"Expected at least 2 hunk headers but got {hunkHeaderCount}");
     }
 
@@ -293,7 +293,7 @@ public sealed class SyncCommandServiceTests
         var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target, contextLines: 2);
 
         // Exactly one @@ hunk header because the hunks are merged
-        var hunkHeaderCount = diff.Split('\n').Count(line => line.StartsWith("@@"));
+        var hunkHeaderCount = CountHunkHeaders(diff);
         Assert.Equal(1, hunkHeaderCount);
         Assert.Contains("-CHANGE_A", diff);
         Assert.Contains("+CHANGE_A_NEW", diff);
@@ -779,6 +779,9 @@ public sealed class SyncCommandServiceTests
         Directory.CreateDirectory(path);
         return path;
     }
+
+    private static int CountHunkHeaders(string diff)
+        => diff.Split('\n').Count(line => line.StartsWith("@@"));
 
     private static void CleanupTempDir(string path)
     {
