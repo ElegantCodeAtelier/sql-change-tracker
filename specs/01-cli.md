@@ -215,7 +215,7 @@ Behavior:
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
 - When `data.trackedTables` is configured, `diff` also supports data-script diffs for tracked tables.
-- When `--filter` is specified without `--object`, only objects whose display name matches at least one regex pattern are included in the diff output.
+- When `--filter` is specified without `--object`, only objects whose display name matches at least one regex pattern are included in the diff output; database scripting is limited to matching objects to avoid unnecessary reads.
 - When `--filter` is specified with `--object`, the filter is also applied to the single selected object; if it does not match, an empty diff is returned.
 - An invalid regular expression in `--filter` returns exit code 2 (invalid config).
 - Exit codes follow `status`.
@@ -235,8 +235,8 @@ Behavior:
 - When `data.trackedTables` is configured, `pull` also synchronizes `Data/*.sql` scripts for tracked tables.
 - `pull` MUST delete `Data/*.sql` files for tables that are no longer present in `data.trackedTables`.
 - Pull output MUST report schema and data summaries separately.
-- When `--object` is specified, only objects matching the selector exactly are considered for reconciliation.
-- When `--filter` is specified, only objects whose display name matches at least one regex pattern are considered for reconciliation.
+- When `--object` is specified, only objects matching the selector exactly are considered for reconciliation; database discovery and scripting is limited to the selector-matching candidate object set.
+- When `--filter` is specified, only objects whose display name matches at least one regex pattern are considered for reconciliation; database scripting is limited to matching objects to avoid unnecessary reads.
 - `--object` and `--filter` may be combined; both filters are applied (AND semantics).
 - An invalid selector in `--object` returns exit code 2 (invalid config).
 - An invalid regular expression in `--filter` returns exit code 2 (invalid config).

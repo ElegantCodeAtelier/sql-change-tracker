@@ -667,6 +667,157 @@ public sealed class SyncCommandServiceTests
         }
     }
 
+    [Fact]
+    public void RunPull_WithObjectSelector_UsesTargetedDatabaseDiscovery()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Tables", "dbo.Customer.sql"), "CREATE TABLE [dbo].[Customer] ([Id] [int] NOT NULL);\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("dbo", "Customer", "Table")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, obj, _) => "CREATE TABLE [dbo].[Customer] ([Id] [int] NOT NULL);\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunPull(projectDir, objectSelector: "dbo.Customer");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "TableType", "UserDefinedType", "View", "XmlSchemaCollection" };
+            Assert.Equal(
+                expectedCandidateTypes,
+                introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunDiff_WithFilterPattern_LimitsDbScriptingToMatchingObjects()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects =
+                [
+                    new DbObjectInfo("dbo", "Customer", "Table"),
+                    new DbObjectInfo("dbo", "Order", "Table"),
+                    new DbObjectInfo("dbo", "Product", "Table")
+                ]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, obj, _) => $"CREATE TABLE [dbo].[{obj.Name}];\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", null, filterPatterns: ["dbo\\.Customer"]);
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.True(introspector.ListObjectsCalled);
+            Assert.False(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(new[] { "Table:dbo.Customer" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunPull_WithFilterPattern_LimitsDbScriptingToMatchingObjects()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects =
+                [
+                    new DbObjectInfo("dbo", "Customer", "Table"),
+                    new DbObjectInfo("dbo", "Order", "Table"),
+                    new DbObjectInfo("dbo", "Product", "Table")
+                ]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, obj, _) => $"CREATE TABLE [dbo].[{obj.Name}];\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunPull(projectDir, filterPatterns: ["dbo\\.Customer"]);
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.True(introspector.ListObjectsCalled);
+            Assert.False(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(new[] { "Table:dbo.Customer" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
     private static string CreateTempDir()
     {
         var path = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
@@ -843,11 +994,15 @@ public sealed class SyncCommandServiceTests
 
         public string LastRequestedName { get; private set; } = "";
 
+        public IReadOnlyList<DbObjectInfo>? AllObjects { get; init; }
+
         public IReadOnlyList<DbObjectInfo> MatchingObjects { get; init; } = [];
 
         public override IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
         {
             ListObjectsCalled = true;
+            if (AllObjects is not null)
+                return AllObjects;
             throw new InvalidOperationException("full database discovery should not be used for diff --object");
         }
 
