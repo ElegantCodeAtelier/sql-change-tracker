@@ -24,7 +24,6 @@ internal static class SupportedSqlObjectTypes
         new("Role", Path.Combine("Security", "Roles"), true, true),
         new("User", Path.Combine("Security", "Users"), true, true),
         new("XmlSchemaCollection", Path.Combine("Types", "XML Schema Collections"), false, true),
-        new("TableType", Path.Combine("Types", "Table Types"), false, true),
         new("MessageType", Path.Combine("Service Broker", "Message Types"), true, true),
         new("Contract", Path.Combine("Service Broker", "Contracts"), true, true),
         new("EventNotification", Path.Combine("Service Broker", "Event Notifications"), true, true),

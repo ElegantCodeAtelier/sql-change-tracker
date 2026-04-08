@@ -39,6 +39,12 @@ internal enum ComparisonTarget
 internal sealed class SyncCommandService : ISyncCommandService
 {
     internal const string TableDataObjectType = "TableData";
+    private static readonly Regex ScalarUserDefinedTypeScriptRegex = new(
+        @"\bCREATE\s+TYPE\b.*\bFROM\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex TableUserDefinedTypeScriptRegex = new(
+        @"\bCREATE\s+TYPE\b.*\bAS\s+TABLE\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -588,6 +594,15 @@ internal sealed class SyncCommandService : ISyncCommandService
                         ExitCodes.ExecutionFailure);
                 }
 
+                if (string.Equals(objectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase)
+                    && !TryClassifyUserDefinedTypeScript(script, out _))
+                {
+                    warnings.Add(new CommandWarning(
+                        "invalid_user_defined_type_script",
+                        $"skipped '{Path.Combine(folder, Path.GetFileName(file))}' because it is not a recognized user-defined type script."));
+                    continue;
+                }
+
                 var relativePath = Path.Combine(folder, Path.GetFileName(file));
                 objects[key] = new InternalObject(
                     key,
@@ -1107,6 +1122,16 @@ internal sealed class SyncCommandService : ISyncCommandService
 
             if (!SupportedSqlObjectTypes.TryGet(objectTypeToken, out var entry))
             {
+                if (string.Equals(objectTypeToken, "TableType", StringComparison.OrdinalIgnoreCase))
+                {
+                    return CommandExecutionResult<ObjectSelector>.Failure(
+                        new ErrorInfo(
+                            ErrorCodes.InvalidConfig,
+                            "invalid object selector.",
+                            Detail: "`TableType` selectors are no longer supported; use `UserDefinedType:schema.name`."),
+                        ExitCodes.InvalidConfig);
+                }
+
                 if (string.Equals(objectTypeToken, "data", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!TryParseObjectFileName(nameToken, isSchemaLess: false, out var dataSchema, out var dataName))
@@ -1566,10 +1591,29 @@ internal sealed class SyncCommandService : ISyncCommandService
             .Where(path => !normalizedSupportedFiles.Contains(path))
             .Select(path => Path.GetRelativePath(projectDir, path))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .Select(path => new CommandWarning(
-                "unsupported_folder_entry",
-                $"skipped unsupported folder entry '{path}'."))
+            .Select(path => IsLegacyTableTypePath(path)
+                ? new CommandWarning(
+                    "legacy_folder_entry",
+                    $"skipped legacy folder entry '{path}'; move it to '{Path.Combine("Types", "User-defined Data Types")}'.")
+                : new CommandWarning(
+                    "unsupported_folder_entry",
+                    $"skipped unsupported folder entry '{path}'."))
             .ToArray();
+    }
+
+    internal static bool TryClassifyUserDefinedTypeScript(string script, out UserDefinedTypeKind kind)
+    {
+        var matchesScalar = ScalarUserDefinedTypeScriptRegex.IsMatch(script);
+        var matchesTable = TableUserDefinedTypeScriptRegex.IsMatch(script);
+
+        if (matchesScalar == matchesTable)
+        {
+            kind = default;
+            return false;
+        }
+
+        kind = matchesTable ? UserDefinedTypeKind.Table : UserDefinedTypeKind.Scalar;
+        return true;
     }
 
     internal static bool TryParseObjectFileName(string fileNameWithoutExtension, bool isSchemaLess, out string schema, out string name)
@@ -1643,6 +1687,13 @@ internal sealed class SyncCommandService : ISyncCommandService
         => (value >= '0' && value <= '9')
            || (value >= 'A' && value <= 'F')
            || (value >= 'a' && value <= 'f');
+
+    private static bool IsLegacyTableTypePath(string relativePath)
+    {
+        var normalized = relativePath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        var legacyPrefix = Path.Combine("Types", "Table Types") + Path.DirectorySeparatorChar;
+        return normalized.StartsWith(legacyPrefix, StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static IReadOnlyList<ComparableChange> ComputeChangesForComparison(
         IReadOnlyList<ComparableObject> source,

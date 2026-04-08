@@ -90,7 +90,6 @@ dotnet run --project tools/sqlct-export/Sqlct.Export.csproj -- `
   - `Storage/Partition Schemes`
   - `Storage/Search Property Lists`
   - `Synonyms`
-  - `Types/Table Types`
   - `Types/XML Schema Collections`
   - `Types/User-defined Data Types`
 

@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - In `pull --object` mode, database discovery and scripting are now limited to the selector-matching candidate object set instead of scanning the full active object set (#38).
 - In `diff --filter` mode (without `--object`), database scripting is now limited to objects whose display name matches at least one pattern, avoiding unnecessary reads (#38).
 - In `pull --filter` mode, database scripting is now limited to objects whose display name matches at least one pattern, avoiding unnecessary reads (#38).
+- Collapse table-valued types into `UserDefinedType`, writing all UDT scripts to `Types/User-defined Data Types/`; `TableType:` selectors and `Types/Table Types/` are no longer supported.
 - Extend scripting for the newly supported securables to emit permissions and extended properties where SQL Server exposes them, with platform-limited cases documented in specs and package docs.
 
 ### Fixed

@@ -399,7 +399,10 @@ public sealed class SqlServerScripterTests
         }
 
         var introspector = new SqlServerIntrospector();
-        var userDefinedType = FindFirstObject(introspector, options, "UserDefinedType");
+        var userDefinedType = introspector.ListObjects(options)
+            .FirstOrDefault(item =>
+                string.Equals(item.ObjectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase)
+                && item.UserDefinedTypeKind == UserDefinedTypeKind.Scalar);
         if (userDefinedType == null)
         {
             return;

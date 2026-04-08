@@ -58,14 +58,14 @@ JOIN sys.schemas s ON s.schema_id = syn.schema_id
 ORDER BY s.name, syn.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT s.name AS schema_name, t.name AS object_name, 'UDT' AS type
+SELECT s.name AS schema_name, t.name AS object_name, 'UDT_SCALAR' AS type
 FROM sys.types t
 JOIN sys.schemas s ON s.schema_id = t.schema_id
 WHERE t.is_user_defined = 1 AND t.is_table_type = 0
 ORDER BY s.name, t.name;", MapObjectType),
 
             () => RunQuery(options, @"
-SELECT s.name AS schema_name, tt.name AS object_name, 'TT' AS type
+SELECT s.name AS schema_name, tt.name AS object_name, 'UDT_TABLE' AS type
 FROM sys.table_types tt
 JOIN sys.schemas s ON s.schema_id = tt.schema_id
 ORDER BY s.name, tt.name;", MapObjectType),
@@ -331,6 +331,7 @@ ORDER BY ps.name;", MapObjectType),
             var name = reader.GetString(1);
             var type = reader.GetString(2);
             var objectType = typeMapper(type);
+            var userDefinedTypeKind = MapUserDefinedTypeKind(type);
             if (SupportedSqlObjectTypes.IsSchemaLess(objectType))
             {
                 schema = string.Empty;
@@ -340,7 +341,7 @@ ORDER BY ps.name;", MapObjectType),
                 schema = "dbo";
             }
 
-            yield return new DbObjectInfo(schema, name, objectType);
+            yield return new DbObjectInfo(schema, name, objectType, userDefinedTypeKind);
         }
     }
 
@@ -476,27 +477,20 @@ ORDER BY s.name, syn.name;
 
             case "UserDefinedType":
                 command.CommandText = """
-SELECT s.name AS schema_name, t.name AS object_name
+SELECT s.name AS schema_name, t.name AS object_name, 'UDT_SCALAR' AS type
 FROM sys.types t
 JOIN sys.schemas s ON s.schema_id = t.schema_id
 WHERE t.is_user_defined = 1
   AND t.is_table_type = 0
   AND s.name = @schema
   AND t.name = @name
-ORDER BY s.name, t.name;
-""";
-                command.Parameters.AddWithValue("@schema", schema);
-                command.Parameters.AddWithValue("@name", name);
-                break;
-
-            case "TableType":
-                command.CommandText = """
-SELECT s.name AS schema_name, tt.name AS object_name
+UNION ALL
+SELECT s.name AS schema_name, tt.name AS object_name, 'UDT_TABLE' AS type
 FROM sys.table_types tt
 JOIN sys.schemas s ON s.schema_id = tt.schema_id
 WHERE s.name = @schema
   AND tt.name = @name
-ORDER BY s.name, tt.name;
+ORDER BY schema_name, object_name;
 """;
                 command.Parameters.AddWithValue("@schema", schema);
                 command.Parameters.AddWithValue("@name", name);
@@ -696,7 +690,11 @@ ORDER BY sp.name;
         {
             var matchedSchema = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
             var matchedName = reader.GetString(1);
-            yield return new DbObjectInfo(matchedSchema, matchedName, objectType);
+            var userDefinedTypeKind = string.Equals(objectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase)
+                && reader.FieldCount > 2
+                ? MapUserDefinedTypeKind(reader.GetString(2))
+                : null;
+            yield return new DbObjectInfo(matchedSchema, matchedName, objectType, userDefinedTypeKind);
         }
     }
 
@@ -722,8 +720,7 @@ ORDER BY sp.name;
             "SQ" => "Sequence",
             "SC" => "Schema",
             "SY" => "Synonym",
-            "UDT" => "UserDefinedType",
-            "TT" => "TableType",
+            "UDT" or "UDT_SCALAR" or "UDT_TABLE" => "UserDefinedType",
             "XSC" => "XmlSchemaCollection",
             "MT" => "MessageType",
             "CT" => "Contract",
@@ -751,4 +748,12 @@ ORDER BY sp.name;
             _ => "Unknown"
         };
     }
+
+    private static UserDefinedTypeKind? MapUserDefinedTypeKind(string type)
+        => type.Trim() switch
+        {
+            "UDT_SCALAR" => UserDefinedTypeKind.Scalar,
+            "UDT_TABLE" => UserDefinedTypeKind.Table,
+            _ => null
+        };
 }

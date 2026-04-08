@@ -36,9 +36,10 @@ Use git-style verbs: short, task-oriented commands with clear intent.
 - pull
 
 ## v1 Scope
-- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `TableType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - `status`, `diff`, and `pull` process the active schema object types.
 - When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
+- `UserDefinedType` covers scalar alias types and table-valued types.
 - Unsupported object types discovered in DB introspection are skipped with warnings.
 - Include/exclude filters are deferred to vNext.
 - Comparison ignore options are deferred to vNext.
@@ -65,6 +66,7 @@ Common flag behavior across commands.
   - `type:name` for explicit schema-less selection.
   - `type:schema.name` for explicit schema-scoped selection.
   - `data:schema.name` for tracked table-data scripts.
+  - `UserDefinedType:schema.name` for scalar alias types and table-valued types.
 - Bare `name` selectors search only schema-less active object types.
 - Bare-name or `schema.name` collisions across object types return an error that instructs the user to use the type-qualified form.
 

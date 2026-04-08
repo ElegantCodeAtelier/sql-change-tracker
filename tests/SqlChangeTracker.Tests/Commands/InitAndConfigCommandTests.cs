@@ -36,7 +36,6 @@ public sealed class InitAndConfigCommandTests
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Stored Procedures")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Synonyms")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Types", "User-defined Data Types")));
-            Assert.True(Directory.Exists(Path.Combine(projectDir, "Types", "Table Types")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Types", "XML Schema Collections")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Security", "Roles")));
             Assert.True(Directory.Exists(Path.Combine(projectDir, "Service Broker", "Event Notifications")));

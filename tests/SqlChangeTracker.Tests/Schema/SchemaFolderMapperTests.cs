@@ -61,7 +61,6 @@ public sealed class SchemaFolderMapperTests
     [Theory]
     [InlineData("Synonym", "Synonyms", "Reporting", "CurrentSales")]
     [InlineData("UserDefinedType", "Types\\User-defined Data Types", "dbo", "PhoneNumber")]
-    [InlineData("TableType", "Types\\Table Types", "dbo", "CustomerCodes")]
     [InlineData("XmlSchemaCollection", "Types\\XML Schema Collections", "dbo", "PayloadSchema")]
     [InlineData("Queue", "Service Broker\\Queues", "dbo", "Log_InitiatorQueue")]
     public void Formats_SchemaScopedAdditionalObjects(string objectType, string folder, string schema, string name)
@@ -145,7 +144,6 @@ public sealed class SchemaFolderMapperTests
             new FolderMapEntry("FullTextStoplist", @"Storage\Full Text Stoplists"),
             new FolderMapEntry("SearchPropertyList", @"Storage\Search Property Lists"),
             new FolderMapEntry("Synonym", "Synonyms"),
-            new FolderMapEntry("TableType", @"Types\Table Types"),
             new FolderMapEntry("XmlSchemaCollection", @"Types\XML Schema Collections"),
             new FolderMapEntry("UserDefinedType", @"Types\User-defined Data Types"),
             new FolderMapEntry("Data", "Data")
