@@ -475,8 +475,8 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(ExitCodes.DiffExists, result.ExitCode);
             var diff = result.Payload!.Diff;
 
-            // The changed row appears (trailing semicolons are stripped by normalization)
-            // Source = DB (shown with -); DB has NewValue. Target = folder (shown with +); folder has OldValue.
+            // The changed row appears (trailing semicolons are stripped by normalization).
+            // With target="db": DB lines are shown as removed (-) and folder lines as added (+).
             Assert.Contains("-INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (5, N'NewValue')", diff);
             Assert.Contains("+INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (5, N'OldValue')", diff);
 
@@ -558,8 +558,8 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(ExitCodes.DiffExists, result.ExitCode);
             var diff = result.Payload!.Diff;
 
-            // The changed row appears (trailing semicolons are stripped by normalization)
-            // Source = DB (shown with -); DB has value 3. Target = folder (shown with +); folder has 99.
+            // The changed row appears (trailing semicolons are stripped by normalization).
+            // With target="db": DB lines are shown as removed (-) and folder lines as added (+).
             Assert.Contains("-INSERT INTO [dbo].[Customer] ([Id]) VALUES (3)", diff);
             Assert.Contains("+INSERT INTO [dbo].[Customer] ([Id]) VALUES (99)", diff);
 
