@@ -35,7 +35,7 @@ public sealed class SyncCommandServiceSqlTests
             Assert.True(File.Exists(Path.Combine(projectDir, "Security", "Users", "AppUser.sql")));
             Assert.True(File.Exists(Path.Combine(projectDir, "Synonyms", "Fixtures.TargetSynonym.sql")));
             Assert.True(File.Exists(Path.Combine(projectDir, "Types", "User-defined Data Types", "Fixtures.CodeType.sql")));
-            Assert.True(File.Exists(Path.Combine(projectDir, "Types", "Table Types", "Fixtures.RequestList.sql")));
+            Assert.True(File.Exists(Path.Combine(projectDir, "Types", "User-defined Data Types", "Fixtures.RequestList.sql")));
             Assert.True(File.Exists(Path.Combine(projectDir, "Types", "XML Schema Collections", "Fixtures.PayloadSchema.sql")));
             Assert.True(File.Exists(Path.Combine(projectDir, "Service Broker", "Message Types", "%2F%2FSqlct%2FReply.sql")));
             Assert.True(File.Exists(Path.Combine(projectDir, "Service Broker", "Message Types", "%2F%2FSqlct%2FRequest.sql")));
@@ -65,7 +65,7 @@ public sealed class SyncCommandServiceSqlTests
                 File.ReadAllText(Path.Combine(projectDir, "Synonyms", "Fixtures.TargetSynonym.sql")));
             Assert.Contains(
                 "CREATE TYPE [Fixtures].[RequestList] AS TABLE",
-                File.ReadAllText(Path.Combine(projectDir, "Types", "Table Types", "Fixtures.RequestList.sql")));
+                File.ReadAllText(Path.Combine(projectDir, "Types", "User-defined Data Types", "Fixtures.RequestList.sql")));
             Assert.Contains(
                 "CREATE XML SCHEMA COLLECTION [Fixtures].[PayloadSchema] AS",
                 File.ReadAllText(Path.Combine(projectDir, "Types", "XML Schema Collections", "Fixtures.PayloadSchema.sql")));
@@ -77,7 +77,7 @@ public sealed class SyncCommandServiceSqlTests
                 File.ReadAllText(Path.Combine(projectDir, "Types", "XML Schema Collections", "Fixtures.PayloadSchema.sql")));
             Assert.Contains(
                 "PRIMARY KEY CLUSTERED ([Id])",
-                File.ReadAllText(Path.Combine(projectDir, "Types", "Table Types", "Fixtures.RequestList.sql")));
+                File.ReadAllText(Path.Combine(projectDir, "Types", "User-defined Data Types", "Fixtures.RequestList.sql")));
             Assert.Contains(
                 "CREATE MESSAGE TYPE [//Sqlct/Request]",
                 File.ReadAllText(Path.Combine(projectDir, "Service Broker", "Message Types", "%2F%2FSqlct%2FRequest.sql")));
@@ -188,7 +188,7 @@ public sealed class SyncCommandServiceSqlTests
             Assert.True(schemaScopedDiff.Success, schemaScopedDiff.Error?.Detail ?? schemaScopedDiff.Error?.Message);
             Assert.Equal(string.Empty, schemaScopedDiff.Payload!.Diff);
 
-            var tableTypeDiff = service.RunDiff(projectDir, "db", "TableType:Fixtures.RequestList");
+            var tableTypeDiff = service.RunDiff(projectDir, "db", "UserDefinedType:Fixtures.RequestList");
             Assert.True(tableTypeDiff.Success, tableTypeDiff.Error?.Detail ?? tableTypeDiff.Error?.Message);
             Assert.Equal(string.Empty, tableTypeDiff.Payload!.Diff);
 

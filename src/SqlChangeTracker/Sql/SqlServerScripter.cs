@@ -87,7 +87,6 @@ internal class SqlServerScripter
             "PartitionScheme" => ScriptPartitionScheme(connection, obj, referenceLines),
             "Synonym" => ScriptSynonym(connection, obj, referenceLines),
             "UserDefinedType" => ScriptUserDefinedType(connection, obj, referenceLines),
-            "TableType" => ScriptTableType(connection, obj),
             "XmlSchemaCollection" => ScriptXmlSchemaCollection(connection, obj, referenceLines),
             "MessageType" => ScriptMessageType(connection, obj, referenceLines),
             "Contract" => ScriptContract(connection, obj, referenceLines),
@@ -1136,6 +1135,12 @@ WHERE s.name = @schema AND syn.name = @name;";
 
     private static string ScriptUserDefinedType(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
+        var kind = obj.UserDefinedTypeKind ?? ResolveUserDefinedTypeKind(connection, obj);
+        if (kind == UserDefinedTypeKind.Table)
+        {
+            return ScriptTableType(connection, obj);
+        }
+
         using var command = connection.CreateCommand();
         command.CommandText = @"
 SELECT t.name AS type_name, s.name AS schema_name, t.max_length, t.precision, t.scale, t.is_nullable,
@@ -1176,6 +1181,30 @@ WHERE t.is_user_defined = 1 AND t.is_table_type = 0 AND s.name = @schema AND t.n
         AppendExtendedPropertyLines(lines, ReadUserDefinedTypeExtendedProperties(connection, schemaName, typeName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static UserDefinedTypeKind ResolveUserDefinedTypeKind(SqlConnection connection, DbObjectInfo obj)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT t.is_table_type
+FROM sys.types t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE t.is_user_defined = 1
+  AND s.name = @schema
+  AND t.name = @name;";
+        command.Parameters.AddWithValue("@schema", obj.Schema);
+        command.Parameters.AddWithValue("@name", obj.Name);
+
+        var result = command.ExecuteScalar();
+        if (result is null || result == DBNull.Value)
+        {
+            throw new InvalidOperationException($"User-defined type not found: [{obj.Schema}].[{obj.Name}].");
+        }
+
+        return Convert.ToBoolean(result, CultureInfo.InvariantCulture)
+            ? UserDefinedTypeKind.Table
+            : UserDefinedTypeKind.Scalar;
     }
 
     private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj)

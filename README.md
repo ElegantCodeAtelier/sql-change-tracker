@@ -38,7 +38,6 @@ Current runtime scope for `status`, `diff`, and `pull` covers:
 - `User`
 - `Synonym`
 - `UserDefinedType`
-- `TableType`
 - `XmlSchemaCollection`
 - `PartitionFunction`
 - `PartitionScheme`

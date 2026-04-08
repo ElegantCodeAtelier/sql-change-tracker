@@ -69,6 +69,7 @@ public sealed class SyncCommandServiceTests
     [InlineData("dbo.")]
     [InlineData(".Customer")]
     [InlineData("UnknownType:dbo.Customer")]
+    [InlineData("TableType:dbo.Customer")]
     [InlineData("Synonym:CurrentSales")]
     [InlineData("data:Customer")]
     public void ParseObjectSelector_RejectsInvalidSelectors(string selector)
@@ -359,7 +360,7 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(string.Empty, result.Payload!.Diff);
             Assert.False(introspector.ListObjectsCalled);
             Assert.True(introspector.ListMatchingObjectsCalled);
-            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "TableType", "UserDefinedType", "View", "XmlSchemaCollection" };
+            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View", "XmlSchemaCollection" };
             Assert.Equal(
                 expectedCandidateTypes,
                 introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));
@@ -605,6 +606,7 @@ public sealed class SyncCommandServiceTests
             var supportedUserDefinedType = CreateFile(tempDir, Path.Combine("Types", "User-defined Data Types", "dbo.PhoneNumber.sql"), "CREATE TYPE [dbo].[PhoneNumber] FROM [nvarchar] (20) NOT NULL");
             var supportedAssembly = CreateFile(tempDir, Path.Combine("Assemblies", "AppClr.sql"), "CREATE ASSEMBLY [AppClr] FROM 0x00 WITH PERMISSION_SET = SAFE");
             var supportedData = CreateFile(tempDir, Path.Combine("Data", "dbo.Customer_Data.sql"), "SELECT 1;");
+            CreateFile(tempDir, Path.Combine("Types", "Table Types", "dbo.LegacyType.sql"), "CREATE TYPE [dbo].[LegacyType] AS TABLE ([Id] [int] NOT NULL)");
             CreateFile(tempDir, Path.Combine("Custom", "dbo.Legacy.sql"), "SELECT 1;");
             CreateFile(tempDir, Path.Combine("Data", "Invalid", "dbo.Customer_Data.sql"), "SELECT 1;");
 
@@ -622,6 +624,11 @@ public sealed class SyncCommandServiceTests
                 {
                     Assert.Equal("unsupported_folder_entry", warning.Code);
                     Assert.Contains(Path.Combine("Data", "Invalid", "dbo.Customer_Data.sql"), warning.Message);
+                },
+                warning =>
+                {
+                    Assert.Equal("legacy_folder_entry", warning.Code);
+                    Assert.Contains(Path.Combine("Types", "Table Types", "dbo.LegacyType.sql"), warning.Message);
                 });
         }
         finally
@@ -645,6 +652,94 @@ public sealed class SyncCommandServiceTests
             var warnings = SyncCommandService.CollectUnsupportedFolderWarnings(tempDir, [supportedTable, supportedView]);
 
             Assert.Empty(warnings);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Theory]
+    [InlineData("CREATE TYPE [dbo].[PhoneNumber] FROM [nvarchar] (20) NOT NULL", true)]
+    [InlineData("CREATE TYPE [dbo].[RequestList] AS TABLE ([Id] [int] NOT NULL)", true)]
+    [InlineData("CREATE TYPE [dbo].[BrokenType] AS SOMETHING ELSE", false)]
+    public void TryClassifyUserDefinedTypeScript_DetectsSupportedShapes(string script, bool expected)
+    {
+        var success = SyncCommandService.TryClassifyUserDefinedTypeScript(script, out _);
+
+        Assert.Equal(expected, success);
+    }
+
+    [Theory]
+    [InlineData("CREATE TYPE [dbo].[PhoneNumber] FROM [nvarchar] (20) NOT NULL")]
+    [InlineData("CREATE TYPE [dbo].[RequestList] AS TABLE ([Id] [int] NOT NULL)")]
+    public void RunStatus_RecognizesMergedUserDefinedTypeFolderEntries(string script)
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Types", "User-defined Data Types", "dbo.PhoneNumber.sql"), script);
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                new TrackingIntrospector { AllObjects = [] },
+                new TrackingScripter(),
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "folder");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Single(result.Payload!.Objects);
+            Assert.Equal("UserDefinedType", result.Payload.Objects[0].Type);
+            Assert.Empty(result.Payload.Warnings);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_SkipsUnrecognizedMergedUserDefinedTypeScripts()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Types", "User-defined Data Types", "dbo.BrokenType.sql"), "CREATE TYPE [dbo].[BrokenType] AS SOMETHING ELSE");
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                new TrackingIntrospector { AllObjects = [] },
+                new TrackingScripter(),
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "folder");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Empty(result.Payload!.Objects);
+            Assert.Contains(result.Payload.Warnings, warning => warning.Code == "invalid_user_defined_type_script");
         }
         finally
         {
@@ -867,7 +962,7 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(ExitCodes.Success, result.ExitCode);
             Assert.False(introspector.ListObjectsCalled);
             Assert.True(introspector.ListMatchingObjectsCalled);
-            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "TableType", "UserDefinedType", "View", "XmlSchemaCollection" };
+            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View", "XmlSchemaCollection" };
             Assert.Equal(
                 expectedCandidateTypes,
                 introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));

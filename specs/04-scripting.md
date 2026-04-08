@@ -44,7 +44,7 @@ This specification defines normative scripting rules for `sqlct`.
 - `Schema` discovery covers user-defined schemas and excludes `dbo`, `sys`, and `INFORMATION_SCHEMA`.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
 - `Assembly` discovery covers user-defined assemblies from `sys.assemblies` and excludes SQL Server system assemblies (`is_user_defined = 0`).
-- `TableType` discovery covers user-defined table types.
+- `UserDefinedType` discovery covers both scalar alias types and table-valued types.
 - `XmlSchemaCollection` discovery covers user-defined XML schema collections and excludes collections in `sys` and `INFORMATION_SCHEMA`.
 - `MessageType` and `Contract` discovery covers user-defined Service Broker objects and excludes SQL Server-owned broker artifacts named `DEFAULT` and broker/notification artifacts whose names start with `http://schemas.microsoft.com/SQL/`.
 - `Service` discovery covers user-defined Service Broker services and excludes broker/notification artifacts whose names start with `http://schemas.microsoft.com/SQL/`.
@@ -73,7 +73,6 @@ This specification defines normative scripting rules for `sqlct`.
 - User
 - Synonym
 - UserDefinedType
-- TableType
 - XmlSchemaCollection
 - PartitionFunction
 - PartitionScheme
@@ -442,8 +441,8 @@ Each emitted statement MUST be followed by `GO`.
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'SYNONYM', N'<synonym>', NULL, NULL`
 - Synonym extended properties MUST be emitted after the synonym `GO`, ordered by property name.
 
-### 8.10 UserDefinedType
-- Alias user-defined type scripts MUST emit:
+### 8.10 UserDefinedType (Scalar)
+- Scalar alias user-defined type scripts MUST emit:
   - `CREATE TYPE [schema].[name] FROM <base_type> <NULL|NOT NULL>`
   - `GO`
 - Base-type formatting MUST reuse the general type-formatting rules from Section 6.5.
@@ -451,22 +450,23 @@ Each emitted statement MUST be followed by `GO`.
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'TYPE', N'<type>', NULL, NULL`
 - User-defined-type extended properties MUST be emitted after the type `GO`, ordered by property name.
 
-### 8.11 TableType
-- Table-type metadata MUST be sourced from `sys.table_types` together with the table-like metadata attached to `type_table_object_id`.
+### 8.11 UserDefinedType (Table-Valued)
+- Table-valued user-defined type metadata MUST be sourced from `sys.table_types` together with the table-like metadata attached to `type_table_object_id`.
 - Output MUST emit:
   - `CREATE TYPE [schema].[name] AS TABLE`
   - `(`
   - columns and inline constraints in deterministic order
   - `)`
   - `GO`
-- Table-type column formatting MUST reuse the applicable column rules from Section 8.1.1.
-- Inline table-type body order MUST be:
+- Table-valued user-defined type column formatting MUST reuse the applicable column rules from Section 8.1.1.
+- Inline table-valued user-defined type body order MUST be:
   1. columns by `column_id`,
   2. CHECK constraints by constraint name,
   3. key constraints (`PRIMARY KEY` / `UNIQUE`) by constraint name.
-- Inline entries inside the table-type body MUST be comma-separated.
-- Table-type key-constraint formatting MUST reuse the applicable constraint rules from Section 8.1.6, except the constraints remain inside the `AS TABLE (...)` body rather than being emitted after `GO`.
-- Table-type scripting MUST NOT emit storage clauses, non-constraint indexes, XML indexes, foreign keys, triggers, full-text indexes, permissions, or extended properties.
+- Inline entries inside the table-valued user-defined type body MUST be comma-separated.
+- Table-valued user-defined type key-constraint formatting MUST reuse the applicable constraint rules from Section 8.1.6, except the constraints remain inside the `AS TABLE (...)` body rather than being emitted after `GO`.
+- Table-valued user-defined types are still exposed as `UserDefinedType` in CLI output and selectors.
+- Table-valued user-defined type scripting MUST NOT emit storage clauses, non-constraint indexes, XML indexes, foreign keys, triggers, full-text indexes, permissions, or extended properties.
 
 ### 8.12 XmlSchemaCollection
 - XML schema collection metadata MUST be sourced from `sys.xml_schema_collections`, schema metadata, and `XML_SCHEMA_NAMESPACE`.
