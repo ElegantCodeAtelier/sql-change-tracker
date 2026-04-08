@@ -1705,6 +1705,10 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     internal static string NormalizeForComparison(string script)
     {
+        // Normalization is intentionally limited to line-ending and trailing-newline stability.
+        // Trailing semicolons on INSERT statements (and all other SQL statement terminators)
+        // are preserved as-is. A difference consisting solely of missing or added trailing
+        // semicolons is a real semantic mismatch on some platforms and MUST NOT be suppressed.
         var normalized = script
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace("\r", "\n", StringComparison.Ordinal);

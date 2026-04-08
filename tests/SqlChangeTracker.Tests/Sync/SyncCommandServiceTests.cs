@@ -662,6 +662,35 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_DoesNotNormalizeTrailingSemicolonsInInsertStatements()
+    {
+        // Trailing semicolons on INSERT statements are semantic and must not be normalized away.
+        var withSemicolon = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Id]) VALUES (1);\nINSERT INTO [dbo].[T] ([Id]) VALUES (2);");
+        var withoutSemicolon = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Id]) VALUES (1)\nINSERT INTO [dbo].[T] ([Id]) VALUES (2)");
+
+        Assert.NotEqual(withSemicolon, withoutSemicolon);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_DetectsTrailingSemicolonDifferencesInInsertStatements()
+    {
+        // A diff that consists solely of missing/added trailing semicolons on INSERT statements
+        // must produce a non-empty result and must not be treated as a no-op.
+        var source = "INSERT INTO [dbo].[T] ([Id]) VALUES (1);\nINSERT INTO [dbo].[T] ([Id]) VALUES (2);";
+        var target = "INSERT INTO [dbo].[T] ([Id]) VALUES (1)\nINSERT INTO [dbo].[T] ([Id]) VALUES (2)";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target);
+
+        Assert.NotEmpty(diff);
+        Assert.Contains("-INSERT INTO [dbo].[T] ([Id]) VALUES (1);", diff);
+        Assert.Contains("+INSERT INTO [dbo].[T] ([Id]) VALUES (1)", diff);
+        Assert.Contains("-INSERT INTO [dbo].[T] ([Id]) VALUES (2);", diff);
+        Assert.Contains("+INSERT INTO [dbo].[T] ([Id]) VALUES (2)", diff);
+    }
+
+    [Fact]
     public void DetectExistingStyle_AndApplyStyle_PreservesEncodingAndLineBehavior()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));

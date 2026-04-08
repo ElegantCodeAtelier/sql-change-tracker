@@ -194,6 +194,7 @@ Behavior:
   - Changed: normalized script content differs.
   - Suppress changes when scripts are identical after normalization.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- Trailing semicolons on `INSERT` statements (and all other SQL statement terminators) are NOT normalized away; a difference consisting solely of missing or added trailing semicolons is a real incompatibility and MUST result in a non-compatible verdict.
 - When `data.trackedTables` is configured, `status` also reports data-script differences for tracked tables.
 - Status output MUST report schema and data summaries separately.
 - Exit codes:
@@ -214,6 +215,7 @@ Behavior:
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- Trailing semicolons on `INSERT` statements (and all other SQL statement terminators) are NOT normalized away; a difference consisting solely of missing or added trailing semicolons produces a non-empty diff.
 - Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
 - `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.
 - When two change segments are close enough that their context regions overlap, they are merged into a single hunk.
