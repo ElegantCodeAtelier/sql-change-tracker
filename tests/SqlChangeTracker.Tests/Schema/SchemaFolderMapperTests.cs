@@ -33,6 +33,7 @@ public sealed class SchemaFolderMapperTests
     }
 
     [Theory]
+    [InlineData("Assembly", "Assemblies", "AppClr")]
     [InlineData("Schema", "Security\\Schemas", "AppSecurity")]
     [InlineData("Role", "Security\\Roles", "AppReader")]
     [InlineData("User", "Security\\Users", "ServiceUser")]
@@ -122,6 +123,7 @@ public sealed class SchemaFolderMapperTests
         => new[]
         {
             new FolderMapEntry("Default", "Other"),
+            new FolderMapEntry("Assembly", "Assemblies"),
             new FolderMapEntry("Table", "Tables"),
             new FolderMapEntry("View", "Views"),
             new FolderMapEntry("StoredProcedure", "Stored Procedures"),

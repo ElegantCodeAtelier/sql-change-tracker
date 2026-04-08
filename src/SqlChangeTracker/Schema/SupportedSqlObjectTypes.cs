@@ -14,6 +14,7 @@ internal static class SupportedSqlObjectTypes
 
     public static IReadOnlyList<SupportedSqlObjectType> All { get; } =
     [
+        new("Assembly", "Assemblies", true, true),
         new("Table", "Tables", false, true),
         new("View", "Views", false, true),
         new("StoredProcedure", "Stored Procedures", false, true),

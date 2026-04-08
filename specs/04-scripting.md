@@ -1,7 +1,7 @@
 # Scripting
 
 Status: draft
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 ## 1. Purpose and Normative Intent
 This specification defines normative scripting rules for `sqlct`.
@@ -43,6 +43,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
 - `Schema` discovery covers user-defined schemas and excludes `dbo`, `sys`, and `INFORMATION_SCHEMA`.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
+- `Assembly` discovery covers user-defined assemblies from `sys.assemblies` and excludes SQL Server system assemblies (`is_user_defined = 0`).
 - `TableType` discovery covers user-defined table types.
 - `XmlSchemaCollection` discovery covers user-defined XML schema collections and excludes collections in `sys` and `INFORMATION_SCHEMA`.
 - `MessageType` and `Contract` discovery covers user-defined Service Broker objects and excludes SQL Server-owned broker artifacts named `DEFAULT` and broker/notification artifacts whose names start with `http://schemas.microsoft.com/SQL/`.
@@ -62,6 +63,7 @@ This specification defines normative scripting rules for `sqlct`.
 ### 5.1 Implemented Coverage (Normative Now)
 - Tables
 - Table-scoped DML triggers (emitted within table scripts that inline trigger DDL with the owning table)
+- Assemblies
 - Views
 - Stored Procedures
 - Functions (`FN`, `TF`, `IF`)
@@ -651,7 +653,34 @@ Each emitted statement MUST be followed by `GO`.
   - `EXEC sp_addextendedproperty ..., 'PARTITION SCHEME', N'<scheme>', NULL, NULL, NULL, NULL`
 - Partition-scheme extended properties MUST be emitted after the partition-scheme `GO`, ordered by property name.
 
-### 8.25 TableData
+### 8.25 Assemblies
+- Assembly metadata MUST be sourced from `sys.assemblies`, `sys.assembly_files`, and database-principal ownership metadata.
+- Assembly scripts are database-scoped and MUST use schema-less file naming and display.
+- Output MUST emit:
+  - `CREATE ASSEMBLY [name]`
+  - optional `AUTHORIZATION [owner]`
+  - `FROM 0x<manifest_bits>`
+  - `WITH PERMISSION_SET = <SAFE|EXTERNAL_ACCESS|UNSAFE>`
+  - `GO`
+- The manifest binary payload MUST come from `sys.assembly_files` row `file_id = 1`; missing manifest metadata MUST fail explicitly.
+- Additional assembly files MUST be emitted as:
+  - `ALTER ASSEMBLY [name] ADD FILE FROM 0x<bits> AS [file_name]`
+  - `GO`
+- Additional assembly files MUST be ordered by `file_id`.
+- When `sys.assemblies.is_visible = 0`, scripting MUST emit:
+  - `ALTER ASSEMBLY [name] WITH VISIBILITY = OFF`
+  - `GO`
+- `sys.assemblies.permission_set_desc` values MUST normalize to scripting tokens as follows:
+  - `SAFE` or `SAFE_ACCESS` -> `SAFE`
+  - `EXTERNAL_ACCESS` -> `EXTERNAL_ACCESS`
+  - `UNSAFE` or `UNSAFE_ACCESS` -> `UNSAFE`
+- Assembly scripts MUST inline binary content from `sys.assembly_files.content`; original file-system references used at creation time are not preserved.
+- Assembly permissions MUST use `ON ASSEMBLY::[name]`.
+- Assembly-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'ASSEMBLY', N'<assembly>', NULL, NULL, NULL, NULL`
+- Assembly extended properties MUST be emitted after grants, ordered by property name.
+
+### 8.26 TableData
 - Table-data scripting applies only to tables explicitly listed in `data.trackedTables`.
 - One data script file MUST be emitted per tracked table, even when the table currently has zero rows.
 - An empty tracked table MUST still produce a file at the expected `Data/Schema.Table_Data.sql` path; that file contains no SQL statements.

@@ -1,7 +1,7 @@
 # Schema Folder
 
 Status: draft
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 ## Scope
 Defines the baseline `sqlct` schema-folder structure and naming rules.
@@ -19,6 +19,7 @@ Defines the baseline `sqlct` schema-folder structure and naming rules.
 <project>/
   sqlct.config.json
   Data/
+  Assemblies/
   Functions/
   Security/
     Roles/
@@ -53,7 +54,7 @@ Defines the baseline `sqlct` schema-folder structure and naming rules.
 - Schema-scoped object scripts use `Schema.Object.sql` in their object-type folder (for example `Tables/`, `Views/`, `Functions/`, `Stored Procedures/`, `Sequences/`, `Synonyms/`, `Service Broker/Queues/`, `Types/Table Types/`, `Types/XML Schema Collections/`, and `Types/User-defined Data Types/`).
 - Data scripts use `Schema.Object_Data.sql` in `Data/`.
 - Data tracking uses `Data/` for scripts derived from tables explicitly listed in `data.trackedTables`.
-- Schema-less objects omit the schema prefix (e.g., `Security/Schemas/AppSecurity.sql`, `Security/Roles/AppReader.sql`, `Storage/Partition Functions/FiscalYear_PF.sql`, `Storage/Full Text Catalogs/DocumentCatalog.sql`, `Storage/Search Property Lists/DocumentProperties.sql`, `Service Broker/Contracts/%2F%2FApp%2FMessaging%2FContract.sql`, `Service Broker/Services/AppInitiatorService.sql`, `Service Broker/Event Notifications/NotifySchemaChanges.sql`, `Service Broker/Remote Service Bindings/AppRemoteBinding.sql`).
+- Schema-less objects omit the schema prefix (e.g., `Assemblies/AppClr.sql`, `Security/Schemas/AppSecurity.sql`, `Security/Roles/AppReader.sql`, `Storage/Partition Functions/FiscalYear_PF.sql`, `Storage/Full Text Catalogs/DocumentCatalog.sql`, `Storage/Search Property Lists/DocumentProperties.sql`, `Service Broker/Contracts/%2F%2FApp%2FMessaging%2FContract.sql`, `Service Broker/Services/AppInitiatorService.sql`, `Service Broker/Event Notifications/NotifySchemaChanges.sql`, `Service Broker/Remote Service Bindings/AppRemoteBinding.sql`).
 - Replace invalid file name characters in `Schema` or `Object` with percent-encoded hex (e.g., `:` -> `%3A`, `/` -> `%2F`).
 - Folder names and casing must remain stable within a project.
 - Line endings must match existing output (typically CRLF); do not force-normalize.
@@ -68,6 +69,7 @@ Object identifiers:
 Relative paths:
 - `Tables/dbo.Customer.sql`
 - `Views/Reporting.QuarterlyRollup.sql`
+- `Assemblies/AppClr.sql`
 - `Service Broker/Message Types/%2F%2FApp%2FMessaging%2FRequest.sql`
 - `Storage/Full Text Catalogs/DocumentCatalog.sql`
 - `Storage/Search Property Lists/DocumentProperties.sql`
