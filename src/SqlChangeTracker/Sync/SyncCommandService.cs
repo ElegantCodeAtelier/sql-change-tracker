@@ -12,7 +12,7 @@ internal interface ISyncCommandService
 {
     CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null);
 
-    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, Action<string>? progress = null);
+    CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, int contextLines = 3, Action<string>? progress = null);
 
     CommandExecutionResult<PullResult> RunPull(string? projectDir, string? objectSelector = null, string[]? filterPatterns = null, Action<string>? progress = null);
 }
@@ -110,7 +110,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         return CommandExecutionResult<StatusResult>.Ok(status, exitCode);
     }
 
-    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, Action<string>? progress = null)
+    public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, int contextLines = 3, Action<string>? progress = null)
     {
         if (!TryParseTarget(target, out var comparisonTarget))
         {
@@ -186,7 +186,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
 
             var entry = BuildChangeEntry(selectedSnapshotResult.Payload!, comparisonTarget, selected.Payload!);
-            var diff = BuildDiffText(entry, sourceLabel, targetLabel);
+            var diff = BuildDiffText(entry, sourceLabel, targetLabel, contextLines);
 
             var result = new DiffResult(
                 "diff",
@@ -212,7 +212,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             : changes.Where(change => MatchesObjectPatterns(change.Object.DisplayName, compiledPatterns)).ToArray();
 
         var diffSections = filteredChanges
-            .Select(change => BuildDiffSection(change, sourceLabel, targetLabel))
+            .Select(change => BuildDiffSection(change, sourceLabel, targetLabel, contextLines))
             .Where(section => !string.IsNullOrWhiteSpace(section))
             .ToArray();
 
@@ -1313,9 +1313,9 @@ internal sealed class SyncCommandService : ISyncCommandService
         return new ChangeEntry(sourceObject, sourceObject, targetObject, "changed");
     }
 
-    private static string BuildDiffSection(ChangeEntry entry, string sourceLabel, string targetLabel)
+    private static string BuildDiffSection(ChangeEntry entry, string sourceLabel, string targetLabel, int contextLines)
     {
-        var diff = BuildDiffText(entry, sourceLabel, targetLabel);
+        var diff = BuildDiffText(entry, sourceLabel, targetLabel, contextLines);
         if (string.IsNullOrWhiteSpace(diff))
         {
             return string.Empty;
@@ -1324,7 +1324,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         return $"Object: {entry.Object.SelectorDisplayName} ({entry.Object.ObjectType}){Environment.NewLine}{diff}";
     }
 
-    private static string BuildDiffText(ChangeEntry entry, string sourceLabel, string targetLabel)
+    private static string BuildDiffText(ChangeEntry entry, string sourceLabel, string targetLabel, int contextLines)
     {
         var sourceScript = entry.SourceObject?.Script ?? string.Empty;
         var targetScript = entry.TargetObject?.Script ?? string.Empty;
@@ -1334,10 +1334,10 @@ internal sealed class SyncCommandService : ISyncCommandService
             return string.Empty;
         }
 
-        return BuildUnifiedDiff(sourceLabel, targetLabel, sourceScript, targetScript);
+        return BuildUnifiedDiff(sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
     }
 
-    internal static string BuildUnifiedDiff(string sourceLabel, string targetLabel, string sourceScript, string targetScript)
+    internal static string BuildUnifiedDiff(string sourceLabel, string targetLabel, string sourceScript, string targetScript, int contextLines = 3)
     {
         var normalizedSource = NormalizeForComparison(sourceScript);
         var normalizedTarget = NormalizeForComparison(targetScript);
@@ -1353,24 +1353,145 @@ internal sealed class SyncCommandService : ISyncCommandService
             ? Array.Empty<string>()
             : normalizedTarget.Split('\n');
 
+        var diffLines = ComputeDiffLines(sourceLines, targetLines);
+        var hunks = BuildDiffHunks(diffLines, Math.Max(0, contextLines));
+
+        if (hunks.Count == 0)
+        {
+            return string.Empty;
+        }
+
         var lines = new List<string>
         {
             $"--- {sourceLabel}",
-            $"+++ {targetLabel}",
-            "@@"
+            $"+++ {targetLabel}"
         };
 
-        foreach (var line in sourceLines)
+        foreach (var hunk in hunks)
         {
-            lines.Add($"-{line}");
-        }
-
-        foreach (var line in targetLines)
-        {
-            lines.Add($"+{line}");
+            lines.Add($"@@ -{hunk.SrcStart},{hunk.SrcCount} +{hunk.TgtStart},{hunk.TgtCount} @@");
+            lines.AddRange(hunk.Lines);
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private enum DiffLineKind { Equal, Removed, Added }
+
+    private readonly record struct DiffEntry(DiffLineKind Kind, int SrcLine, int TgtLine, string Content);
+
+    private sealed record DiffHunk(IReadOnlyList<string> Lines, int SrcStart, int SrcCount, int TgtStart, int TgtCount);
+
+    private static IReadOnlyList<DiffEntry> ComputeDiffLines(string[] source, string[] target)
+    {
+        int m = source.Length, n = target.Length;
+
+        // dp[i,j] = length of LCS of source[i..m-1] and target[j..n-1]
+        var dp = new int[m + 1, n + 1];
+        for (int i = m - 1; i >= 0; i--)
+        {
+            for (int j = n - 1; j >= 0; j--)
+            {
+                dp[i, j] = string.Equals(source[i], target[j], StringComparison.Ordinal)
+                    ? 1 + dp[i + 1, j + 1]
+                    : Math.Max(dp[i + 1, j], dp[i, j + 1]);
+            }
+        }
+
+        var result = new List<DiffEntry>(m + n);
+        int si = 0, ti = 0, srcLine = 1, tgtLine = 1;
+        while (si < m || ti < n)
+        {
+            if (si < m && ti < n && string.Equals(source[si], target[ti], StringComparison.Ordinal))
+            {
+                result.Add(new DiffEntry(DiffLineKind.Equal, srcLine++, tgtLine++, source[si]));
+                si++; ti++;
+            }
+            else if (si < m && (ti >= n || dp[si + 1, ti] >= dp[si, ti + 1]))
+            {
+                result.Add(new DiffEntry(DiffLineKind.Removed, srcLine++, 0, source[si]));
+                si++;
+            }
+            else
+            {
+                result.Add(new DiffEntry(DiffLineKind.Added, 0, tgtLine++, target[ti]));
+                ti++;
+            }
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<DiffHunk> BuildDiffHunks(IReadOnlyList<DiffEntry> diffLines, int contextLines)
+    {
+        var changeIndices = new List<int>();
+        for (int i = 0; i < diffLines.Count; i++)
+        {
+            if (diffLines[i].Kind != DiffLineKind.Equal)
+                changeIndices.Add(i);
+        }
+
+        if (changeIndices.Count == 0)
+            return Array.Empty<DiffHunk>();
+
+        // Compute merged hunk ranges with context extension
+        var hunkRanges = new List<(int Start, int End)>();
+        int hunkStart = Math.Max(0, changeIndices[0] - contextLines);
+        int hunkEnd = Math.Min(diffLines.Count - 1, changeIndices[0] + contextLines);
+
+        for (int i = 1; i < changeIndices.Count; i++)
+        {
+            int newStart = Math.Max(0, changeIndices[i] - contextLines);
+            int newEnd = Math.Min(diffLines.Count - 1, changeIndices[i] + contextLines);
+
+            if (newStart <= hunkEnd + 1)
+            {
+                hunkEnd = Math.Max(hunkEnd, newEnd);
+            }
+            else
+            {
+                hunkRanges.Add((hunkStart, hunkEnd));
+                hunkStart = newStart;
+                hunkEnd = newEnd;
+            }
+        }
+        hunkRanges.Add((hunkStart, hunkEnd));
+
+        var hunks = new List<DiffHunk>(hunkRanges.Count);
+        foreach (var (start, end) in hunkRanges)
+        {
+            var hunkLines = new List<string>();
+            int srcStart = 0, srcCount = 0, tgtStart = 0, tgtCount = 0;
+
+            for (int i = start; i <= end; i++)
+            {
+                var entry = diffLines[i];
+                switch (entry.Kind)
+                {
+                    case DiffLineKind.Equal:
+                        hunkLines.Add($" {entry.Content}");
+                        if (srcStart == 0) srcStart = entry.SrcLine;
+                        if (tgtStart == 0) tgtStart = entry.TgtLine;
+                        srcCount++;
+                        tgtCount++;
+                        break;
+                    case DiffLineKind.Removed:
+                        hunkLines.Add($"-{entry.Content}");
+                        if (srcStart == 0) srcStart = entry.SrcLine;
+                        srcCount++;
+                        break;
+                    case DiffLineKind.Added:
+                        hunkLines.Add($"+{entry.Content}");
+                        if (tgtStart == 0) tgtStart = entry.TgtLine;
+                        tgtCount++;
+                        break;
+                }
+            }
+
+            hunks.Add(new DiffHunk(hunkLines, srcStart, srcCount, tgtStart, tgtCount));
+        }
+
+        return hunks;
     }
 
     private static string BuildObjectKey(string objectType, string schema, string name)
