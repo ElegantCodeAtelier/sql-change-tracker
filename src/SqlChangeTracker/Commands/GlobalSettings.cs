@@ -41,6 +41,9 @@ internal sealed class DiffCommandSettings : StatusCommandSettings
 
     [CommandOption("--filter <PATTERN>")]
     public string[]? FilterPatterns { get; set; }
+
+    [CommandOption("--context <N>")]
+    public int? ContextLines { get; set; }
 }
 
 internal sealed class PullCommandSettings : ProjectCommandSettings

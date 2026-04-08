@@ -231,7 +231,7 @@ Error fields:
   "projectDir": ".\\schema",
   "target": "db",
   "object": "data:dbo.Customer",
-  "diff": "--- db\\n+++ folder\\n@@\\n-INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme')\\n+INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme Ltd')",
+  "diff": "--- db\n+++ folder\n@@ -1,1 +1,1 @@\n-INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme')\n+INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme Ltd')",
   "warnings": []
 }
 ```
