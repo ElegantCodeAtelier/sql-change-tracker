@@ -295,7 +295,7 @@ public sealed class StatusDiffPullCommandTests
                     string.Empty,
                     []),
                 ExitCodes.Success),
-            OnRunDiff = (_, _, _, patterns) => capturedPatterns = patterns
+            OnRunDiff = (_, _, _, patterns, _) => capturedPatterns = patterns
         };
 
         var command = new DiffCommand { SyncService = stub };
@@ -307,6 +307,58 @@ public sealed class StatusDiffPullCommandTests
         Assert.Equal(2, capturedPatterns!.Length);
         Assert.Equal("dbo\\.Customer", capturedPatterns[0]);
         Assert.Equal("dbo\\..*", capturedPatterns[1]);
+    }
+
+    [Fact]
+    public void DiffCommand_WithContextLines_PassesValueToService()
+    {
+        int capturedContextLines = -1;
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Ok(
+                new DiffResult(
+                    "diff",
+                    ".\\schema",
+                    "db",
+                    null,
+                    string.Empty,
+                    []),
+                ExitCodes.Success),
+            OnRunDiff = (_, _, _, _, ctx) => capturedContextLines = ctx
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var settings = new DiffCommandSettings { ContextLines = 5 };
+        var exitCode = command.Execute(CreateContext("diff"), settings, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.Equal(5, capturedContextLines);
+    }
+
+    [Fact]
+    public void DiffCommand_WithoutContextLines_DefaultsToThree()
+    {
+        int capturedContextLines = -1;
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Ok(
+                new DiffResult(
+                    "diff",
+                    ".\\schema",
+                    "db",
+                    null,
+                    string.Empty,
+                    []),
+                ExitCodes.Success),
+            OnRunDiff = (_, _, _, _, ctx) => capturedContextLines = ctx
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var settings = new DiffCommandSettings();
+        var exitCode = command.Execute(CreateContext("diff"), settings, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.Equal(3, capturedContextLines);
     }
 
     [Fact]
@@ -488,16 +540,16 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
-        public Action<string?, string?, string?, string[]?>? OnRunDiff { get; set; }
+        public Action<string?, string?, string?, string[]?, int>? OnRunDiff { get; set; }
 
         public Action<string?, string?, string[]?, Action<string>?>? OnRunPull { get; set; }
 
         public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
-        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, Action<string>? progress = null)
+        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, int contextLines = 3, Action<string>? progress = null)
         {
-            OnRunDiff?.Invoke(projectDir, target, objectSelector, filterPatterns);
+            OnRunDiff?.Invoke(projectDir, target, objectSelector, filterPatterns, contextLines);
             return DiffResult;
         }
 

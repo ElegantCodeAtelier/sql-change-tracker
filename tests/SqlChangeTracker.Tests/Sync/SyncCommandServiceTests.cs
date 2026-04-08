@@ -212,6 +212,112 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_ShowsOnlyChangedChunkWithContext()
+    {
+        // 10-line script with a single changed line in the middle
+        var source = string.Join("\n",
+            "line1", "line2", "line3", "line4", "line5",
+            "CHANGED_SRC",
+            "line7", "line8", "line9", "line10");
+        var target = string.Join("\n",
+            "line1", "line2", "line3", "line4", "line5",
+            "CHANGED_TGT",
+            "line7", "line8", "line9", "line10");
+
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target, contextLines: 2);
+
+        // Changed lines appear
+        Assert.Contains("-CHANGED_SRC", diff);
+        Assert.Contains("+CHANGED_TGT", diff);
+        // Context lines within 2 lines of the change appear
+        Assert.Contains(" line4", diff);
+        Assert.Contains(" line5", diff);
+        Assert.Contains(" line7", diff);
+        Assert.Contains(" line8", diff);
+        // Lines beyond context do not appear
+        Assert.DoesNotContain(" line1", diff);
+        Assert.DoesNotContain(" line2", diff);
+        Assert.DoesNotContain(" line9", diff);
+        Assert.DoesNotContain(" line10", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_ContextLinesZero_ShowsOnlyChanges()
+    {
+        var source = string.Join("\n", "before", "REMOVED", "after");
+        var target = string.Join("\n", "before", "ADDED", "after");
+
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target, contextLines: 0);
+
+        Assert.Contains("-REMOVED", diff);
+        Assert.Contains("+ADDED", diff);
+        // No context lines
+        Assert.DoesNotContain(" before", diff);
+        Assert.DoesNotContain(" after", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_SeparatesDistantChangesIntoMultipleHunks()
+    {
+        // Two changes far apart (more than 2*contextLines apart)
+        var source = string.Join("\n",
+            "CHANGE_A",
+            "ctx1", "ctx2", "ctx3", "ctx4", "ctx5", "ctx6", "ctx7",
+            "CHANGE_B");
+        var target = string.Join("\n",
+            "CHANGE_A_NEW",
+            "ctx1", "ctx2", "ctx3", "ctx4", "ctx5", "ctx6", "ctx7",
+            "CHANGE_B_NEW");
+
+        // With contextLines=1, the 7 unchanged lines separate the two changes into distinct hunks
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target, contextLines: 1);
+
+        // Both changes present
+        Assert.Contains("-CHANGE_A", diff);
+        Assert.Contains("+CHANGE_A_NEW", diff);
+        Assert.Contains("-CHANGE_B", diff);
+        Assert.Contains("+CHANGE_B_NEW", diff);
+
+        // Two @@ hunk headers appear
+        var hunkHeaderCount = diff.Split('\n').Count(line => line.StartsWith("@@"));
+        Assert.True(hunkHeaderCount >= 2, $"Expected at least 2 hunk headers but got {hunkHeaderCount}");
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_MergesNearbyChangesIntoOneHunk()
+    {
+        // Two changes with only 2 unchanged lines between them; contextLines=2 → they merge
+        var source = string.Join("\n", "CHANGE_A", "same1", "same2", "CHANGE_B");
+        var target = string.Join("\n", "CHANGE_A_NEW", "same1", "same2", "CHANGE_B_NEW");
+
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target, contextLines: 2);
+
+        // Exactly one @@ hunk header because the hunks are merged
+        var hunkHeaderCount = diff.Split('\n').Count(line => line.StartsWith("@@"));
+        Assert.Equal(1, hunkHeaderCount);
+        Assert.Contains("-CHANGE_A", diff);
+        Assert.Contains("+CHANGE_A_NEW", diff);
+        Assert.Contains("-CHANGE_B", diff);
+        Assert.Contains("+CHANGE_B_NEW", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_HunkHeaderContainsCorrectLineNumbers()
+    {
+        // Source: line1, OLD, line3; target: line1, NEW, line3 (change at line 2)
+        var source = string.Join("\n", "line1", "OLD", "line3");
+        var target = string.Join("\n", "line1", "NEW", "line3");
+
+        // contextLines=0 so only the change itself is shown
+        var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target, contextLines: 0);
+
+        // Hunk covers source lines 2..2 (1 line) and target lines 2..2 (1 line)
+        Assert.Contains("@@ -2,1 +2,1 @@", diff);
+        Assert.Contains("-OLD", diff);
+        Assert.Contains("+NEW", diff);
+    }
+
+    [Fact]
     public void RunDiff_WithObjectSelector_UsesTargetedDatabaseDiscovery()
     {
         var tempDir = CreateTempDir();

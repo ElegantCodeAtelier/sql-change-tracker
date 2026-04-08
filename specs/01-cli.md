@@ -204,7 +204,7 @@ Behavior:
 ### diff
 Show textual diffs.
 `
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>]
 `
 Behavior:
 - Compare object script from DB vs folder.
@@ -214,6 +214,10 @@ Behavior:
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
+- `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.
+- When two change segments are close enough that their context regions overlap, they are merged into a single hunk.
+- Each hunk is prefixed with a `@@ -l,s +l,s @@` header indicating the source and target line ranges.
 - When `data.trackedTables` is configured, `diff` also supports data-script diffs for tracked tables.
 - When `--filter` is specified without `--object`, only objects whose display name matches at least one regex pattern are included in the diff output.
 - When `--filter` is specified with `--object`, the filter is also applied to the single selected object; if it does not match, an empty diff is returned.
