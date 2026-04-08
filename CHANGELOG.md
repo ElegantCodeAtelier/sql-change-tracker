@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add `--object <pattern>` to `sqlct data track` and `sqlct data untrack` as a flag alias for the positional pattern argument.
 - Add `--filter <regex>` to `sqlct data track` and `sqlct data untrack` for regex-based table matching; matched case-insensitively against the full `schema.table` display name. Exactly one of the positional pattern, `--object`, or `--filter` must be provided; combining any two returns exit code 2.
 - `sqlct diff` now uses a chunked diff format: only changed segments and configurable surrounding context lines are shown instead of the full file. Use `--context <N>` to control the number of context lines (default: 3) (#39).
+- Chunked diff format and `--context` option now apply equally to data-script diffs as well as schema object diffs (#41).
 
 ### Changed
 - In `diff --object` mode, database discovery and scripting are now limited to the selector-matching candidate set instead of scanning the full active object set, improving performance for targeted diffs (#28).

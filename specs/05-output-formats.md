@@ -93,7 +93,7 @@ Changed:
 Diff: dbo.Customer
 --- db
 +++ folder
-@@
+@@ -1,1 +1,1 @@
 -ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL;
 +ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL CONSTRAINT [DF_Customer_IsActive] DEFAULT (1);
 ```
@@ -103,7 +103,7 @@ Diff: dbo.Customer
 Diff: data:dbo.Customer
 --- db
 +++ folder
-@@
+@@ -1,1 +1,1 @@
 -INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme');
 +INSERT INTO [dbo].[Customer] ([CustomerID], [Name]) VALUES (1, N'Acme Ltd');
 ```
@@ -113,9 +113,8 @@ Diff: data:dbo.Customer
 Diff: AppReader
 --- db
 +++ folder
-@@
--EXEC sp_addrolemember N'AppReader', N'ServiceUser'
-+EXEC sp_addrolemember N'AppReader', N'ServiceUser'
+@@ -1,1 +1,2 @@
+ EXEC sp_addrolemember N'AppReader', N'ServiceUser'
 +EXEC sp_addrolemember N'AppReader', N'AuditUser'
 ```
 
@@ -125,14 +124,14 @@ Diff: target=db
 Object: dbo.Customer (Table)
 --- db
 +++ folder
-@@
+@@ -1,1 +1,1 @@
 -ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL;
 +ALTER TABLE [dbo].[Customer] ADD [IsActive] bit NOT NULL CONSTRAINT [DF_Customer_IsActive] DEFAULT (1);
 
 Object: dbo.NewView (View)
 --- db
 +++ folder
-@@
+@@ -0,0 +1,1 @@
 +CREATE VIEW [dbo].[NewView] AS SELECT 1;
 ```
 

@@ -423,6 +423,162 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunDiff_WithDataSelectorAndManyRows_ProducesChunkedDiffWithContext()
+    {
+        // A data script with 10 rows where only the middle row differs.
+        // With contextLines=2 only the changed row and its 2 nearest neighbors should appear.
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            config.Data.TrackedTables.Add("dbo.Customer");
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            // Folder file: 10 rows, row 5 has OldValue
+            var folderRows = Enumerable.Range(1, 10)
+                .Select(i => $"INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES ({i}, N'{(i == 5 ? "OldValue" : $"Name{i}")}');")
+                .ToArray();
+            CreateFile(projectDir, Path.Combine("Data", "dbo.Customer_Data.sql"), string.Join("\r\n", folderRows) + "\r\n");
+
+            // DB: 10 rows, row 5 has NewValue
+            var dbRows = Enumerable.Range(1, 10)
+                .Select(i => $"INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES ({i}, N'{(i == 5 ? "NewValue" : $"Name{i}")}');")
+                .ToArray();
+            var dbScript = string.Join("\r\n", dbRows) + "\r\n";
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("dbo", "Customer", "Table")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptTableDataHandler = (_, _) => dbScript
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "data:dbo.Customer", contextLines: 2);
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.DiffExists, result.ExitCode);
+            var diff = result.Payload!.Diff;
+
+            // The changed row appears (trailing semicolons are stripped by normalization)
+            // Source = DB (shown with -); DB has NewValue. Target = folder (shown with +); folder has OldValue.
+            Assert.Contains("-INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (5, N'NewValue')", diff);
+            Assert.Contains("+INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (5, N'OldValue')", diff);
+
+            // 2 context rows on each side of the change (rows 3, 4 before and rows 6, 7 after);
+            // trailing semicolons stripped by normalization
+            Assert.Contains(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (3,", diff);
+            Assert.Contains(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (4,", diff);
+            Assert.Contains(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (6,", diff);
+            Assert.Contains(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (7,", diff);
+
+            // Rows beyond the context window are NOT shown
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (1,", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (2,", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (8,", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (9,", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id], [Name]) VALUES (10,", diff);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunDiff_WithoutSelector_DataChangesUseChunkedFormat()
+    {
+        // Full scan (no --object): data changes in the all-objects path also use chunked format.
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            config.Data.TrackedTables.Add("dbo.Customer");
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            // Folder schema file for the Customer table (same content as DB so no schema diff)
+            const string schemaScript = "CREATE TABLE [dbo].[Customer] ([Id] INT);\r\n";
+            CreateFile(projectDir, Path.Combine("Tables", "dbo.Customer.sql"), schemaScript);
+
+            // Folder data file: 5 rows, row 3 has a different Id value
+            var folderRows = Enumerable.Range(1, 5)
+                .Select(i => $"INSERT INTO [dbo].[Customer] ([Id]) VALUES ({(i == 3 ? 99 : i)});")
+                .ToArray();
+            CreateFile(projectDir, Path.Combine("Data", "dbo.Customer_Data.sql"), string.Join("\r\n", folderRows) + "\r\n");
+
+            // DB: 5 rows, row 3 has value 3
+            var dbRows = Enumerable.Range(1, 5)
+                .Select(i => $"INSERT INTO [dbo].[Customer] ([Id]) VALUES ({i});")
+                .ToArray();
+            var dbScript = string.Join("\r\n", dbRows) + "\r\n";
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects = [new DbObjectInfo("dbo", "Customer", "Table")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) => schemaScript,
+                ScriptTableDataHandler = (_, _) => dbScript
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            // contextLines=0 → only the changed row, no surrounding context
+            var result = service.RunDiff(projectDir, "db", null, contextLines: 0);
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.DiffExists, result.ExitCode);
+            var diff = result.Payload!.Diff;
+
+            // The changed row appears (trailing semicolons are stripped by normalization)
+            // Source = DB (shown with -); DB has value 3. Target = folder (shown with +); folder has 99.
+            Assert.Contains("-INSERT INTO [dbo].[Customer] ([Id]) VALUES (3)", diff);
+            Assert.Contains("+INSERT INTO [dbo].[Customer] ([Id]) VALUES (99)", diff);
+
+            // With contextLines=0, no unchanged rows are shown
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id]) VALUES (1)", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id]) VALUES (2)", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id]) VALUES (4)", diff);
+            Assert.DoesNotContain(" INSERT INTO [dbo].[Customer] ([Id]) VALUES (5)", diff);
+
+            // The hunk header is present
+            Assert.Contains("@@", diff);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunDiff_WithSchemaLessObjectSelector_UsesTargetedDatabaseDiscoveryWithEmptySchema()
     {
         var tempDir = CreateTempDir();
