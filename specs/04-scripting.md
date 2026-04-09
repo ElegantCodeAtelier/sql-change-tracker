@@ -728,7 +728,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
   - after the final definition line and before the trailing `GO`.
 - Reconciliation MAY align generated definition lines to uniquely matched reference-definition lines.
 - Reconciliation MAY preserve semantically equivalent built-in/system type-token spelling for table columns when metadata resolves to the same canonical type (for example `[sys].[sysname]` vs `[sysname]`, `[sys].[hierarchyid]` vs `[hierarchyid]`, `(max)` vs `(MAX)`).
-- Reconciliation MAY preserve semantically equivalent computed-column expression token spelling when metadata resolves to the same computed expression semantics (for example explicit default `CONVERT(..., (0))` versus the omitted default-style form).
+- Reconciliation MAY preserve semantically equivalent computed-column expression token spelling when metadata resolves to the same computed expression semantics (for example explicit default `CONVERT(..., (0))` versus the omitted default-style form, or redundant arithmetic grouping parentheses around a multiplicative subexpression).
 - Table reconciliation MAY preserve compatible reference formatting within the `CREATE TABLE` block, including the table close line and semantically equivalent column type-token spelling already allowed by this section.
 - Table reconciliation MAY reuse the full reference `CREATE TABLE` block only when the normalized generated block and normalized reference block are semantically identical in column order, column semantics, and storage clause semantics.
 - Table reconciliation MAY reuse compatible CHECK-constraint statement lines.

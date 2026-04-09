@@ -267,6 +267,31 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void TryGetCompatibleReferenceCreateTableBlock_PreservesEquivalentComputedColumnArithmeticGrouping()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [Finance].[ExposureSample]",
+            "(",
+            "[ExposureDelta] AS (([Exposure]-[Reserve])-(([AdjustedExposure]-[AdjustedReserve])/[Scale]))",
+            ") ON [PRIMARY]"
+        };
+
+        var generatedCreateBlock = new List<string>
+        {
+            "CREATE TABLE [Finance].[ExposureSample]",
+            "(",
+            "[ExposureDelta] AS (([Exposure]-[Reserve])-([AdjustedExposure]-[AdjustedReserve])/[Scale])",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibleBlock = SqlServerScripter.TryGetCompatibleReferenceCreateTableBlock(referenceLines, generatedCreateBlock);
+
+        Assert.NotNull(compatibleBlock);
+        Assert.Equal(referenceLines, compatibleBlock);
+    }
+
+    [Fact]
     public void ReorderTableKeyAndIndexStatements_UsesCompatibleReferenceOrder()
     {
         var referenceLines = new[]

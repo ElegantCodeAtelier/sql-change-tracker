@@ -2600,8 +2600,204 @@ WHERE name = @name;";
             position = normalizedCall.Value.NextIndex;
         }
 
-        return builder.ToString();
+        return NormalizeRedundantComputedArithmeticGroupingParentheses(builder.ToString());
     }
+
+    private static string NormalizeRedundantComputedArithmeticGroupingParentheses(string line)
+    {
+        var normalized = line;
+        while (TryRemoveRedundantComputedArithmeticGroupingParentheses(normalized, out var updated))
+        {
+            normalized = updated;
+        }
+
+        return normalized;
+    }
+
+    private static bool TryRemoveRedundantComputedArithmeticGroupingParentheses(string line, out string updated)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] != '(' || !IsRedundantComputedArithmeticGroupingStart(line, i))
+            {
+                continue;
+            }
+
+            var closeIndex = FindMatchingParenthesis(line, i);
+            if (closeIndex < 0)
+            {
+                continue;
+            }
+
+            var inner = line.Substring(i + 1, closeIndex - i - 1);
+            if (!CanRemoveComputedArithmeticGroupingParentheses(inner))
+            {
+                continue;
+            }
+
+            updated = line.Remove(closeIndex, 1).Remove(i, 1);
+            return true;
+        }
+
+        updated = line;
+        return false;
+    }
+
+    private static bool IsRedundantComputedArithmeticGroupingStart(string line, int openParenIndex)
+    {
+        var operatorIndex = FindPreviousNonWhitespaceIndex(line, openParenIndex - 1);
+        if (operatorIndex < 0 || !IsArithmeticOperator(line[operatorIndex]))
+        {
+            return false;
+        }
+
+        var operandEndIndex = FindPreviousNonWhitespaceIndex(line, operatorIndex - 1);
+        return operandEndIndex >= 0 && IsOperandTerminator(line[operandEndIndex]);
+    }
+
+    private static bool CanRemoveComputedArithmeticGroupingParentheses(string expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return false;
+        }
+
+        var depth = 0;
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+        var expectUnaryOperator = true;
+
+        for (var i = 0; i < expression.Length; i++)
+        {
+            var ch = expression[i];
+            if (inSingleQuotedString)
+            {
+                if (ch == '\'')
+                {
+                    if (i + 1 < expression.Length && expression[i + 1] == '\'')
+                    {
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuotedString = true;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                expectUnaryOperator = false;
+                continue;
+            }
+
+            if (char.IsLetter(ch))
+            {
+                return false;
+            }
+
+            if (char.IsDigit(ch))
+            {
+                expectUnaryOperator = false;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                depth++;
+                expectUnaryOperator = true;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (depth == 0)
+                {
+                    return false;
+                }
+
+                depth--;
+                expectUnaryOperator = false;
+                continue;
+            }
+
+            if (depth == 0)
+            {
+                if (ch is '+' or '-')
+                {
+                    if (!expectUnaryOperator)
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                if (ch is '*' or '/' or '%')
+                {
+                    expectUnaryOperator = true;
+                    continue;
+                }
+
+                if (ch is '.' or '$')
+                {
+                    expectUnaryOperator = false;
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (ch is ',' or ';')
+            {
+                return false;
+            }
+        }
+
+        return depth == 0 && !inSingleQuotedString && !inBracketedIdentifier;
+    }
+
+    private static int FindPreviousNonWhitespaceIndex(string text, int startIndex)
+    {
+        for (var i = startIndex; i >= 0; i--)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsArithmeticOperator(char ch) => ch is '+' or '-' or '*' or '/' or '%';
+
+    private static bool IsOperandTerminator(char ch)
+        => ch == ']' || ch == ')' || ch == '\'' || char.IsLetterOrDigit(ch);
 
     private static (string Text, int NextIndex)? NormalizeConvertCall(string line, int startIndex)
     {

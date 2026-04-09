@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 - Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes.
 - Preserve reference banner-comment formatting and module-declaration identifier quoting during programmable-object compatibility reconciliation.
+- Preserve compatible computed-column arithmetic grouping parentheses during table compatibility reconciliation.
 
 ### Added
 - `sqlct init` now prompts interactively for connection details (server, database, auth, credentials, trust-server-certificate) when run without flags in a new project directory (#36).
