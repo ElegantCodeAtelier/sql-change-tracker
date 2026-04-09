@@ -842,6 +842,45 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_TableData_NormalizesLegacyPrefixesInMultilineInsertValues()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', 'ScoreApl', 'EmploymentBasis', 0);",
+            SyncCommandService.TableDataObjectType);
+        var legacy = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', N'ScoreApl', N'EmploymentBasis', 0)",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, legacy);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesLegacyPrefixesInMultilineInsertValues()
+    {
+        var source =
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', 'ScoreApl', 'EmploymentBasis', 0);";
+        var target =
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', N'ScoreApl', N'EmploymentBasis', 0)";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void NormalizeForComparison_DoesNotNormalizeUnicodeLiteralPrefixesOutsideTableData()
     {
         var plain = SyncCommandService.NormalizeForComparison(

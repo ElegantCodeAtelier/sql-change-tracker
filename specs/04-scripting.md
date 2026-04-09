@@ -779,7 +779,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Whitespace-only lines MUST be normalized to empty lines during comparison so that blank separators differing only by spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
 - For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
-- For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside `INSERT ... VALUES (...)` as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
+- For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside single-line or multi-line `INSERT ... VALUES (...)` statements as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.

@@ -1792,23 +1792,26 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         var isTableData = string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
-        if (!normalized.Contains("INSERT ", StringComparison.OrdinalIgnoreCase) &&
-            (!isTableData || !normalized.Contains("SET IDENTITY_INSERT ", StringComparison.OrdinalIgnoreCase)))
+        var joined = string.Join("\n", lines);
+        if (isTableData)
         {
-            return string.Join("\n", lines);
+            return !joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase) &&
+                   !joined.Contains("SET IDENTITY_INSERT ", StringComparison.OrdinalIgnoreCase)
+                ? joined
+                : NormalizeLegacyTableDataScript(joined);
+        }
+
+        if (!joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
+        {
+            return joined;
         }
 
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (line.EndsWith(';') && (LineStartsWithInsert(line) || (isTableData && LineStartsWithIdentityInsert(line))))
+            if (line.EndsWith(';') && LineStartsWithInsert(line))
             {
                 line = line[..^1];
-            }
-
-            if (isTableData && LineStartsWithInsert(line))
-            {
-                line = NormalizeLegacyTableDataInsertLine(line);
             }
 
             lines[i] = line;
@@ -1837,7 +1840,165 @@ internal sealed class SyncCommandService : ISyncCommandService
                line.AsSpan(pos, prefix.Length).Equals(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string NormalizeLegacyTableDataInsertLine(string line)
+    private static string NormalizeLegacyTableDataScript(string script)
+    {
+        var builder = new StringBuilder(script.Length);
+        var position = 0;
+        while (position < script.Length)
+        {
+            var lineEnd = script.IndexOf('\n', position);
+            var segmentEnd = lineEnd >= 0 ? lineEnd : script.Length;
+            var line = script.Substring(position, segmentEnd - position);
+
+            if (LineStartsWithIdentityInsert(line))
+            {
+                builder.Append(StripTrailingSemicolon(line));
+                if (lineEnd >= 0)
+                {
+                    builder.Append('\n');
+                    position = lineEnd + 1;
+                }
+                else
+                {
+                    position = script.Length;
+                }
+
+                continue;
+            }
+
+            if (LineStartsWithInsert(line))
+            {
+                var insertRange = TryFindInsertValuesStatementRange(script, position);
+                if (insertRange.HasValue)
+                {
+                    var statement = script.Substring(
+                        position,
+                        insertRange.Value.StatementEndExclusive - position);
+                    builder.Append(NormalizeLegacyTableDataInsertStatement(statement));
+                    position = insertRange.Value.ConsumedEndExclusive;
+                    continue;
+                }
+            }
+
+            builder.Append(line);
+            if (lineEnd >= 0)
+            {
+                builder.Append('\n');
+                position = lineEnd + 1;
+            }
+            else
+            {
+                position = script.Length;
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static string StripTrailingSemicolon(string line)
+        => line.EndsWith(';') ? line[..^1] : line;
+
+    private static (int StatementEndExclusive, int ConsumedEndExclusive)? TryFindInsertValuesStatementRange(
+        string script,
+        int start)
+    {
+        var valuesKeywordIndex = script.IndexOf("VALUES", start, StringComparison.OrdinalIgnoreCase);
+        if (valuesKeywordIndex < 0)
+        {
+            return null;
+        }
+
+        var valuesOpenParenIndex = script.IndexOf('(', valuesKeywordIndex);
+        if (valuesOpenParenIndex < 0)
+        {
+            return null;
+        }
+
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+        var parenDepth = 0;
+        for (var i = valuesOpenParenIndex; i < script.Length; i++)
+        {
+            var ch = script[i];
+            if (inSingleQuotedString)
+            {
+                if (ch == '\'')
+                {
+                    if (i + 1 < script.Length && script[i + 1] == '\'')
+                    {
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuotedString = true;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch != ')')
+            {
+                continue;
+            }
+
+            parenDepth--;
+            if (parenDepth != 0)
+            {
+                continue;
+            }
+
+            var statementEndExclusive = i + 1;
+            var consumedEndExclusive = statementEndExclusive;
+            while (consumedEndExclusive < script.Length && script[consumedEndExclusive] is ' ' or '\t')
+            {
+                consumedEndExclusive++;
+            }
+
+            if (consumedEndExclusive < script.Length && script[consumedEndExclusive] == ';')
+            {
+                consumedEndExclusive++;
+            }
+            else
+            {
+                consumedEndExclusive = statementEndExclusive;
+            }
+
+            return (statementEndExclusive, consumedEndExclusive);
+        }
+
+        return null;
+    }
+
+    private static string NormalizeLegacyTableDataInsertStatement(string line)
     {
         var valuesKeywordIndex = line.IndexOf("VALUES", StringComparison.OrdinalIgnoreCase);
         if (valuesKeywordIndex < 0)
@@ -1938,7 +2099,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         for (var i = prefixIndex - 1; i > valuesOpenParenIndex; i--)
         {
             var ch = line[i];
-            if (ch is ' ' or '\t')
+            if (char.IsWhiteSpace(ch))
             {
                 continue;
             }
