@@ -26,6 +26,7 @@ internal class SqlServerScripter
     {
         KeyConstraint,
         NonConstraintIndex,
+        UserCreatedStatistic,
         XmlIndex
     }
 
@@ -52,6 +53,13 @@ internal class SqlServerScripter
         string Compression,
         string? PartitionColumn,
         bool StatisticsIncremental);
+
+    private readonly record struct StatisticsScriptingOptions(
+        string? SamplingClause,
+        bool PersistSamplePercent,
+        bool NoRecompute,
+        bool Incremental,
+        bool? AutoDrop);
 
     private sealed record TableDataColumn(
         int ColumnId,
@@ -2271,8 +2279,9 @@ WHERE name = @name;";
         lines.AddRange(ReadIndexSetOptions(referenceLines));
         var keyConstraintLines = ReadTableKeyConstraints(connection, fullName, referenceLines).ToList();
         var nonConstraintIndexLines = ReadNonConstraintIndexes(connection, fullName, referenceLines).ToList();
+        var userCreatedStatisticLines = ReadTableUserCreatedStatistics(connection, fullName, referenceLines).ToList();
         var xmlIndexLines = ReadTableXmlIndexes(connection, fullName).ToList();
-        lines.AddRange(ReorderTableKeyAndIndexStatements(referenceLines, keyConstraintLines, nonConstraintIndexLines, xmlIndexLines));
+        lines.AddRange(ReorderTableKeyAndIndexStatements(referenceLines, keyConstraintLines, nonConstraintIndexLines, userCreatedStatisticLines, xmlIndexLines));
         lines.AddRange(ReadTableForeignKeys(connection, fullName));
         lines.AddRange(ReadTableGrants(connection, fullName));
         lines.AddRange(ReadTableExtendedProperties(connection, obj.Schema, obj.Name, referenceLines));
@@ -2365,6 +2374,67 @@ WHERE name = @name;";
         return options.Count == 0
             ? string.Empty
             : $" WITH ({string.Join(", ", options)})";
+    }
+
+    internal static string BuildStatisticsWithClause(
+        string? samplingClause,
+        bool persistSamplePercent,
+        bool noRecompute,
+        bool incremental,
+        bool? autoDrop)
+    {
+        var options = new List<string>();
+        if (!string.IsNullOrWhiteSpace(samplingClause))
+        {
+            options.Add(samplingClause);
+        }
+
+        if (persistSamplePercent)
+        {
+            options.Add("PERSIST_SAMPLE_PERCENT = ON");
+        }
+
+        if (noRecompute)
+        {
+            options.Add("NORECOMPUTE");
+        }
+
+        if (incremental)
+        {
+            options.Add("INCREMENTAL=ON");
+        }
+
+        if (autoDrop.HasValue)
+        {
+            options.Add(autoDrop.Value ? "AUTO_DROP = ON" : "AUTO_DROP = OFF");
+        }
+
+        return options.Count == 0
+            ? string.Empty
+            : $" WITH {string.Join(", ", options)}";
+    }
+
+    internal static string? BuildStatisticsSamplingClause(long rowCount, long rowsSampled, double? persistedSamplePercent)
+    {
+        if (persistedSamplePercent.HasValue && persistedSamplePercent.Value > 0d)
+        {
+            return persistedSamplePercent.Value >= 100d
+                ? "FULLSCAN"
+                : $"SAMPLE {FormatStatisticsSamplePercent((decimal)persistedSamplePercent.Value)} PERCENT";
+        }
+
+        if (rowCount <= 0 || rowsSampled <= 0)
+        {
+            return null;
+        }
+
+        if (rowsSampled >= rowCount)
+        {
+            return "FULLSCAN";
+        }
+
+        var effectivePercent = (rowsSampled * 100m) / rowCount;
+        return $"SAMPLE {FormatStatisticsSamplePercent(effectivePercent)} PERCENT";
     }
 
     private static string? TryGetCompatibleReferenceTableOnLine(string[]? referenceLines, string generatedOnLine)
@@ -3599,6 +3669,158 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
         return lines;
     }
 
+    private static IEnumerable<string> ReadTableUserCreatedStatistics(
+        SqlConnection connection,
+        string fullName,
+        string[]? referenceLines)
+    {
+        var supportsStatsAutoDrop = HasSystemObjectColumn(connection, "stats", "auto_drop");
+        var supportsPersistedSamplePercent = HasSystemObjectColumn(connection, "dm_db_stats_properties", "persisted_sample_percent");
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT s.object_id,
+       s.stats_id,
+       s.name,
+       s.no_recompute,
+       s.has_filter,
+       s.filter_definition,
+       s.is_incremental
+FROM sys.stats s
+WHERE s.object_id = OBJECT_ID(@full)
+  AND s.user_created = 1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes i
+      WHERE i.object_id = s.object_id
+        AND i.index_id = s.stats_id)
+ORDER BY s.name;";
+        command.Parameters.AddWithValue("@full", fullName);
+
+        var statisticsLineMap = BuildStatisticsLineMap(referenceLines);
+        var statistics = new List<(int ObjectId, int StatsId, string Name, bool HasFilter, string? FilterDefinition, bool NoRecompute, bool Incremental)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                statistics.Add((
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetString(2),
+                    reader.GetBoolean(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.GetBoolean(3),
+                    !reader.IsDBNull(6) && reader.GetBoolean(6)));
+            }
+        }
+
+        var lines = new List<string>();
+        foreach (var statistic in statistics)
+        {
+            if (statisticsLineMap != null &&
+                statisticsLineMap.TryGetValue(statistic.Name, out var compatibleLine))
+            {
+                lines.Add(compatibleLine);
+                lines.Add("GO");
+                continue;
+            }
+
+            command.Parameters.Clear();
+            command.CommandText = @"
+SELECT c.name
+FROM sys.stats_columns sc
+JOIN sys.columns c ON c.object_id = sc.object_id AND c.column_id = sc.column_id
+WHERE sc.object_id = @obj
+  AND sc.stats_id = @stats
+ORDER BY sc.stats_column_id;";
+            command.Parameters.AddWithValue("@obj", statistic.ObjectId);
+            command.Parameters.AddWithValue("@stats", statistic.StatsId);
+
+            var columns = new List<string>();
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    columns.Add(QuoteIdentifier(reader.GetString(0)));
+                }
+            }
+
+            if (columns.Count == 0)
+            {
+                continue;
+            }
+
+            var scriptingOptions = ReadStatisticsScriptingOptions(
+                connection,
+                statistic.ObjectId,
+                statistic.StatsId,
+                statistic.NoRecompute,
+                statistic.Incremental,
+                supportsPersistedSamplePercent,
+                supportsStatsAutoDrop);
+            var filterClause = statistic.HasFilter && !string.IsNullOrWhiteSpace(statistic.FilterDefinition)
+                ? $" WHERE {statistic.FilterDefinition}"
+                : string.Empty;
+            var withClause = BuildStatisticsWithClause(
+                scriptingOptions.SamplingClause,
+                scriptingOptions.PersistSamplePercent,
+                scriptingOptions.NoRecompute,
+                scriptingOptions.Incremental,
+                scriptingOptions.AutoDrop);
+
+            lines.Add($"CREATE STATISTICS {QuoteIdentifier(statistic.Name)} ON {fullName} ({string.Join(", ", columns)}){filterClause}{withClause}");
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static StatisticsScriptingOptions ReadStatisticsScriptingOptions(
+        SqlConnection connection,
+        int objectId,
+        int statsId,
+        bool noRecompute,
+        bool incremental,
+        bool supportsPersistedSamplePercent,
+        bool supportsStatsAutoDrop)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $@"
+SELECT dsp.rows,
+       dsp.rows_sampled,
+       {(supportsPersistedSamplePercent ? "dsp.persisted_sample_percent" : "CAST(NULL AS float)")},
+       {(supportsStatsAutoDrop ? "s.auto_drop" : "CAST(NULL AS bit)")}
+FROM sys.stats s
+OUTER APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) dsp
+WHERE s.object_id = @obj
+  AND s.stats_id = @stats;";
+        command.Parameters.AddWithValue("@obj", objectId);
+        command.Parameters.AddWithValue("@stats", statsId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return new StatisticsScriptingOptions(
+                null,
+                false,
+                noRecompute,
+                incremental,
+                null);
+        }
+
+        var rowCount = reader.IsDBNull(0) ? 0L : Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+        var rowsSampled = reader.IsDBNull(1) ? 0L : Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture);
+        var persistedSamplePercent = reader.IsDBNull(2) ? (double?)null : Convert.ToDouble(reader.GetValue(2), CultureInfo.InvariantCulture);
+        var autoDrop = reader.IsDBNull(3) ? (bool?)null : Convert.ToBoolean(reader.GetValue(3), CultureInfo.InvariantCulture);
+
+        return new StatisticsScriptingOptions(
+            BuildStatisticsSamplingClause(rowCount, rowsSampled, persistedSamplePercent),
+            persistedSamplePercent.HasValue && persistedSamplePercent.Value > 0d,
+            noRecompute,
+            incremental,
+            autoDrop);
+    }
+
     private static IndexScriptingOptions ReadIndexScriptingOptions(SqlConnection connection, int objectId, int indexId)
     {
         return new IndexScriptingOptions(
@@ -3664,6 +3886,27 @@ WHERE s.object_id = @obj AND s.stats_id = @idx;";
         command.Parameters.AddWithValue("@idx", indexId);
 
         return command.ExecuteScalar() is bool isIncremental && isIncremental;
+    }
+
+    private static bool HasSystemObjectColumn(SqlConnection connection, string objectName, string columnName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.all_columns c
+    JOIN sys.all_objects o ON o.object_id = c.object_id
+    JOIN sys.schemas s ON s.schema_id = o.schema_id
+    WHERE s.name = N'sys'
+      AND o.name = @objectName
+      AND c.name = @columnName)
+THEN CAST(1 AS bit)
+ELSE CAST(0 AS bit)
+END;";
+        command.Parameters.AddWithValue("@objectName", objectName);
+        command.Parameters.AddWithValue("@columnName", columnName);
+
+        return command.ExecuteScalar() is bool exists && exists;
     }
 
     private static IEnumerable<string> ReadTableForeignKeys(SqlConnection connection, string fullName)
@@ -4170,11 +4413,13 @@ ORDER BY p.name, ep.name;";
         string[]? referenceLines,
         IReadOnlyList<string> keyConstraintLines,
         IReadOnlyList<string> nonConstraintIndexLines,
+        IReadOnlyList<string> userCreatedStatisticLines,
         IReadOnlyList<string> xmlIndexLines)
     {
         var statements = new List<TablePostCreateStatement>();
         statements.AddRange(ParseTablePostCreateStatements(keyConstraintLines, TablePostCreateStatementKind.KeyConstraint));
         statements.AddRange(ParseTablePostCreateStatements(nonConstraintIndexLines, TablePostCreateStatementKind.NonConstraintIndex));
+        statements.AddRange(ParseTablePostCreateStatements(userCreatedStatisticLines, TablePostCreateStatementKind.UserCreatedStatistic));
         statements.AddRange(ParseTablePostCreateStatements(xmlIndexLines, TablePostCreateStatementKind.XmlIndex));
 
         if (statements.Count == 0)
@@ -4335,6 +4580,19 @@ ORDER BY p.name, ep.name;";
 
             kind = TablePostCreateStatementKind.XmlIndex;
             name = indexName;
+            return true;
+        }
+
+        if (firstLine.StartsWith("CREATE STATISTICS [", StringComparison.OrdinalIgnoreCase))
+        {
+            var statisticsName = ExtractBracketedIdentifier(firstLine, "CREATE STATISTICS [");
+            if (statisticsName == null)
+            {
+                return false;
+            }
+
+            kind = TablePostCreateStatementKind.UserCreatedStatistic;
+            name = statisticsName;
             return true;
         }
 
@@ -6284,6 +6542,12 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             : trimmed;
     }
 
+    private static string FormatStatisticsSamplePercent(decimal value)
+    {
+        var rounded = decimal.Round(value, 12, MidpointRounding.AwayFromZero);
+        return rounded.ToString("0.############", CultureInfo.InvariantCulture);
+    }
+
     private static Dictionary<string, string>? BuildCheckConstraintLineMap(string[]? referenceLines)
     {
         if (referenceLines == null || referenceLines.Length == 0)
@@ -6395,6 +6659,39 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             }
 
             start += "INDEX [".Length;
+            var end = trimmed.IndexOf(']', start);
+            if (end <= start)
+            {
+                continue;
+            }
+
+            var name = trimmed.Substring(start, end - start);
+            if (!map.ContainsKey(name))
+            {
+                map[name] = trimmed;
+            }
+        }
+
+        return map.Count == 0 ? null : map;
+    }
+
+    private static Dictionary<string, string>? BuildStatisticsLineMap(string[]? referenceLines)
+    {
+        if (referenceLines == null || referenceLines.Length == 0)
+        {
+            return null;
+        }
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in referenceLines)
+        {
+            var trimmed = line.TrimStart();
+            if (!trimmed.StartsWith("CREATE STATISTICS [", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var start = "CREATE STATISTICS [".Length;
             var end = trimmed.IndexOf(']', start);
             if (end <= start)
             {

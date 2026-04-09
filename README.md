@@ -52,6 +52,8 @@ Current runtime scope for `status`, `diff`, and `pull` covers:
 - `FullTextStoplist`
 - `SearchPropertyList`
 
+Table scripting also includes standalone user-created table statistics (`CREATE STATISTICS`) as post-create table statements. Current statistics option coverage includes effective sampling (`FULLSCAN` or `SAMPLE <n> PERCENT`), `PERSIST_SAMPLE_PERCENT = ON`, `NORECOMPUTE`, `INCREMENTAL=ON`, and `AUTO_DROP = ON|OFF` when the source server exposes the required metadata. `MAXDOP`, `STATS_STREAM`, `ROWCOUNT`, and `PAGECOUNT` remain deferred.
+
 When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 
 `--object` selectors support:

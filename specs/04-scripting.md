@@ -228,12 +228,13 @@ After base table `CREATE` block and its `GO`, statements MUST be emitted in this
 2. CHECK constraints
 3. Key constraints (PRIMARY KEY / UNIQUE)
 4. Non-constraint indexes
-5. XML indexes
-6. Foreign keys
-7. Grants
-8. Extended properties
-9. Full-text indexes
-10. Lock escalation (only when not `TABLE`)
+5. User-created statistics
+6. XML indexes
+7. Foreign keys
+8. Grants
+9. Extended properties
+10. Full-text indexes
+11. Lock escalation (only when not `TABLE`)
 
 Each emitted statement MUST be followed by `GO`.
 
@@ -276,7 +277,33 @@ Each emitted statement MUST be followed by `GO`.
 - `ON [data_space]` MUST be emitted when available.
 - `ON [data_space] ([partition_column])` MUST be emitted when the index is partitioned and the partitioning column is available from catalog metadata.
 
-#### 8.1.8 XML Indexes
+#### 8.1.8 User-Created Statistics
+- User-created statistics MUST be sourced from `sys.stats` and `sys.stats_columns`.
+- Include only statistics where:
+  - `user_created = 1`,
+  - the statistic is not backed by an index (`sys.indexes.index_id <> sys.stats.stats_id` for the same object).
+- Statistics MUST be ordered by statistic name.
+- Statistic column lists MUST be ordered by `stats_column_id`.
+- Output MUST emit:
+  - `CREATE STATISTICS [name] ON [schema].[table] ([column_1], [column_2], ...)`
+  - optional `WHERE <filter_definition>` when the statistic is filtered
+  - optional `WITH ...`
+- Sampling metadata MUST be sourced from `sys.dm_db_stats_properties` when available.
+- Statistics `WITH` options MUST include:
+  - `FULLSCAN` when the effective sampled row count matches the table row count
+  - `SAMPLE <effective_percent> PERCENT` when the effective sampled row count is non-zero and less than the table row count
+  - `PERSIST_SAMPLE_PERCENT = ON` when `sys.dm_db_stats_properties.persisted_sample_percent > 0`
+  - `NORECOMPUTE` when `sys.stats.no_recompute = 1`
+  - `INCREMENTAL=ON` when `sys.stats.is_incremental = 1`
+- `AUTO_DROP = ON|OFF` MUST be emitted when the source server exposes `sys.stats.auto_drop`.
+- Effective sampling percentages MUST be emitted in invariant-culture decimal form with trailing zeros trimmed.
+- When multiple statistics `WITH` options are present, they MUST be emitted in this order:
+  - `WITH <FULLSCAN|SAMPLE <effective_percent> PERCENT>, PERSIST_SAMPLE_PERCENT = ON, NORECOMPUTE, INCREMENTAL=ON, AUTO_DROP = <ON|OFF>`
+- Statistics scripting MUST preserve the effective sampling state rather than the original `SAMPLE ... PERCENT` or `SAMPLE ... ROWS` construction text.
+- Statistics scripting MUST NOT emit `MAXDOP`, `STATS_STREAM`, `ROWCOUNT`, or `PAGECOUNT` options in v1.
+- Statistics MUST NOT be emitted as standalone top-level schema objects; they remain post-create table statements.
+
+#### 8.1.9 XML Indexes
 - XML indexes MUST be sourced from `sys.xml_indexes` together with column metadata.
 - XML indexes MUST be ordered by XML `index_id`.
 - Primary XML index format MUST be:
@@ -288,12 +315,12 @@ Each emitted statement MUST be followed by `GO`.
   - `USING XML INDEX [primary_xml_index]`
   - `FOR <PATH|PROPERTY|VALUE>`
 
-#### 8.1.9 Foreign Keys
+#### 8.1.10 Foreign Keys
 - Foreign keys MUST be ordered by foreign key name.
 - Column lists MUST follow `constraint_column_id`.
 - `ON DELETE` and `ON UPDATE` clauses MUST be emitted only when action is not `NO_ACTION`.
 
-#### 8.1.10 Table Extended Properties
+#### 8.1.11 Table Extended Properties
 - Table-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'TABLE', N'<table>', NULL, NULL`
 - Column-level extended properties MUST use:
@@ -311,7 +338,7 @@ Each emitted statement MUST be followed by `GO`.
   4. index-level (by index name, then property name),
   5. trigger-level (by trigger name, then property name).
 
-#### 8.1.11 Full-Text Indexes
+#### 8.1.12 Full-Text Indexes
 - Full-text indexes MUST be sourced from `sys.fulltext_indexes`, `sys.fulltext_index_columns`, `sys.fulltext_catalogs`, `sys.indexes`, and `sys.columns`.
 - Full-text index base statement MUST be:
   - `CREATE FULLTEXT INDEX ON [schema].[table] KEY INDEX [unique_key_index] ON [catalog]`
@@ -320,7 +347,7 @@ Each emitted statement MUST be followed by `GO`.
   - `[column] LANGUAGE <language_id>`
   - `[column] TYPE COLUMN [type_column] LANGUAGE <language_id>` when a type column is configured.
 
-#### 8.1.12 Lock Escalation
+#### 8.1.13 Lock Escalation
 - `ALTER TABLE [schema].[table] SET ( LOCK_ESCALATION = <value> )` MUST be emitted only when lock escalation is present and not `TABLE`.
 
 ### 8.2 Views
@@ -732,7 +759,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Table reconciliation MAY preserve compatible reference formatting within the `CREATE TABLE` block, including the table close line and semantically equivalent column type-token spelling already allowed by this section.
 - Table reconciliation MAY reuse the full reference `CREATE TABLE` block only when the normalized generated block and normalized reference block are semantically identical in column order, column semantics, and storage clause semantics.
 - Table reconciliation MAY reuse compatible CHECK-constraint statement lines.
-- Table reconciliation MAY preserve compatible relative ordering of key-constraint, non-constraint-index, and XML-index statements within the post-create block segment between CHECK constraints and foreign keys.
+- Table reconciliation MAY preserve compatible relative ordering of key-constraint, non-constraint-index, user-created-statistic, and XML-index statements within the post-create block segment between CHECK constraints and foreign keys.
 - When a reference `CREATE TABLE` block is not semantically identical after normalization, reconciliation MUST keep the generated canonical `CREATE TABLE` block.
 - Reconciliation MUST NOT be used to change:
   - user-defined type qualification,

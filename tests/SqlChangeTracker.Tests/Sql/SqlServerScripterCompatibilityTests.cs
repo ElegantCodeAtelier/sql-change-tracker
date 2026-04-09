@@ -271,17 +271,17 @@ public sealed class SqlServerScripterCompatibilityTests
     {
         var referenceLines = new[]
         {
-            "CREATE TABLE [Finance].[ExposureSample]",
+            "CREATE TABLE [Example].[SampleTable]",
             "(",
-            "[ExposureDelta] AS (([Exposure]-[Reserve])-(([AdjustedExposure]-[AdjustedReserve])/[Scale]))",
+            "[AmountDelta] AS (([BaseAmount]-[OffsetAmount])-(([AdjustedBase]-[AdjustedOffset])/[ScaleFactor]))",
             ") ON [PRIMARY]"
         };
 
         var generatedCreateBlock = new List<string>
         {
-            "CREATE TABLE [Finance].[ExposureSample]",
+            "CREATE TABLE [Example].[SampleTable]",
             "(",
-            "[ExposureDelta] AS (([Exposure]-[Reserve])-([AdjustedExposure]-[AdjustedReserve])/[Scale])",
+            "[AmountDelta] AS (([BaseAmount]-[OffsetAmount])-([AdjustedBase]-[AdjustedOffset])/[ScaleFactor])",
             ") ON [PRIMARY]"
         };
 
@@ -334,6 +334,7 @@ public sealed class SqlServerScripterCompatibilityTests
             referenceLines,
             keyConstraintLines,
             nonConstraintIndexLines,
+            Array.Empty<string>(),
             Array.Empty<string>());
 
         Assert.Equal(new[]
@@ -347,6 +348,55 @@ public sealed class SqlServerScripterCompatibilityTests
             "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_rowguid] ON [Production].[Document] ([rowguid]) ON [PRIMARY]",
             "GO",
             "ALTER TABLE [Production].[Document] ADD CONSTRAINT [UQ__Document__F73921F7C81C642F] UNIQUE NONCLUSTERED ([rowguid]) ON [PRIMARY]",
+            "GO"
+        }, reordered);
+    }
+
+    [Fact]
+    public void ReorderTableKeyAndIndexStatements_PreservesCompatibleStatisticOrder()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE NONCLUSTERED INDEX [IX_SampleTable_KeyBeta] ON [Example].[SampleTable] ([KeyBeta]) ON [PRIMARY]",
+            "GO",
+            "CREATE STATISTICS [STAT_SampleTable_KeyAlpha_KeyBeta] ON [Example].[SampleTable] ([KeyAlpha], [KeyBeta]) WITH NORECOMPUTE",
+            "GO",
+            "CREATE XML INDEX [XML_SampleTable_DetailXml] ON [Example].[SampleTable] ([DetailXml]) USING XML INDEX [PXML_SampleTable_DetailXml] FOR PATH",
+            "GO"
+        };
+
+        var nonConstraintIndexLines = new List<string>
+        {
+            "CREATE NONCLUSTERED INDEX [IX_SampleTable_KeyBeta] ON [Example].[SampleTable] ([KeyBeta]) ON [PRIMARY]",
+            "GO"
+        };
+
+        var userCreatedStatisticLines = new List<string>
+        {
+            "CREATE STATISTICS [STAT_SampleTable_KeyAlpha_KeyBeta] ON [Example].[SampleTable] ([KeyAlpha], [KeyBeta]) WITH NORECOMPUTE",
+            "GO"
+        };
+
+        var xmlIndexLines = new List<string>
+        {
+            "CREATE XML INDEX [XML_SampleTable_DetailXml] ON [Example].[SampleTable] ([DetailXml]) USING XML INDEX [PXML_SampleTable_DetailXml] FOR PATH",
+            "GO"
+        };
+
+        var reordered = SqlServerScripter.ReorderTableKeyAndIndexStatements(
+            referenceLines,
+            Array.Empty<string>(),
+            nonConstraintIndexLines,
+            userCreatedStatisticLines,
+            xmlIndexLines);
+
+        Assert.Equal(new[]
+        {
+            "CREATE NONCLUSTERED INDEX [IX_SampleTable_KeyBeta] ON [Example].[SampleTable] ([KeyBeta]) ON [PRIMARY]",
+            "GO",
+            "CREATE STATISTICS [STAT_SampleTable_KeyAlpha_KeyBeta] ON [Example].[SampleTable] ([KeyAlpha], [KeyBeta]) WITH NORECOMPUTE",
+            "GO",
+            "CREATE XML INDEX [XML_SampleTable_DetailXml] ON [Example].[SampleTable] ([DetailXml]) USING XML INDEX [PXML_SampleTable_DetailXml] FOR PATH",
             "GO"
         }, reordered);
     }
@@ -373,5 +423,40 @@ public sealed class SqlServerScripterCompatibilityTests
         var clause = SqlServerScripter.BuildIndexOnClause("ExamplePartitionScheme", "PartitionKeyId");
 
         Assert.Equal(" ON [ExamplePartitionScheme] ([PartitionKeyId])", clause);
+    }
+
+    [Fact]
+    public void BuildStatisticsSamplingClause_UsesPersistedSamplePercent_WhenAvailable()
+    {
+        var clause = SqlServerScripter.BuildStatisticsSamplingClause(
+            rowCount: 200,
+            rowsSampled: 80,
+            persistedSamplePercent: 25d);
+
+        Assert.Equal("SAMPLE 25 PERCENT", clause);
+    }
+
+    [Fact]
+    public void BuildStatisticsSamplingClause_EmitsFullscan_WhenAllRowsWereSampled()
+    {
+        var clause = SqlServerScripter.BuildStatisticsSamplingClause(
+            rowCount: 200,
+            rowsSampled: 200,
+            persistedSamplePercent: null);
+
+        Assert.Equal("FULLSCAN", clause);
+    }
+
+    [Fact]
+    public void BuildStatisticsWithClause_EmitsStatisticsOptionsInDeterministicOrder()
+    {
+        var clause = SqlServerScripter.BuildStatisticsWithClause(
+            samplingClause: "SAMPLE 25 PERCENT",
+            persistSamplePercent: true,
+            noRecompute: true,
+            incremental: true,
+            autoDrop: false);
+
+        Assert.Equal(" WITH SAMPLE 25 PERCENT, PERSIST_SAMPLE_PERCENT = ON, NORECOMPUTE, INCREMENTAL=ON, AUTO_DROP = OFF", clause);
     }
 }

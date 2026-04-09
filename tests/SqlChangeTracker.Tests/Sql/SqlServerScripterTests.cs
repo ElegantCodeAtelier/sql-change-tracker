@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using SqlChangeTracker.Sql;
 using Xunit;
 
@@ -216,6 +217,32 @@ public sealed class SqlServerScripterTests
 
         Assert.NotNull(line);
         Assert.Contains("STATISTICS_INCREMENTAL=ON", line);
+    }
+
+    [Fact]
+    public void ScriptTable_EmitsUserCreatedStatistics_WhenPresent()
+    {
+        var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return;
+        }
+
+        var databaseName = $"SqlctUserStats_{Guid.NewGuid():N}";
+        try
+        {
+            var expectedStatisticsLine = CreateUserStatisticsFixtureDatabase(server, databaseName);
+            var options = new SqlConnectionOptions(server, databaseName, "integrated", null, null, true);
+
+            var scripter = new SqlServerScripter();
+            var script = scripter.ScriptObject(options, new DbObjectInfo("dbo", "SampleTable", "Table"));
+
+            Assert.Contains(expectedStatisticsLine, script);
+        }
+        finally
+        {
+            DropDatabase(server, databaseName);
+        }
     }
 
     [Fact]
@@ -906,5 +933,124 @@ ORDER BY s.name, o.name, p.name, ep.name;";
 
         File.WriteAllLines(path, lines);
         return path;
+    }
+
+    private static string CreateUserStatisticsFixtureDatabase(string server, string databaseName)
+    {
+        using var connection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, "master", "integrated", null, null, true));
+        connection.Open();
+
+        using (var createDatabase = connection.CreateCommand())
+        {
+            createDatabase.CommandText = $"CREATE DATABASE [{databaseName}];";
+            createDatabase.ExecuteNonQuery();
+        }
+
+        using var fixtureConnection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, databaseName, "integrated", null, null, true));
+        fixtureConnection.Open();
+
+        var supportsPersistedSamplePercent = HasSystemObjectColumn(fixtureConnection, "dm_db_stats_properties", "persisted_sample_percent");
+        var supportsAutoDrop = HasSystemObjectColumn(fixtureConnection, "stats", "auto_drop");
+        var statisticsOptions = new List<string>();
+        if (supportsPersistedSamplePercent)
+        {
+            statisticsOptions.Add("SAMPLE 25 PERCENT");
+            statisticsOptions.Add("PERSIST_SAMPLE_PERCENT = ON");
+        }
+        else
+        {
+            statisticsOptions.Add("FULLSCAN");
+        }
+
+        statisticsOptions.Add("NORECOMPUTE");
+        if (supportsAutoDrop)
+        {
+            statisticsOptions.Add("AUTO_DROP = OFF");
+        }
+
+        var statisticsStatement = $"CREATE STATISTICS [SampleStats] ON [dbo].[SampleTable] ([KeyAlpha], [KeyBeta], [KeyGamma], [StatusFlag]) WHERE [StatusFlag]=(1) WITH {string.Join(", ", statisticsOptions)};";
+        var expectedStatisticsLine = $"CREATE STATISTICS [SampleStats] ON [dbo].[SampleTable] ([KeyAlpha], [KeyBeta], [KeyGamma], [StatusFlag]) WHERE [StatusFlag]=(1) WITH {string.Join(", ", statisticsOptions)}";
+
+        var setupStatements = new[]
+        {
+            """
+CREATE TABLE [dbo].[SampleTable] (
+    [KeyAlpha] [int] NOT NULL,
+    [KeyBeta] [int] NOT NULL,
+    [KeyGamma] [int] NOT NULL,
+    [StatusFlag] [bit] NOT NULL,
+    [DetailText] [nvarchar](50) NULL
+);
+""",
+            """
+INSERT INTO [dbo].[SampleTable] ([KeyAlpha], [KeyBeta], [KeyGamma], [StatusFlag], [DetailText]) VALUES
+(1, 10, 100, 1, N'A'),
+(2, 20, 200, 0, N'B'),
+(3, 30, 300, 1, N'C'),
+(4, 40, 400, 0, N'D'),
+(5, 50, 500, 1, N'E'),
+(6, 60, 600, 0, N'F'),
+(7, 70, 700, 1, N'G'),
+(8, 80, 800, 0, N'H');
+""",
+            statisticsStatement
+        };
+
+        foreach (var statement in setupStatements)
+        {
+            using var command = fixtureConnection.CreateCommand();
+            command.CommandText = statement;
+            command.ExecuteNonQuery();
+        }
+
+        return expectedStatisticsLine;
+    }
+
+    private static void DropDatabase(string? server, string databaseName)
+    {
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return;
+        }
+
+        try
+        {
+            using var connection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, "master", "integrated", null, null, true));
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = $"""
+IF DB_ID(N'{databaseName}') IS NOT NULL
+BEGIN
+    ALTER DATABASE [{databaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [{databaseName}];
+END;
+""";
+            command.ExecuteNonQuery();
+        }
+        catch (SqlException)
+        {
+        }
+    }
+
+    private static bool HasSystemObjectColumn(SqlConnection connection, string objectName, string columnName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.all_columns c
+    JOIN sys.all_objects o ON o.object_id = c.object_id
+    JOIN sys.schemas s ON s.schema_id = o.schema_id
+    WHERE s.name = N'sys'
+      AND o.name = @objectName
+      AND c.name = @columnName)
+THEN CAST(1 AS bit)
+ELSE CAST(0 AS bit)
+END;";
+        command.Parameters.AddWithValue("@objectName", objectName);
+        command.Parameters.AddWithValue("@columnName", columnName);
+
+        return command.ExecuteScalar() is bool exists && exists;
     }
 }

@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
 - Support active object type `Assembly`, with deterministic scripting to `Assemblies/*.sql` for user-defined SQL Server assemblies.
 - Support additional active object types: `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- Script standalone user-created table statistics as deterministic post-create table statements, including filtered, effective sampling, persisted-sample, incremental, and auto-drop metadata when available.
 - Add `--object <pattern>` to `sqlct data track` and `sqlct data untrack` as a flag alias for the positional pattern argument.
 - Add `--filter <regex>` to `sqlct data track` and `sqlct data untrack` for regex-based table matching; matched case-insensitively against the full `schema.table` display name. Exactly one of the positional pattern, `--object`, or `--filter` must be provided; combining any two returns exit code 2.
 - `sqlct diff` now uses a chunked diff format: only changed segments and configurable surrounding context lines are shown instead of the full file. Use `--context <N>` to control the number of context lines (default: 3) (#39).
