@@ -89,6 +89,7 @@ public sealed class SyncCommandServiceTests
     [Theory]
     [InlineData("dbo.Customer", null, "dbo", "Customer", false)]
     [InlineData("ServiceUser", null, "", "ServiceUser", true)]
+    [InlineData("App.Core.Assembly", null, "", "App.Core.Assembly", true)]
     [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
     [InlineData("Assembly:AppClr", "Assembly", "", "AppClr", true)]
     [InlineData("SearchPropertyList:DocumentProperties", "SearchPropertyList", "", "DocumentProperties", true)]
@@ -1348,6 +1349,55 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(
                 expectedCandidateTypes,
                 introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunPull_WithDottedSchemaLessObjectSelector_DeletesMatchingAssemblyFile()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var assemblyPath = CreateFile(
+                projectDir,
+                Path.Combine("Assemblies", "App.Core.Legacy.sql"),
+                "CREATE ASSEMBLY [App.Core.Legacy]\r\nFROM 0x00\r\nWITH PERMISSION_SET = SAFE\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector();
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                new TrackingScripter(),
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunPull(projectDir, objectSelector: "App.Core.Legacy");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(string.Empty, introspector.LastRequestedSchema);
+            Assert.Equal("App.Core.Legacy", introspector.LastRequestedName);
+            Assert.Equal(1, result.Payload!.Summary.Schema.Deleted);
+            Assert.Single(result.Payload.Objects);
+            Assert.Equal("deleted", result.Payload.Objects[0].Change);
+            Assert.Equal("App.Core.Legacy", result.Payload.Objects[0].Name);
+            Assert.False(File.Exists(assemblyPath));
         }
         finally
         {

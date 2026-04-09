@@ -35,20 +35,36 @@ ORDER BY s.name, seq.name;", MapObjectType),
             () => RunQuery(options, @"
 SELECT s.name AS schema_name, s.name AS object_name, 'SC' AS type
 FROM sys.schemas s
-WHERE s.name NOT IN (
-    'dbo',
-    'guest',
-    'sys',
-    'INFORMATION_SCHEMA',
-    'db_accessadmin',
-    'db_backupoperator',
-    'db_datareader',
-    'db_datawriter',
-    'db_ddladmin',
-    'db_denydatareader',
-    'db_denydatawriter',
-    'db_owner',
-    'db_securityadmin')
+WHERE (
+        s.name NOT IN (
+            'dbo',
+            'guest',
+            'sys',
+            'INFORMATION_SCHEMA',
+            'db_accessadmin',
+            'db_backupoperator',
+            'db_datareader',
+            'db_datawriter',
+            'db_ddladmin',
+            'db_denydatareader',
+            'db_denydatawriter',
+            'db_owner',
+            'db_securityadmin')
+        OR (
+            s.name = 'dbo'
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM sys.database_permissions dp
+                    WHERE dp.class_desc = 'SCHEMA'
+                      AND dp.major_id = s.schema_id)
+                OR EXISTS (
+                    SELECT 1
+                    FROM sys.extended_properties ep
+                    WHERE ep.class_desc = 'SCHEMA'
+                      AND ep.major_id = s.schema_id))
+        )
+      )
 ORDER BY s.name;", MapObjectType),
 
             () => RunQuery(options, @"
@@ -443,20 +459,36 @@ ORDER BY s.name, seq.name;
 SELECT '' AS schema_name, s.name AS object_name
 FROM sys.schemas s
 WHERE s.name = @name
-  AND s.name NOT IN (
-    'dbo',
-    'guest',
-    'sys',
-    'INFORMATION_SCHEMA',
-    'db_accessadmin',
-    'db_backupoperator',
-    'db_datareader',
-    'db_datawriter',
-    'db_ddladmin',
-    'db_denydatareader',
-    'db_denydatawriter',
-    'db_owner',
-    'db_securityadmin')
+  AND (
+        s.name NOT IN (
+            'dbo',
+            'guest',
+            'sys',
+            'INFORMATION_SCHEMA',
+            'db_accessadmin',
+            'db_backupoperator',
+            'db_datareader',
+            'db_datawriter',
+            'db_ddladmin',
+            'db_denydatareader',
+            'db_denydatawriter',
+            'db_owner',
+            'db_securityadmin')
+        OR (
+            s.name = 'dbo'
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM sys.database_permissions dp
+                    WHERE dp.class_desc = 'SCHEMA'
+                      AND dp.major_id = s.schema_id)
+                OR EXISTS (
+                    SELECT 1
+                    FROM sys.extended_properties ep
+                    WHERE ep.class_desc = 'SCHEMA'
+                      AND ep.major_id = s.schema_id))
+        )
+      )
 ORDER BY s.name;
 """;
                 command.Parameters.AddWithValue("@name", name);

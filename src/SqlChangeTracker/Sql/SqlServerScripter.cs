@@ -1209,13 +1209,22 @@ WHERE s.name = @name";
 
         var schemaName = reader.GetString(0);
         var ownerName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-        var lines = new List<string> { $"CREATE SCHEMA [{schemaName}]" };
-        if (!string.IsNullOrWhiteSpace(ownerName))
+        var isBuiltInDboSchema = string.Equals(schemaName, "dbo", StringComparison.OrdinalIgnoreCase);
+        var lines = new List<string>();
+        if (!isBuiltInDboSchema)
         {
-            lines.Add($"AUTHORIZATION [{ownerName}]");
+            lines.Add($"CREATE SCHEMA [{schemaName}]");
+            if (!string.IsNullOrWhiteSpace(ownerName))
+            {
+                lines.Add($"AUTHORIZATION [{ownerName}]");
+            }
         }
         reader.Close();
-        lines.Add("GO");
+        if (!isBuiltInDboSchema)
+        {
+            lines.Add("GO");
+        }
+
         lines.AddRange(ReadSchemaPermissions(connection, schemaName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadSchemaExtendedProperties(connection, schemaName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);

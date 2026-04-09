@@ -1183,6 +1183,23 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         if (trimmed.Contains('.', StringComparison.Ordinal))
         {
+            var dotCount = 0;
+            foreach (var character in trimmed)
+            {
+                if (character == '.')
+                {
+                    dotCount++;
+                }
+            }
+
+            if (dotCount > 1 &&
+                TryParseObjectFileName(trimmed, isSchemaLess: true, out _, out var dottedSchemaLessName))
+            {
+                return CommandExecutionResult<ObjectSelector>.Ok(
+                    new ObjectSelector(null, string.Empty, dottedSchemaLessName, true, trimmed),
+                    ExitCodes.Success);
+            }
+
             if (TryParseSchemaAndName(trimmed, out var parsedSchema, out var parsedName))
             {
                 return CommandExecutionResult<ObjectSelector>.Ok(

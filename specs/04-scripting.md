@@ -41,7 +41,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Discovery MUST ignore system objects by default.
 - Discovery SHOULD preserve compatibility with projects that include security and storage object groups.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
-- `Schema` discovery covers user-defined schemas and excludes `dbo`, `sys`, and `INFORMATION_SCHEMA`.
+- `Schema` discovery covers user-defined schemas, excludes `sys` and `INFORMATION_SCHEMA`, and includes built-in `dbo` only when it has explicit schema permissions or schema-level extended properties that are in scope for scripting.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
 - `Assembly` discovery covers user-defined assemblies from `sys.assemblies` and excludes SQL Server system assemblies (`is_user_defined = 0`).
 - `UserDefinedType` discovery covers both scalar alias types and table-valued types.
@@ -447,11 +447,13 @@ Each emitted statement MUST be followed by `GO`.
 - Sequence extended properties MUST be emitted after the sequence `GO`, ordered by property name.
 
 ### 8.6 Schemas
-- Schema scripts MUST emit one `CREATE SCHEMA [name]` statement for each user-defined schema that is in scope.
-- `dbo`, `sys`, and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
-- When schema ownership metadata is present, `AUTHORIZATION [owner]` MUST be emitted on the following line.
-- The base schema-create block MUST end with `GO`.
-- Schema permissions MUST use `ON SCHEMA::[name]` and MUST be emitted after the base schema `GO` using the general permission rules from Section 6.3.
+- Schema scripts for user-defined schemas that are in scope MUST emit one `CREATE SCHEMA [name]` statement.
+- `sys` and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
+- Built-in `dbo` schema is in scope only when it has explicit schema permissions or schema-level extended properties.
+- Built-in `dbo` schema scripts MUST omit `CREATE SCHEMA` and `AUTHORIZATION`.
+- When schema ownership metadata is present for a user-defined schema, `AUTHORIZATION [owner]` MUST be emitted on the following line.
+- The user-defined base schema-create block MUST end with `GO`.
+- Schema permissions MUST use `ON SCHEMA::[name]` and MUST be emitted after the base schema `GO` when a base schema-create block is present; otherwise they begin the schema script.
 - Schema-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', NULL, NULL, NULL, NULL`
 - Schema extended properties MUST be emitted after schema permissions, ordered by property name.
