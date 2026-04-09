@@ -805,6 +805,9 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
 - For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside single-line or multi-line `INSERT ... VALUES (...)` statements as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
 - For `Queue`, comparison normalization MUST treat equivalent single-line and multi-line queue option formatting as compatible, MAY treat explicit `ON [PRIMARY]` as equivalent to an omitted default primary filegroup, and MAY treat disabled activation containing only default owner execution context as equivalent to omitted activation.
+- For `MessageType`, comparison normalization MAY treat legacy `VALIDATION = XML` as compatible with canonical `VALIDATION = WELL_FORMED_XML`, and MAY ignore equivalent spacing around the validation assignment.
+- For `Contract`, comparison normalization MAY treat equivalent single-line and multi-line body formatting as compatible and MAY compare message-usage item ordering as compatible when the emitted usage set is otherwise identical.
+- For `Service`, comparison normalization MAY treat equivalent single-line and multi-line contract-list formatting as compatible and MAY compare contract item ordering as compatible when the emitted contract set is otherwise identical.
 - For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy explicit `NULL` tokens on return-column lines as compatible with canonical return-column lines that omit nullability, including legacy cases where the final return-column line also carries the closing `)` token.
 
 ## 11. Error and Unsupported Behavior

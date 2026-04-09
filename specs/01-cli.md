@@ -199,6 +199,7 @@ Behavior:
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
+- Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
 - When `data.trackedTables` is configured, `status` also reports data-script differences for tracked tables.
 - Status output MUST report schema and data summaries separately.
 - Exit codes:
@@ -222,6 +223,7 @@ Behavior:
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
+- Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
 - Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
 - `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.
 - When two change segments are close enough that their context regions overlap, they are merged into a single hunk.

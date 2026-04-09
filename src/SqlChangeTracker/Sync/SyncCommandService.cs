@@ -1926,6 +1926,21 @@ internal sealed class SyncCommandService : ISyncCommandService
             return NormalizeQueueScriptForComparison(joined);
         }
 
+        if (string.Equals(objectType, "MessageType", StringComparison.OrdinalIgnoreCase))
+        {
+            return NormalizeServiceBrokerScriptForComparison(joined, NormalizeMessageTypeBaseBlockForComparison);
+        }
+
+        if (string.Equals(objectType, "Contract", StringComparison.OrdinalIgnoreCase))
+        {
+            return NormalizeServiceBrokerScriptForComparison(joined, NormalizeContractBaseBlockForComparison);
+        }
+
+        if (string.Equals(objectType, "Service", StringComparison.OrdinalIgnoreCase))
+        {
+            return NormalizeServiceBrokerScriptForComparison(joined, NormalizeServiceBaseBlockForComparison);
+        }
+
         if (string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase))
         {
             joined = NormalizeClrTableValuedFunctionScriptForComparison(joined);
@@ -1974,6 +1989,123 @@ internal sealed class SyncCommandService : ISyncCommandService
             string.Empty,
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         return normalized;
+    }
+
+    private static string NormalizeServiceBrokerScriptForComparison(
+        string script,
+        Func<string, string> normalizeBaseBlock)
+    {
+        var lines = script.Split('\n');
+        var goIndex = Array.FindIndex(
+            lines,
+            line => string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase));
+
+        if (goIndex < 0)
+        {
+            return normalizeBaseBlock(script);
+        }
+
+        var baseBlock = string.Join("\n", lines.Take(goIndex));
+        var normalizedBaseBlock = normalizeBaseBlock(baseBlock);
+        var remainder = string.Join("\n", lines.Skip(goIndex));
+        return string.IsNullOrEmpty(normalizedBaseBlock)
+            ? remainder
+            : normalizedBaseBlock + "\n" + remainder;
+    }
+
+    private static string NormalizeMessageTypeBaseBlockForComparison(string baseBlock)
+    {
+        var normalized = CollapseServiceBrokerWhitespace(baseBlock);
+        normalized = Regex.Replace(
+            normalized,
+            @"(?i)\bVALIDATION\s*=\s*XML\b",
+            "VALIDATION=WELL_FORMED_XML",
+            RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(
+            normalized,
+            @"(?i)\bVALIDATION\s*=\s*WELL_FORMED_XML\b",
+            "VALIDATION=WELL_FORMED_XML",
+            RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(
+            normalized,
+            @"(?i)\bVALIDATION\s*=\s*VALID_XML\s+WITH\s+SCHEMA\s+COLLECTION\s+",
+            "VALIDATION=VALID_XML WITH SCHEMA COLLECTION ",
+            RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(
+            normalized,
+            @"(?i)\bVALIDATION\s*=\s*NONE\b",
+            "VALIDATION=NONE",
+            RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(
+            normalized,
+            @"(?i)\bVALIDATION\s*=\s*EMPTY\b",
+            "VALIDATION=EMPTY",
+            RegexOptions.CultureInvariant);
+        return normalized;
+    }
+
+    private static string NormalizeContractBaseBlockForComparison(string baseBlock)
+    {
+        var normalized = CollapseServiceBrokerWhitespace(baseBlock);
+        var openParenIndex = normalized.IndexOf('(');
+        var closeParenIndex = normalized.LastIndexOf(')');
+        if (openParenIndex < 0 || closeParenIndex < openParenIndex)
+        {
+            return normalized;
+        }
+
+        var prefix = normalized[..openParenIndex].TrimEnd();
+        var suffix = normalized[(closeParenIndex + 1)..].Trim();
+        var body = normalized[(openParenIndex + 1)..closeParenIndex];
+        var items = SplitNormalizedServiceBrokerList(body);
+
+        var rebuilt = prefix + "(" + string.Join(",", items) + ")";
+        return string.IsNullOrWhiteSpace(suffix)
+            ? rebuilt
+            : rebuilt + " " + suffix;
+    }
+
+    private static string NormalizeServiceBaseBlockForComparison(string baseBlock)
+    {
+        var normalized = CollapseServiceBrokerWhitespace(baseBlock);
+        if (!normalized.Contains("ON QUEUE", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
+        var openParenIndex = normalized.IndexOf('(');
+        var closeParenIndex = normalized.LastIndexOf(')');
+        if (openParenIndex < 0 || closeParenIndex < openParenIndex)
+        {
+            return normalized;
+        }
+
+        var prefix = normalized[..openParenIndex].TrimEnd();
+        var suffix = normalized[(closeParenIndex + 1)..].Trim();
+        var body = normalized[(openParenIndex + 1)..closeParenIndex];
+        var items = SplitNormalizedServiceBrokerList(body);
+
+        var rebuilt = prefix + "(" + string.Join(",", items) + ")";
+        return string.IsNullOrWhiteSpace(suffix)
+            ? rebuilt
+            : rebuilt + " " + suffix;
+    }
+
+    private static string CollapseServiceBrokerWhitespace(string text)
+        => Regex.Replace(text, @"\s+", " ", RegexOptions.CultureInvariant).Trim();
+
+    private static IReadOnlyList<string> SplitNormalizedServiceBrokerList(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return Array.Empty<string>();
+        }
+
+        return body
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(item => Regex.Replace(item, @"\s+", " ", RegexOptions.CultureInvariant).Trim())
+            .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string NormalizeClrTableValuedFunctionScriptForComparison(string script)

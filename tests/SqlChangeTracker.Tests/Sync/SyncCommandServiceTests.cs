@@ -948,6 +948,115 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_MessageType_SuppressesLegacyValidationXmlSynonymAndSpacing()
+    {
+        var source =
+            "CREATE MESSAGE TYPE [//App/Reply]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "VALIDATION = XML\n" +
+            "GO";
+        var target =
+            "CREATE MESSAGE TYPE [//App/Reply]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "VALIDATION=WELL_FORMED_XML\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("MessageType", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Contract_SuppressesEquivalentFormattingAndMessageUsageOrderDifferences()
+    {
+        var source =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "(\n" +
+            "[//App/Reply] SENT BY TARGET,\n" +
+            "[//App/Request] SENT BY INITIATOR\n" +
+            ")\n" +
+            "GO";
+        var target =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo] (\n" +
+            "[//App/Request] SENT BY INITIATOR,\n" +
+            "[//App/Reply] SENT BY TARGET\n" +
+            ")\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Contract", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Contract_PreservesSentBySemanticDifferences()
+    {
+        var source =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "(\n" +
+            "[//App/Reply] SENT BY TARGET,\n" +
+            "[//App/Request] SENT BY INITIATOR\n" +
+            ")\n" +
+            "GO";
+        var target =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo] (\n" +
+            "[//App/Request] SENT BY ANY,\n" +
+            "[//App/Reply] SENT BY TARGET\n" +
+            ")\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Contract", "db", "folder", source, target);
+
+        Assert.Contains("[//App/Request] SENT BY INITIATOR", diff);
+        Assert.Contains("[//App/Request] SENT BY ANY", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Service_SuppressesEquivalentContractListFormatting()
+    {
+        var source =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue] ([//App/Contract])\n" +
+            "GO";
+        var target =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue]\n" +
+            "(\n" +
+            "[//App/Contract]\n" +
+            ")\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Service", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Service_PreservesContractMembershipDifferences()
+    {
+        var source =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue] ([//App/Contract])\n" +
+            "GO";
+        var target =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Service", "db", "folder", source, target);
+
+        Assert.Contains("ON QUEUE [dbo].[AppTargetQueue]([//App/Contract])", diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_Function_SuppressesClrTableValuedFunctionNullOnlyDifferences()
     {
         var source =
