@@ -39,6 +39,54 @@ public sealed class SyncCommandServiceTests
     }
 
     [Theory]
+    [InlineData(
+        "MessageType",
+        "__App_Messaging_Request",
+        "CREATE MESSAGE TYPE [//App/Messaging/Request]\r\nVALIDATION = NONE\r\nGO",
+        "__App_Messaging_Request",
+        true,
+        "//App/Messaging/Request")]
+    [InlineData(
+        "Contract",
+        "__App_Messaging_Contract",
+        "CREATE CONTRACT [//App/Messaging/Contract]\r\n(\r\n)\r\nGO",
+        "__App_Messaging_Contract",
+        true,
+        "//App/Messaging/Contract")]
+    [InlineData(
+        "MessageType",
+        "%2F%2FApp%2FMessaging%2FRequest",
+        "CREATE MESSAGE TYPE [//App/Messaging/Request]\r\nVALIDATION = NONE\r\nGO",
+        "//App/Messaging/Request",
+        false,
+        "")]
+    [InlineData(
+        "Role",
+        "AppReader",
+        "CREATE ROLE [OtherRole]\r\nGO",
+        "AppReader",
+        false,
+        "")]
+    public void TryResolveSchemaLessFolderIdentityFromScript_UsesDefinitionOnlyForEscapedLegacyNames(
+        string objectType,
+        string fileName,
+        string script,
+        string parsedFileName,
+        bool expected,
+        string expectedName)
+    {
+        var success = SyncCommandService.TryResolveSchemaLessFolderIdentityFromScript(
+            objectType,
+            fileName,
+            script,
+            parsedFileName,
+            out var name);
+
+        Assert.Equal(expected, success);
+        Assert.Equal(expectedName, name);
+    }
+
+    [Theory]
     [InlineData("dbo.Customer", null, "dbo", "Customer", false)]
     [InlineData("ServiceUser", null, "", "ServiceUser", true)]
     [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
@@ -62,6 +110,56 @@ public sealed class SyncCommandServiceTests
         Assert.Equal(expectedSchema, result.Payload.Schema);
         Assert.Equal(expectedName, result.Payload.Name);
         Assert.Equal(expectedSchemaLess, result.Payload.IsSchemaLess);
+    }
+
+    [Fact]
+    public void RunStatus_MatchesLegacySchemaLessFileNameToScriptObjectName()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var script = "CREATE MESSAGE TYPE [//App/Messaging/Request]\r\nVALIDATION = NONE\r\nGO\r\n";
+            CreateFile(projectDir, Path.Combine("Service Broker", "Message Types", "__App_Messaging_Request.sql"), script);
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects = [new DbObjectInfo(string.Empty, "//App/Messaging/Request", "MessageType")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) => script
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Empty(result.Payload!.Objects);
+            Assert.Equal(0, result.Payload.Summary.Schema.Added);
+            Assert.Equal(0, result.Payload.Summary.Schema.Deleted);
+            Assert.Equal(0, result.Payload.Summary.Schema.Changed);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
     }
 
     [Theory]

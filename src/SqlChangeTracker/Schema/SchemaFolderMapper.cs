@@ -83,7 +83,7 @@ internal sealed class SchemaFolderMapper
         return $"{schema}.{name}{suffix}.sql";
     }
 
-    private static string EscapeFileNamePart(string value)
+    internal static string EscapeFileNamePart(string value)
     {
         if (string.IsNullOrEmpty(value))
         {

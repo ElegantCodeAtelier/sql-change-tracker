@@ -45,6 +45,9 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex TableUserDefinedTypeScriptRegex = new(
         @"\bCREATE\s+TYPE\b.*\bAS\s+TABLE\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex SqlIdentifierRegex = new(
+        """\G\s*(?<identifier>\[(?:[^\]]|\]\])+\]|"(?:""|[^"])+"|[^\s(]+)""",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -572,16 +575,6 @@ internal sealed class SyncCommandService : ISyncCommandService
                     continue;
                 }
 
-                var key = BuildObjectKey(objectType, schema, name);
-                if (objects.ContainsKey(key))
-                {
-                    var displayName = FormatDisplayName(schema, name);
-                    warnings.Add(new CommandWarning(
-                        "duplicate_script",
-                        $"skipped duplicate folder object '{displayName}' of type '{objectType}'."));
-                    continue;
-                }
-
                 string script;
                 try
                 {
@@ -600,6 +593,22 @@ internal sealed class SyncCommandService : ISyncCommandService
                     warnings.Add(new CommandWarning(
                         "invalid_user_defined_type_script",
                         $"skipped '{Path.Combine(folder, Path.GetFileName(file))}' because it is not a recognized user-defined type script."));
+                    continue;
+                }
+
+                if (TryResolveSchemaLessFolderIdentityFromScript(objectType, fileName, script, name, out var scriptName))
+                {
+                    schema = string.Empty;
+                    name = scriptName;
+                }
+
+                var key = BuildObjectKey(objectType, schema, name);
+                if (objects.ContainsKey(key))
+                {
+                    var displayName = FormatDisplayName(schema, name);
+                    warnings.Add(new CommandWarning(
+                        "duplicate_script",
+                        $"skipped duplicate folder object '{displayName}' of type '{objectType}'."));
                     continue;
                 }
 
@@ -1684,6 +1693,94 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         return builder.ToString();
+    }
+
+    internal static bool TryResolveSchemaLessFolderIdentityFromScript(
+        string objectType,
+        string fileNameWithoutExtension,
+        string script,
+        string parsedFileName,
+        out string name)
+    {
+        name = string.Empty;
+        if (!SupportedSqlObjectTypes.IsSchemaLess(objectType) ||
+            !TryExtractSchemaLessCreateName(objectType, script, out var scriptName))
+        {
+            return false;
+        }
+
+        var canonicalFileName = SchemaFolderMapper.EscapeFileNamePart(scriptName);
+        if (string.Equals(canonicalFileName, scriptName, StringComparison.Ordinal) ||
+            string.Equals(canonicalFileName, fileNameWithoutExtension.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(scriptName, parsedFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        name = scriptName;
+        return true;
+    }
+
+    private static bool TryExtractSchemaLessCreateName(string objectType, string script, out string name)
+    {
+        name = string.Empty;
+        var prefixPattern = objectType switch
+        {
+            "Assembly" => @"\bCREATE\s+ASSEMBLY\b",
+            "Schema" => @"\bCREATE\s+SCHEMA\b",
+            "Role" => @"\bCREATE\s+ROLE\b",
+            "User" => @"\bCREATE\s+USER\b",
+            "MessageType" => @"\bCREATE\s+MESSAGE\s+TYPE\b",
+            "Contract" => @"\bCREATE\s+CONTRACT\b",
+            "EventNotification" => @"\bCREATE\s+EVENT\s+NOTIFICATION\b",
+            "ServiceBinding" => @"\bCREATE\s+REMOTE\s+SERVICE\s+BINDING\b",
+            "Service" => @"\bCREATE\s+SERVICE\b",
+            "Route" => @"\bCREATE\s+ROUTE\b",
+            "PartitionFunction" => @"\bCREATE\s+PARTITION\s+FUNCTION\b",
+            "PartitionScheme" => @"\bCREATE\s+PARTITION\s+SCHEME\b",
+            "FullTextCatalog" => @"\bCREATE\s+FULLTEXT\s+CATALOG\b",
+            "FullTextStoplist" => @"\bCREATE\s+FULLTEXT\s+STOPLIST\b",
+            "SearchPropertyList" => @"\bCREATE\s+SEARCH\s+PROPERTY\s+LIST\b",
+            _ => null
+        };
+
+        if (prefixPattern is null)
+        {
+            return false;
+        }
+
+        var prefixMatch = Regex.Match(
+            script,
+            prefixPattern,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!prefixMatch.Success)
+        {
+            return false;
+        }
+
+        var identifierMatch = SqlIdentifierRegex.Match(script, prefixMatch.Index + prefixMatch.Length);
+        if (!identifierMatch.Success)
+        {
+            return false;
+        }
+
+        name = UnquoteSqlIdentifier(identifierMatch.Groups["identifier"].Value);
+        return name.Length > 0;
+    }
+
+    private static string UnquoteSqlIdentifier(string value)
+    {
+        if (value.Length >= 2 && value[0] == '[' && value[^1] == ']')
+        {
+            return value[1..^1].Replace("]]", "]", StringComparison.Ordinal);
+        }
+
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+        {
+            return value[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal);
+        }
+
+        return value;
     }
 
     private static bool IsHexDigit(char value)
