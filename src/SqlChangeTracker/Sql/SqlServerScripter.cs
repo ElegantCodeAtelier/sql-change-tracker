@@ -792,6 +792,7 @@ WHERE s.name = @name";
         }
         reader.Close();
         lines.Add("GO");
+        lines.AddRange(ReadSchemaPermissions(connection, schemaName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadSchemaExtendedProperties(connection, schemaName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
@@ -4011,6 +4012,24 @@ WHERE dp.major_id = OBJECT_ID(@full) AND dp.class_desc = 'OBJECT_OR_COLUMN'
 ORDER BY pr.name, dp.permission_name;",
             command => command.Parameters.AddWithValue("@full", fullName),
             fullName,
+            referenceLines);
+
+    private static IEnumerable<string> ReadSchemaPermissions(
+        SqlConnection connection,
+        string schemaName,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.schemas s ON s.schema_id = dp.major_id
+WHERE dp.class_desc = 'SCHEMA'
+  AND s.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", schemaName),
+            $"SCHEMA::{QuoteIdentifier(schemaName)}",
             referenceLines);
 
     private static IEnumerable<string> ExecutePermissionQuery(

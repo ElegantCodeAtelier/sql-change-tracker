@@ -60,6 +60,11 @@ public sealed class SyncCommandServiceSqlTests
             Assert.Contains(
                 $"EXEC sp_addrolemember N'{fixture.FixedRoleName}', N'AppUser'",
                 File.ReadAllText(Path.Combine(projectDir, "Security", "Roles", $"{fixture.FixedRoleName}.sql")));
+            var schemaScript = File.ReadAllText(Path.Combine(projectDir, "Security", "Schemas", "Fixtures.sql"));
+            Assert.Contains("GRANT SELECT ON SCHEMA::[Fixtures] TO [AppUser]", schemaScript);
+            Assert.Contains(
+                "EXEC sp_addextendedproperty N'Caption', N'Fixture schema', 'SCHEMA', N'Fixtures', NULL, NULL, NULL, NULL",
+                schemaScript);
             Assert.Contains(
                 "CREATE SYNONYM [Fixtures].[TargetSynonym] FOR [Fixtures].[TargetTable]",
                 File.ReadAllText(Path.Combine(projectDir, "Synonyms", "Fixtures.TargetSynonym.sql")));
@@ -187,6 +192,10 @@ public sealed class SyncCommandServiceSqlTests
             var schemaScopedDiff = service.RunDiff(projectDir, "db", "Synonym:Fixtures.TargetSynonym");
             Assert.True(schemaScopedDiff.Success, schemaScopedDiff.Error?.Detail ?? schemaScopedDiff.Error?.Message);
             Assert.Equal(string.Empty, schemaScopedDiff.Payload!.Diff);
+
+            var schemaDiff = service.RunDiff(projectDir, "db", "Schema:Fixtures");
+            Assert.True(schemaDiff.Success, schemaDiff.Error?.Detail ?? schemaDiff.Error?.Message);
+            Assert.Equal(string.Empty, schemaDiff.Payload!.Diff);
 
             var tableTypeDiff = service.RunDiff(projectDir, "db", "UserDefinedType:Fixtures.RequestList");
             Assert.True(tableTypeDiff.Success, tableTypeDiff.Error?.Detail ?? tableTypeDiff.Error?.Message);
@@ -329,6 +338,8 @@ ORDER BY [name];
 
         foreach (var statement in new[]
         {
+            "GRANT SELECT ON SCHEMA::[Fixtures] TO [AppUser];",
+            "EXEC sp_addextendedproperty N'Caption', N'Fixture schema', 'SCHEMA', N'Fixtures';",
             "GRANT REFERENCES ON XML SCHEMA COLLECTION::[Fixtures].[PayloadSchema] TO [AppUser];",
             "EXEC sp_addextendedproperty N'Caption', N'Fixture XML schema collection', 'SCHEMA', N'Fixtures', 'XML SCHEMA COLLECTION', N'PayloadSchema';",
             "GRANT REFERENCES ON MESSAGE TYPE::[//Sqlct/Request] TO [AppUser];",

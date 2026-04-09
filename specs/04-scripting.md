@@ -429,10 +429,11 @@ Each emitted statement MUST be followed by `GO`.
 - Schema scripts MUST emit one `CREATE SCHEMA [name]` statement for each user-defined schema that is in scope.
 - `dbo`, `sys`, and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
 - When schema ownership metadata is present, `AUTHORIZATION [owner]` MUST be emitted on the following line.
-- Schema scripts MUST end with `GO`.
+- The base schema-create block MUST end with `GO`.
+- Schema permissions MUST use `ON SCHEMA::[name]` and MUST be emitted after the base schema `GO` using the general permission rules from Section 6.3.
 - Schema-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', NULL, NULL, NULL, NULL`
-- Schema extended properties MUST be emitted after the base schema `GO`, ordered by property name.
+- Schema extended properties MUST be emitted after schema permissions, ordered by property name.
 
 ### 8.7 Roles
 - User-defined roles MUST emit `CREATE ROLE [name]` and optional `AUTHORIZATION [owner]`, followed by `GO`.
