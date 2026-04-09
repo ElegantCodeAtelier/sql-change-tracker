@@ -60,6 +60,9 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex RoleMembershipAlterRoleSyntaxRegex = new(
         @"^\s*ALTER\s+ROLE\s+(?<role>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s;]+)\s+ADD\s+MEMBER\s+(?<member>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s;]+)\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex ExtendedPropertyStatementRegex = new(
+        @"^\s*EXEC(?:UTE)?\s+(?:sys\.)?sp_addextendedproperty\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -1957,6 +1960,11 @@ internal sealed class SyncCommandService : ISyncCommandService
             joined = NormalizeClrTableValuedFunctionScriptForComparison(joined);
         }
 
+        if (joined.Contains("sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizeExtendedPropertyBlocksForComparison(joined);
+        }
+
         if (!joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
         {
             return joined;
@@ -2209,7 +2217,24 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     private static string NormalizeLegacyTableDataScript(string script)
     {
-        var builder = new StringBuilder(script.Length);
+        var normalizedSegments = new List<string>();
+        var bufferedInsertStatements = new List<string>();
+
+        static void FlushBufferedInsertStatements(List<string> segments, List<string> inserts)
+        {
+            if (inserts.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var statement in inserts.OrderBy(item => item, StringComparer.Ordinal))
+            {
+                segments.Add(statement);
+            }
+
+            inserts.Clear();
+        }
+
         var position = 0;
         while (position < script.Length)
         {
@@ -2219,17 +2244,9 @@ internal sealed class SyncCommandService : ISyncCommandService
 
             if (LineStartsWithIdentityInsert(line))
             {
-                builder.Append(StripTrailingSemicolon(line));
-                if (lineEnd >= 0)
-                {
-                    builder.Append('\n');
-                    position = lineEnd + 1;
-                }
-                else
-                {
-                    position = script.Length;
-                }
-
+                FlushBufferedInsertStatements(normalizedSegments, bufferedInsertStatements);
+                normalizedSegments.Add(StripTrailingSemicolon(line));
+                position = lineEnd >= 0 ? lineEnd + 1 : script.Length;
                 continue;
             }
 
@@ -2241,25 +2258,164 @@ internal sealed class SyncCommandService : ISyncCommandService
                     var statement = script.Substring(
                         position,
                         insertRange.Value.StatementEndExclusive - position);
-                    builder.Append(NormalizeLegacyTableDataInsertStatement(statement));
+                    bufferedInsertStatements.Add(NormalizeLegacyTableDataInsertStatement(statement));
                     position = insertRange.Value.ConsumedEndExclusive;
                     continue;
                 }
             }
 
-            builder.Append(line);
-            if (lineEnd >= 0)
-            {
-                builder.Append('\n');
-                position = lineEnd + 1;
-            }
-            else
-            {
-                position = script.Length;
-            }
+            FlushBufferedInsertStatements(normalizedSegments, bufferedInsertStatements);
+            normalizedSegments.Add(line);
+            position = lineEnd >= 0 ? lineEnd + 1 : script.Length;
         }
 
-        return builder.ToString();
+        FlushBufferedInsertStatements(normalizedSegments, bufferedInsertStatements);
+        return string.Join("\n", normalizedSegments);
+    }
+
+    private static string NormalizeExtendedPropertyBlocksForComparison(string script)
+    {
+        var lines = script.Split('\n');
+        var normalizedLines = new List<string>(lines.Length);
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (IsExtendedPropertyStatementLine(lines[i]) &&
+                i + 1 < lines.Length &&
+                string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            {
+                var statements = new List<string>();
+                while (i < lines.Length &&
+                       IsExtendedPropertyStatementLine(lines[i]) &&
+                       i + 1 < lines.Length &&
+                       string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                {
+                    statements.Add(NormalizeExtendedPropertyStatementForComparison(lines[i]));
+                    i += 2;
+                }
+
+                foreach (var statement in statements.OrderBy(item => item, StringComparer.Ordinal))
+                {
+                    normalizedLines.Add(statement);
+                    normalizedLines.Add("GO");
+                }
+
+                i--;
+                continue;
+            }
+
+            normalizedLines.Add(lines[i]);
+        }
+
+        return string.Join("\n", normalizedLines);
+    }
+
+    private static bool IsExtendedPropertyStatementLine(string line)
+        => ExtendedPropertyStatementRegex.IsMatch(line);
+
+    private static string NormalizeExtendedPropertyStatementForComparison(string statement)
+    {
+        var builder = new StringBuilder(statement.Length);
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+        var pendingSpace = false;
+
+        for (var i = 0; i < statement.Length; i++)
+        {
+            var ch = statement[i];
+            if (inSingleQuotedString)
+            {
+                builder.Append(ch);
+                if (ch == '\'')
+                {
+                    if (i + 1 < statement.Length && statement[i + 1] == '\'')
+                    {
+                        builder.Append(statement[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                builder.Append(ch);
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                if (pendingSpace && builder.Length > 0 && builder[^1] is not '(' and not ',')
+                {
+                    builder.Append(' ');
+                }
+
+                pendingSpace = false;
+                inSingleQuotedString = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                if (pendingSpace && builder.Length > 0 && builder[^1] is not '(' and not ',')
+                {
+                    builder.Append(' ');
+                }
+
+                pendingSpace = false;
+                inBracketedIdentifier = true;
+                builder.Append(ch);
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingSpace = builder.Length > 0;
+                continue;
+            }
+
+            if (ch is ',' or '(' or ')')
+            {
+                TrimTrailingSpaces(builder);
+                builder.Append(ch);
+                pendingSpace = false;
+                continue;
+            }
+
+            if (pendingSpace && builder.Length > 0 && builder[^1] is not '(' and not ',')
+            {
+                builder.Append(' ');
+            }
+
+            pendingSpace = false;
+            builder.Append(ch);
+        }
+
+        var normalized = builder.ToString().Trim();
+        return Regex.Replace(
+            normalized,
+            @"(?i)^EXEC(?:UTE)?\s+SYS\.SP_ADDEXTENDEDPROPERTY\b",
+            "EXEC sp_addextendedproperty",
+            RegexOptions.CultureInvariant);
+    }
+
+    private static void TrimTrailingSpaces(StringBuilder builder)
+    {
+        while (builder.Length > 0 && builder[^1] == ' ')
+        {
+            builder.Length--;
+        }
     }
 
     private static string StripTrailingSemicolon(string line)
@@ -2357,6 +2513,11 @@ internal sealed class SyncCommandService : ISyncCommandService
             else
             {
                 consumedEndExclusive = statementEndExclusive;
+            }
+
+            if (consumedEndExclusive < script.Length && script[consumedEndExclusive] == '\n')
+            {
+                consumedEndExclusive++;
             }
 
             return (statementEndExclusive, consumedEndExclusive);

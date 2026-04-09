@@ -198,6 +198,8 @@ Behavior:
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
+- Equivalent `TableData` `INSERT` statement ordering within the same contiguous data block compares as compatible when the inserted row set is otherwise identical.
+- Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
 - Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
@@ -223,6 +225,8 @@ Behavior:
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
+- Equivalent `TableData` `INSERT` statement ordering within the same contiguous data block compares as compatible when the inserted row set is otherwise identical.
+- Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
 - Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.

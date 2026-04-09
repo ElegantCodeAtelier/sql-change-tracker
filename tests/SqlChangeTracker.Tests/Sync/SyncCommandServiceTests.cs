@@ -1294,6 +1294,137 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_TableData_SortsEquivalentInsertStatementsWithinRun()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON;\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, 'C');\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF;",
+            SyncCommandService.TableDataObjectType);
+        var reordered = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, N'C')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, N'A')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, N'B')\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, reordered);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesEquivalentInsertOrderDifferences()
+    {
+        var source =
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON;\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, 'C');\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF;";
+        var target =
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, 'C')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B')\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_PreservesValueDifferencesWhenInsertOrderAlsoDiffers()
+    {
+        var source =
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B');";
+        var target =
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'Z')";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Contains("VALUES (1, 'A')", diff);
+        Assert.Contains("VALUES (1, 'Z')", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentExtendedPropertyOrderAndSpacingDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'System details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'UserAgentInfo'\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[SessionLog] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details' , 'SCHEMA', N'dbo', 'TABLE', N'SessionLog','COLUMN', N'UserAgentInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'System details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[SessionLog] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PreservesExtendedPropertyValueDifferencesWhenOrderAlsoDiffers()
+    {
+        var source =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'System details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'UserAgentInfo'\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'UserAgentInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Updated system details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains("N'System details'", diff);
+        Assert.Contains("N'Updated system details'", diff);
+    }
+
+    [Fact]
     public void NormalizeForComparison_DoesNotNormalizeUnicodeLiteralPrefixesOutsideTableData()
     {
         var plain = SyncCommandService.NormalizeForComparison(
