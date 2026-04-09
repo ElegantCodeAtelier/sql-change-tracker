@@ -14,7 +14,7 @@ Last updated: 2026-04-08
 - Improve dependency ordering and diff accuracy
 - Enhanced JSON outputs
 - Include/exclude object patterns for status/diff/pull
-- Comparison ignore options (whitespace/comments/permissions/etc.)
+- Comparison ignore options (whitespace/comments/permissions/etc.), including configurable whitespace comparison rules for blank separators and other whitespace-only differences
 - Compatibility option sync from other tools into `sqlct.config.json`
 - Linked-table expansion from foreign-key relationships for data scripting
 - Migrations support

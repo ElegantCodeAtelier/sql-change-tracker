@@ -1782,14 +1782,22 @@ internal sealed class SyncCommandService : ISyncCommandService
             .Replace("\r", "\n", StringComparison.Ordinal)
             .TrimEnd('\n');
 
+        var lines = normalized.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i]))
+            {
+                lines[i] = string.Empty;
+            }
+        }
+
         var isTableData = string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
         if (!normalized.Contains("INSERT ", StringComparison.OrdinalIgnoreCase) &&
             (!isTableData || !normalized.Contains("SET IDENTITY_INSERT ", StringComparison.OrdinalIgnoreCase)))
         {
-            return normalized;
+            return string.Join("\n", lines);
         }
 
-        var lines = normalized.Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];

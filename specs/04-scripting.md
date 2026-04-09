@@ -776,6 +776,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Script generation MUST emit canonical scripting output per this document and MUST NOT include diff/status-specific normalization.
 - `status` and `diff` normalization behaviors are external contracts defined in `specs/01-cli.md` and `specs/05-output-formats.md`.
 - Scripting and comparison normalization responsibilities MUST remain decoupled.
+- Whitespace-only lines MUST be normalized to empty lines during comparison so that blank separators differing only by spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
 - For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
 - For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside `INSERT ... VALUES (...)` as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.

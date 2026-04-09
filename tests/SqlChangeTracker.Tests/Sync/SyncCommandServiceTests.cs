@@ -757,6 +757,15 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_TreatsWhitespaceOnlyLinesAsBlankLines()
+    {
+        var blank = SyncCommandService.NormalizeForComparison("SET ANSI_NULLS ON\nGO\n\n/* comment */");
+        var whitespaceOnly = SyncCommandService.NormalizeForComparison("SET ANSI_NULLS ON\nGO\n   \t\n/* comment */");
+
+        Assert.Equal(blank, whitespaceOnly);
+    }
+
+    [Fact]
     public void NormalizeForComparison_NormalizesTrailingSemicolonsOnInsertStatements()
     {
         // Trailing semicolons on INSERT statements are normalized away so that scripts emitted
@@ -778,6 +787,17 @@ public sealed class SyncCommandServiceTests
         var target = "INSERT INTO [dbo].[T] ([Id]) VALUES (1)\nINSERT INTO [dbo].[T] ([Id]) VALUES (2)";
 
         var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_SuppressesWhitespaceOnlyBlankLineDifferences()
+    {
+        var source = "SET ANSI_NULLS ON\nGO\n\n/* comment */\nCREATE PROCEDURE [dbo].[Sample]\nAS\nSELECT 1\nGO";
+        var target = "SET ANSI_NULLS ON\nGO\n \t \n/* comment */\nCREATE PROCEDURE [dbo].[Sample]\nAS\nSELECT 1\nGO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("StoredProcedure", "db", "folder", source, target);
 
         Assert.Empty(diff);
     }
