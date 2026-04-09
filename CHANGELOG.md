@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Match legacy non-canonical schema-less object filenames to the scripted object name when the canonical name requires percent escaping.
 - Allow bare `--object` selectors with dotted schema-less names (for example assemblies) to resolve correctly during targeted `status`, `diff`, and `pull`.
 - Treat equivalent queue option formatting, explicit default `ON [PRIMARY]`, and disabled default activation as compatible during comparison.
+- Treat equivalent role-membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` as compatible during comparison.
 - Treat legacy Service Broker message-type validation synonyms and equivalent contract/service body formatting and item ordering as compatible during comparison.
 - Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).

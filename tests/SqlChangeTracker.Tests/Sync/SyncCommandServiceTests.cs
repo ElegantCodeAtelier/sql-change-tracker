@@ -948,6 +948,62 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Role_SuppressesLegacyAndAlterRoleMembershipSyntaxDifferences_ForFixedRole()
+    {
+        var source =
+            "EXEC sp_addrolemember N'db_datareader', N'ReadOnlyUser'\n" +
+            "GO\n" +
+            "EXEC sp_addrolemember N'db_datareader', N'ReportUser'\n" +
+            "GO";
+        var target =
+            "ALTER ROLE [db_datareader] ADD MEMBER [ReadOnlyUser]\n" +
+            "GO\n" +
+            "ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Role_SuppressesLegacyAndAlterRoleMembershipSyntaxDifferences_ForUserDefinedRole()
+    {
+        var source =
+            "CREATE ROLE [ReportingRole]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "GO\n" +
+            "EXEC sp_addrolemember N'ReportingRole', N'ReportUser'\n" +
+            "GO";
+        var target =
+            "CREATE ROLE [ReportingRole]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "GO\n" +
+            "ALTER ROLE [ReportingRole] ADD MEMBER [ReportUser]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Role_PreservesMembershipTargetDifferences()
+    {
+        var source =
+            "EXEC sp_addrolemember N'db_datareader', N'ReadOnlyUser'\n" +
+            "GO";
+        var target =
+            "ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER [ReadOnlyUser]", diff);
+        Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]", diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_MessageType_SuppressesLegacyValidationXmlSynonymAndSpacing()
     {
         var source =

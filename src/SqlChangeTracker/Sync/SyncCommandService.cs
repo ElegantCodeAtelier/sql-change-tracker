@@ -54,6 +54,12 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex ClrTableValuedFunctionReturnColumnNullWithCloseParenRegex = new(
         @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*\)\s*)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex RoleMembershipLegacySyntaxRegex = new(
+        @"^\s*EXEC(?:UTE)?\s+sp_addrolemember\s+N'(?<role>(?:''|[^'])*)'\s*,\s*N'(?<member>(?:''|[^'])*)'\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex RoleMembershipAlterRoleSyntaxRegex = new(
+        @"^\s*ALTER\s+ROLE\s+(?<role>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s;]+)\s+ADD\s+MEMBER\s+(?<member>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s;]+)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -1926,6 +1932,11 @@ internal sealed class SyncCommandService : ISyncCommandService
             return NormalizeQueueScriptForComparison(joined);
         }
 
+        if (string.Equals(objectType, "Role", StringComparison.OrdinalIgnoreCase))
+        {
+            return NormalizeRoleScriptForComparison(joined);
+        }
+
         if (string.Equals(objectType, "MessageType", StringComparison.OrdinalIgnoreCase))
         {
             return NormalizeServiceBrokerScriptForComparison(joined, NormalizeMessageTypeBaseBlockForComparison);
@@ -1990,6 +2001,44 @@ internal sealed class SyncCommandService : ISyncCommandService
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         return normalized;
     }
+
+    private static string NormalizeRoleScriptForComparison(string script)
+    {
+        var lines = script.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lines[i] = NormalizeRoleMembershipLineForComparison(lines[i]);
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string NormalizeRoleMembershipLineForComparison(string line)
+    {
+        var legacyMatch = RoleMembershipLegacySyntaxRegex.Match(line);
+        if (legacyMatch.Success)
+        {
+            var roleName = UnescapeSqlStringLiteral(legacyMatch.Groups["role"].Value);
+            var memberName = UnescapeSqlStringLiteral(legacyMatch.Groups["member"].Value);
+            return $"ALTER ROLE {QuoteIdentifierForComparison(roleName)} ADD MEMBER {QuoteIdentifierForComparison(memberName)}";
+        }
+
+        var alterRoleMatch = RoleMembershipAlterRoleSyntaxRegex.Match(line);
+        if (alterRoleMatch.Success)
+        {
+            var roleName = UnquoteSqlIdentifier(alterRoleMatch.Groups["role"].Value);
+            var memberName = UnquoteSqlIdentifier(alterRoleMatch.Groups["member"].Value);
+            return $"ALTER ROLE {QuoteIdentifierForComparison(roleName)} ADD MEMBER {QuoteIdentifierForComparison(memberName)}";
+        }
+
+        return line;
+    }
+
+    private static string UnescapeSqlStringLiteral(string value)
+        => value.Replace("''", "'", StringComparison.Ordinal);
+
+    private static string QuoteIdentifierForComparison(string value)
+        => $"[{value.Replace("]", "]]", StringComparison.Ordinal)}]";
 
     private static string NormalizeServiceBrokerScriptForComparison(
         string script,
