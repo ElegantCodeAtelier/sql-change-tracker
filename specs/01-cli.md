@@ -195,9 +195,10 @@ Behavior:
   - Deleted: object exists only in target.
   - Changed: normalized script content differs.
   - Suppress changes when scripts are identical after normalization.
-- Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
+- Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - When `data.trackedTables` is configured, `status` also reports data-script differences for tracked tables.
 - Status output MUST report schema and data summaries separately.
 - Exit codes:
@@ -217,9 +218,10 @@ Behavior:
 - Without `--object`, output concatenated per-object diffs in stable order.
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
-- Normalization in v1 is limited to line-ending/trailing-newline stability for deterministic comparison.
+- Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
+- Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
 - `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.
 - When two change segments are close enough that their context regions overlap, they are merged into a single hunk.

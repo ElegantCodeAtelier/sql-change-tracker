@@ -546,6 +546,50 @@ public sealed class SqlServerScripterTests
         }
     }
 
+    [Fact]
+    public void ScriptFunction_EmitsClrTableValuedFunctionDefinition_WhenPresent()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindFirstClrTableValuedFunction(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("RETURNS TABLE (", script);
+        Assert.Contains("EXTERNAL NAME", script);
+    }
+
+    [Fact]
+    public void ScriptProcedure_EmitsClrStoredProcedureDefinition_WhenPresent()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindFirstClrStoredProcedure(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("CREATE PROCEDURE", script);
+        Assert.Contains("AS EXTERNAL NAME", script);
+    }
+
     private static SqlConnectionOptions? GetOptions()
     {
         var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
@@ -911,6 +955,54 @@ ORDER BY s.name, o.name, p.name, ep.name;";
         }
 
         return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "Function");
+    }
+
+    private static DbObjectInfo? FindFirstClrTableValuedFunction(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT TOP 1 s.name, o.name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'FT'
+ORDER BY s.name, o.name;
+""";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "Function");
+    }
+
+    private static DbObjectInfo? FindFirstClrStoredProcedure(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT TOP 1 s.name, o.name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'PC'
+ORDER BY s.name, o.name;
+""";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "StoredProcedure");
     }
 
     private static string CreateModuleReferenceWithObjectLevelExtendedProperty(string levelType)

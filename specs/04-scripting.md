@@ -66,7 +66,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Assemblies
 - Views
 - Stored Procedures
-- Functions (`FN`, `TF`, `IF`)
+- Functions (`FN`, `TF`, `IF`, `FS`, `FT`)
 - Sequences
 - Schema
 - Role
@@ -373,8 +373,13 @@ Each emitted statement MUST be followed by `GO`.
   2. index-level (by index name, then property name).
 
 ### 8.3 Stored Procedures
-- Stored procedures are scripted through programmable-object framing rules with object type `P` and level type `PROCEDURE`.
-- Definition text MUST come from `OBJECT_DEFINITION`.
+- Stored procedures are scripted through programmable-object framing rules with object types `P`, `PC` and level type `PROCEDURE`.
+- T-SQL stored procedure definition text for `P` MUST come from `OBJECT_DEFINITION`.
+- CLR stored procedure (`PC`) metadata MUST be sourced from `sys.assembly_modules`, `sys.assemblies`, and `sys.parameters`.
+- CLR stored procedure (`PC`) output MUST emit:
+  - `CREATE PROCEDURE [schema].[name] (<parameters>)`
+  - optional `WITH EXECUTE AS <CALLER|OWNER|'principal'>`
+  - `AS EXTERNAL NAME [assembly].[class].[method]`
 - Regex replacements from overrides MUST be applied before compatibility line-map reconciliation.
 - Compatibility definition line-map reconciliation MUST be applied when reference file exists.
 - When no compatible reference spacing is preserved, procedure emission MUST use the canonical programmable-object whitespace rules from Section 6.1.
@@ -388,8 +393,24 @@ Each emitted statement MUST be followed by `GO`.
   2. parameter-level (by parameter name, then property name).
 
 ### 8.4 Functions
-- Functions are scripted through programmable-object framing rules with object types `FN`, `TF`, `IF` and level type `FUNCTION`.
-- Definition text MUST come from `OBJECT_DEFINITION`.
+- Functions are scripted through programmable-object framing rules with object types `FN`, `TF`, `IF`, `FS`, `FT` and level type `FUNCTION`.
+- T-SQL function definition text for `FN`, `TF`, and `IF` MUST come from `OBJECT_DEFINITION`.
+- CLR function metadata for `FS` and `FT` MUST be sourced from `sys.assembly_modules`, `sys.assemblies`, and `sys.parameters`.
+- CLR scalar function (`FS`) output MUST emit:
+  - `CREATE FUNCTION [schema].[name] (<parameters>)`
+  - `RETURNS <return_type>`
+  - `WITH EXECUTE AS <CALLER|OWNER|'principal'>`
+  - `EXTERNAL NAME [assembly].[class].[method]`
+- CLR table-valued function (`FT`) return-column metadata MUST be sourced from `sys.columns`, `sys.types`, and type-schema metadata for the function object.
+- CLR table-valued function (`FT`) order metadata MUST be sourced from `sys.function_order_columns` when available.
+- CLR table-valued function (`FT`) output MUST emit:
+  - `CREATE FUNCTION [schema].[name] (<parameters>)`
+  - `RETURNS TABLE (`
+  - one return column per line in `column_id` order using `[name] <type>`
+  - `)`
+  - `WITH EXECUTE AS <CALLER|OWNER|'principal'>`
+  - optional `ORDER ([column_1] <ASC|DESC>, [column_2] <ASC|DESC>, ...)` ordered by `order_column_id`
+  - `EXTERNAL NAME [assembly].[class].[method]`
 - Regex replacements from overrides MUST be applied before final emission.
 - When no compatible reference spacing is preserved, function emission MUST use the canonical programmable-object whitespace rules from Section 6.1.
 - Grants and extended properties MUST follow module body.
@@ -781,6 +802,8 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
 - For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
 - For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside single-line or multi-line `INSERT ... VALUES (...)` statements as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
+- For `Queue`, comparison normalization MUST treat equivalent single-line and multi-line queue option formatting as compatible, MAY treat explicit `ON [PRIMARY]` as equivalent to an omitted default primary filegroup, and MAY treat disabled activation containing only default owner execution context as equivalent to omitted activation.
+- For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy explicit `NULL` tokens on return-column lines as compatible with canonical return-column lines that omit nullability, including legacy cases where the final return-column line also carries the closing `)` token.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.

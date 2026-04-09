@@ -48,6 +48,12 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex SqlIdentifierRegex = new(
         """\G\s*(?<identifier>\[(?:[^\]]|\]\])+\]|"(?:""|[^"])+"|[^\s(]+)""",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex ClrTableValuedFunctionReturnColumnNullRegex = new(
+        @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*,?\s*)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex ClrTableValuedFunctionReturnColumnNullWithCloseParenRegex = new(
+        @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*\)\s*)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -1898,6 +1904,16 @@ internal sealed class SyncCommandService : ISyncCommandService
                 : NormalizeLegacyTableDataScript(joined);
         }
 
+        if (string.Equals(objectType, "Queue", StringComparison.OrdinalIgnoreCase))
+        {
+            return NormalizeQueueScriptForComparison(joined);
+        }
+
+        if (string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizeClrTableValuedFunctionScriptForComparison(joined);
+        }
+
         if (!joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
         {
             return joined;
@@ -1915,6 +1931,62 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         return string.Join("\n", lines);
+    }
+
+    private static string NormalizeQueueScriptForComparison(string script)
+    {
+        var normalized = Regex.Replace(
+            script,
+            @"(?im)^\s*ON\s+\[PRIMARY\]\s*$\n?",
+            string.Empty,
+            RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(normalized, @"\s*=\s*", "=", RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(normalized, @"\s*,\s*", ",", RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(normalized, @"\s+\(", "(", RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(normalized, @"\(\s*", "(", RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(normalized, @"\s*\)", ")", RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(normalized, @"\s+", " ", RegexOptions.CultureInvariant).Trim();
+        normalized = Regex.Replace(
+            normalized,
+            @"\s+ON \[PRIMARY\](?=\s+GO\b|$)",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        normalized = Regex.Replace(
+            normalized,
+            @",ACTIVATION\(STATUS=OFF,EXECUTE AS (?:'dbo'|\[dbo\])\)",
+            string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return normalized;
+    }
+
+    private static string NormalizeClrTableValuedFunctionScriptForComparison(string script)
+    {
+        if (!script.Contains("EXTERNAL NAME", StringComparison.OrdinalIgnoreCase) ||
+            !script.Contains("RETURNS TABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            return script;
+        }
+
+        var inputLines = script.Split('\n');
+        var outputLines = new List<string>(inputLines.Length);
+        for (var i = 0; i < inputLines.Length; i++)
+        {
+            var line = inputLines[i];
+            var splitMatch = ClrTableValuedFunctionReturnColumnNullWithCloseParenRegex.Match(line);
+            if (splitMatch.Success)
+            {
+                outputLines.Add(splitMatch.Groups["prefix"].Value);
+                outputLines.Add(")");
+                continue;
+            }
+
+            var match = ClrTableValuedFunctionReturnColumnNullRegex.Match(line);
+            outputLines.Add(match.Success
+                ? match.Groups["prefix"].Value + match.Groups["suffix"].Value
+                : line);
+        }
+
+        return string.Join("\n", outputLines);
     }
 
     // Checks whether a line begins with "INSERT " (ignoring leading whitespace) without

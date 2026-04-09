@@ -901,6 +901,155 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Queue_SuppressesDefaultPrimaryAndDisabledActivationDifferences()
+    {
+        var source =
+            "CREATE QUEUE [dbo].[AppInboxQueue]\n" +
+            "WITH STATUS = ON, RETENTION = OFF, POISON_MESSAGE_HANDLING (STATUS = ON), ACTIVATION (STATUS = OFF, EXECUTE AS 'dbo')\n" +
+            "GO";
+        var target =
+            "CREATE QUEUE [dbo].[AppInboxQueue]\n" +
+            "WITH STATUS=ON,\n" +
+            "RETENTION=OFF,\n" +
+            "POISON_MESSAGE_HANDLING (STATUS=ON)\n" +
+            "ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Queue", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Queue_SuppressesEquivalentMultilineActivationFormatting()
+    {
+        var source =
+            "CREATE QUEUE [dbo].[AppWorkQueue]\n" +
+            "WITH STATUS = ON, RETENTION = OFF, POISON_MESSAGE_HANDLING (STATUS = ON), ACTIVATION (STATUS = ON, PROCEDURE_NAME = [dbo].[ProcessAppMessages], MAX_QUEUE_READERS = 1, EXECUTE AS OWNER)\n" +
+            "GO";
+        var target =
+            "CREATE QUEUE [dbo].[AppWorkQueue]\n" +
+            "WITH STATUS=ON,\n" +
+            "RETENTION=OFF,\n" +
+            "POISON_MESSAGE_HANDLING (STATUS=ON),\n" +
+            "ACTIVATION (\n" +
+            "STATUS=ON,\n" +
+            "PROCEDURE_NAME=[dbo].[ProcessAppMessages],\n" +
+            "MAX_QUEUE_READERS=1,\n" +
+            "EXECUTE AS OWNER\n" +
+            ")\n" +
+            "ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Queue", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_SuppressesClrTableValuedFunctionNullOnlyDifferences()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int],\n" +
+            "[Value] [nvarchar] (MAX)\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int] NULL,\n" +
+            "[Value] [nvarchar] (MAX) NULL\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_SuppressesClrTableValuedFunctionNullAndCloseParenLineDifferences()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int],\n" +
+            "[Value] [nvarchar] (MAX)\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int] NULL,\n" +
+            "[Value] [nvarchar] (MAX) NULL)\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_ReportsOnlyClrTableValuedFunctionExternalNameDifference_WhenLegacyNullCloseParenAlsoDiffers()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[RandomVector] (@length [int])\n" +
+            "RETURNS TABLE (\n" +
+            "[RndValue] [int]\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[RandomVector]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[RandomVector] (@length [int])\n" +
+            "RETURNS TABLE (\n" +
+            "[RndValue] [int] NULL)\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClrLegacy].[App.Database.TabularFunctions].[RandomVector]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Contains("EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[RandomVector]", diff);
+        Assert.Contains("EXTERNAL NAME [AppClrLegacy].[App.Database.TabularFunctions].[RandomVector]", diff);
+        Assert.DoesNotContain("[RndValue] [int] NULL)", diff);
+    }
+
+    [Fact]
     public void NormalizeForComparison_TableData_NormalizesLegacyIdentityInsertAndUnicodeLiteralPrefixes()
     {
         var canonical = SyncCommandService.NormalizeForComparison(

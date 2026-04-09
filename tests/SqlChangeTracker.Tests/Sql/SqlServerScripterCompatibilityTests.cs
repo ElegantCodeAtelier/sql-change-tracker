@@ -114,6 +114,140 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void ApplyDefinitionFormatting_PreservesCompatibleClrFunctionReferenceDefinition()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE FUNCTION [dbo].[JoinParts] (@separator [nvarchar] (MAX), @first [nvarchar] (MAX), @second [nvarchar] (MAX))",
+            "RETURNS [nvarchar] (MAX)",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.StringFunctions].[JoinParts]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE FUNCTION [dbo].[JoinParts] (@separator [nvarchar] (max), @first [nvarchar] (max), @second [nvarchar] (max))",
+            "RETURNS [nvarchar] (max)",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.StringFunctions].[JoinParts]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(4)),
+            formatted);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesCompatibleClrStoredProcedureReferenceDefinition()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE PROCEDURE [dbo].[BuildBuckets] (@executionId [int], @portfolioId [int])",
+            "WITH EXECUTE AS CALLER",
+            "AS EXTERNAL NAME [AppClr].[App.Database.StoredProcedures].[BuildBuckets]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE PROCEDURE [dbo].[BuildBuckets] (@executionId [int], @portfolioId [int])",
+            "WITH EXECUTE AS CALLER",
+            "AS EXTERNAL NAME [AppClr].[App.Database.StoredProcedures].[BuildBuckets]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(3)),
+            formatted);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesCompatibleClrTableValuedFunctionReferenceDefinition()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int],",
+            "[Value] [nvarchar] (MAX)",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (max))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int],",
+            "[Value] [nvarchar] (max)",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(7)),
+            formatted);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesClrTableValuedFunctionReferenceNullTokensWhenOtherwiseCompatible()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int],",
+            "[Value] [nvarchar] (MAX)",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int] NULL,",
+            "[Value] [nvarchar] (MAX) NULL",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(7)),
+            formatted);
+    }
+
+    [Fact]
     public void BuildReferenceTableColumnTypeMap_ReadsCompatibleTypeTokens()
     {
         var referenceLines = new[]

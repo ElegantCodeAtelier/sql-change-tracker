@@ -21,6 +21,9 @@ internal class SqlServerScripter
     private static readonly Regex ModuleDeclarationLineRegex = new(
         @"^(?<prefix>CREATE\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ClrTableValuedFunctionReturnColumnNullRegex = new(
+        @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*,?\s*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private enum TablePostCreateStatementKind
     {
@@ -43,6 +46,42 @@ internal class SqlServerScripter
         string PermissionSetDesc,
         bool IsVisible,
         IReadOnlyList<AssemblyBinaryFile> Files);
+
+    private sealed record ClrFunctionMetadata(
+        string AssemblyName,
+        string AssemblyClass,
+        string AssemblyMethod,
+        int? ExecuteAsPrincipalId,
+        string ExecuteAsPrincipalName);
+
+    private sealed record ClrFunctionParameter(
+        int ParameterId,
+        string Name,
+        string TypeName,
+        string TypeSchema,
+        bool IsUserDefined,
+        short MaxLength,
+        byte Precision,
+        byte Scale,
+        bool IsOutput,
+        bool IsReadOnly,
+        bool HasDefaultValue,
+        object? DefaultValue);
+
+    private sealed record ClrTableValuedFunctionColumn(
+        int ColumnId,
+        string Name,
+        string TypeName,
+        string TypeSchema,
+        bool IsUserDefined,
+        short MaxLength,
+        byte Precision,
+        byte Scale);
+
+    private sealed record ClrTableValuedFunctionOrderColumn(
+        int OrderColumnId,
+        string Name,
+        bool IsDescending);
 
     private readonly record struct TableStorageInfo(
         string? DataSpace,
@@ -535,27 +574,57 @@ ORDER BY af.file_id;";
         bool insertBlankLineAfterSet,
         string[]? referenceLines)
     {
-        var fullName = $"[{obj.Schema}].[{obj.Name}]";
+        var fullName = $"{QuoteIdentifier(obj.Schema)}.{QuoteIdentifier(obj.Name)}";
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT m.definition, m.uses_ansi_nulls, m.uses_quoted_identifier
+SELECT o.object_id,
+       o.type,
+       m.definition,
+       m.uses_ansi_nulls,
+       m.uses_quoted_identifier,
+       OBJECTPROPERTY(o.object_id, 'ExecIsAnsiNullsOn') AS ansi_nulls_property,
+       OBJECTPROPERTY(o.object_id, 'ExecIsQuotedIdentOn') AS quoted_identifier_property
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
-JOIN sys.sql_modules m ON m.object_id = o.object_id
+LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id
 WHERE s.name = @schema AND o.name = @name";
         command.Parameters.AddWithValue("@schema", obj.Schema);
         command.Parameters.AddWithValue("@name", obj.Name);
 
+        int objectId;
+        string objectType;
+        string definitionText;
+        bool ansiNulls;
+        bool quotedIdentifier;
         using var reader = command.ExecuteReader();
         if (!reader.Read())
         {
-            throw new InvalidOperationException($"Object not found: [{obj.Schema}].[{obj.Name}].");
+            throw new InvalidOperationException($"Object not found: {fullName}.");
         }
 
-        var definitionText = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-        var ansiNulls = reader.IsDBNull(1) || reader.GetBoolean(1);
-        var quotedIdentifier = reader.IsDBNull(2) || reader.GetBoolean(2);
+        objectId = reader.GetInt32(0);
+        objectType = reader.GetString(1);
+        definitionText = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+        var isClrStoredProcedure = string.Equals(objectType, "PC", StringComparison.OrdinalIgnoreCase);
+        var isClrScalarFunction = string.Equals(objectType, "FS", StringComparison.OrdinalIgnoreCase);
+        var isClrTableValuedFunction = string.Equals(objectType, "FT", StringComparison.OrdinalIgnoreCase);
+        var isClrModule = isClrStoredProcedure || isClrScalarFunction || isClrTableValuedFunction;
+        ansiNulls = ReadModuleSetOption(reader, moduleColumn: 3, propertyColumn: 5, defaultValue: !isClrModule);
+        quotedIdentifier = ReadModuleSetOption(reader, moduleColumn: 4, propertyColumn: 6, defaultValue: !isClrModule);
         reader.Close();
+
+        if (isClrStoredProcedure && string.IsNullOrWhiteSpace(definitionText))
+        {
+            definitionText = BuildClrStoredProcedureDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
+        else if (isClrScalarFunction && string.IsNullOrWhiteSpace(definitionText))
+        {
+            definitionText = BuildClrScalarFunctionDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
+        else if (isClrTableValuedFunction && string.IsNullOrWhiteSpace(definitionText))
+        {
+            definitionText = BuildClrTableValuedFunctionDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
 
         var (lines, hasGoAfterDefinition) = BuildProgrammableObjectLines(
             definitionText,
@@ -581,6 +650,361 @@ WHERE s.name = @schema AND o.name = @name";
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static bool ReadModuleSetOption(SqlDataReader reader, int moduleColumn, int propertyColumn, bool defaultValue)
+    {
+        if (!reader.IsDBNull(moduleColumn))
+        {
+            return reader.GetBoolean(moduleColumn);
+        }
+
+        if (!reader.IsDBNull(propertyColumn))
+        {
+            return Convert.ToInt32(reader.GetValue(propertyColumn), CultureInfo.InvariantCulture) != 0;
+        }
+
+        return defaultValue;
+    }
+
+    private static ClrFunctionMetadata ReadClrFunctionMetadata(SqlConnection connection, int objectId, string schema, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT a.name AS assembly_name,
+       am.assembly_class,
+       am.assembly_method,
+       am.execute_as_principal_id,
+       dp.name AS execute_as_name
+FROM sys.assembly_modules am
+JOIN sys.assemblies a ON a.assembly_id = am.assembly_id
+LEFT JOIN sys.database_principals dp ON dp.principal_id = am.execute_as_principal_id
+WHERE am.object_id = @object_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvalidOperationException($"CLR function metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        return new ClrFunctionMetadata(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? (int?)null : Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture),
+            reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
+    }
+
+    private static string BuildClrScalarFunctionDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrFunctionMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId);
+        var returnParameter = parameters.FirstOrDefault(parameter => parameter.ParameterId == 0);
+        if (returnParameter == null)
+        {
+            throw new InvalidOperationException($"CLR scalar function return type metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var argumentList = string.Join(
+            ", ",
+            parameters
+                .Where(parameter => parameter.ParameterId > 0)
+                .OrderBy(parameter => parameter.ParameterId)
+                .Select(parameter => $"{parameter.Name} {FormatTypeName(parameter.TypeName, parameter.TypeSchema, parameter.IsUserDefined, parameter.MaxLength, parameter.Precision, parameter.Scale)}"));
+        var returnType = FormatTypeName(
+            returnParameter.TypeName,
+            returnParameter.TypeSchema,
+            returnParameter.IsUserDefined,
+            returnParameter.MaxLength,
+            returnParameter.Precision,
+            returnParameter.Scale);
+        var executeAsClause = metadata.ExecuteAsPrincipalId switch
+        {
+            null => "CALLER",
+            -2 => "OWNER",
+            _ when !string.IsNullOrWhiteSpace(metadata.ExecuteAsPrincipalName) => $"'{EscapeSqlStringLiteral(metadata.ExecuteAsPrincipalName)}'",
+            _ => "CALLER"
+        };
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"CREATE FUNCTION {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({argumentList})",
+                $"RETURNS {returnType}",
+                $"WITH EXECUTE AS {executeAsClause}",
+                $"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}"
+            ]);
+    }
+
+    private static string BuildClrStoredProcedureDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrFunctionMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId)
+            .Where(parameter => parameter.ParameterId > 0)
+            .OrderBy(parameter => parameter.ParameterId)
+            .ToArray();
+        var parameterList = string.Join(", ", parameters.Select(FormatClrProcedureParameter));
+        var executeAsClause = metadata.ExecuteAsPrincipalId switch
+        {
+            null => "CALLER",
+            -2 => "OWNER",
+            _ when !string.IsNullOrWhiteSpace(metadata.ExecuteAsPrincipalName) => $"'{EscapeSqlStringLiteral(metadata.ExecuteAsPrincipalName)}'",
+            _ => "CALLER"
+        };
+        var createLine = parameters.Length == 0
+            ? $"CREATE PROCEDURE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}"
+            : $"CREATE PROCEDURE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({parameterList})";
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                createLine,
+                $"WITH EXECUTE AS {executeAsClause}",
+                $"AS EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}"
+            ]);
+    }
+
+    private static string FormatClrProcedureParameter(ClrFunctionParameter parameter)
+    {
+        var typeName = FormatTypeName(
+            parameter.TypeName,
+            parameter.TypeSchema,
+            parameter.IsUserDefined,
+            parameter.MaxLength,
+            parameter.Precision,
+            parameter.Scale);
+        var builder = new StringBuilder()
+            .Append(parameter.Name)
+            .Append(' ')
+            .Append(typeName);
+
+        if (parameter.HasDefaultValue)
+        {
+            builder.Append(" = ").Append(FormatClrParameterDefaultValue(parameter));
+        }
+
+        if (parameter.IsOutput)
+        {
+            builder.Append(" OUTPUT");
+        }
+
+        if (parameter.IsReadOnly)
+        {
+            builder.Append(" READONLY");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string FormatClrParameterDefaultValue(ClrFunctionParameter parameter)
+    {
+        var value = parameter.DefaultValue;
+        if (value is null || value == DBNull.Value)
+        {
+            return "NULL";
+        }
+
+        var typeName = parameter.TypeName.ToLowerInvariant();
+        return value switch
+        {
+            string s when typeName is "nchar" or "nvarchar" or "ntext" or "xml" => $"N'{EscapeSqlStringLiteral(s)}'",
+            string s => $"'{EscapeSqlStringLiteral(s)}'",
+            char ch when typeName is "nchar" or "nvarchar" or "ntext" or "xml" => $"N'{EscapeSqlStringLiteral(ch.ToString())}'",
+            char ch => $"'{EscapeSqlStringLiteral(ch.ToString())}'",
+            bool booleanValue => booleanValue ? "1" : "0",
+            byte[] bytes => $"0x{Convert.ToHexString(bytes)}",
+            Guid guid => $"'{guid:D}'",
+            DateTime dateTime => $"'{dateTime:yyyy-MM-ddTHH:mm:ss.fffffff}'",
+            DateTimeOffset dateTimeOffset => $"'{dateTimeOffset:yyyy-MM-ddTHH:mm:ss.fffffff zzz}'",
+            float singleValue => singleValue.ToString("R", CultureInfo.InvariantCulture),
+            double doubleValue => doubleValue.ToString("R", CultureInfo.InvariantCulture),
+            decimal decimalValue => decimalValue.ToString(CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? "NULL",
+            _ => throw new InvalidOperationException(
+                $"Unsupported CLR parameter default value type '{value.GetType().FullName}' for parameter {parameter.Name}.")
+        };
+    }
+
+    private static string BuildClrTableValuedFunctionDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrFunctionMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId)
+            .Where(parameter => parameter.ParameterId > 0)
+            .OrderBy(parameter => parameter.ParameterId)
+            .ToArray();
+        var columns = ReadClrTableValuedFunctionColumns(connection, objectId);
+        if (columns.Count == 0)
+        {
+            throw new InvalidOperationException($"CLR table-valued function return columns not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var orderColumns = ReadClrTableValuedFunctionOrderColumns(connection, objectId);
+        var argumentList = string.Join(
+            ", ",
+            parameters.Select(parameter =>
+                $"{parameter.Name} {FormatTypeName(parameter.TypeName, parameter.TypeSchema, parameter.IsUserDefined, parameter.MaxLength, parameter.Precision, parameter.Scale)}"));
+        var executeAsClause = metadata.ExecuteAsPrincipalId switch
+        {
+            null => "CALLER",
+            -2 => "OWNER",
+            _ when !string.IsNullOrWhiteSpace(metadata.ExecuteAsPrincipalName) => $"'{EscapeSqlStringLiteral(metadata.ExecuteAsPrincipalName)}'",
+            _ => "CALLER"
+        };
+
+        var lines = new List<string>
+        {
+            $"CREATE FUNCTION {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({argumentList})",
+            "RETURNS TABLE ("
+        };
+
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var column = columns[i];
+            var dataType = FormatTypeName(column.TypeName, column.TypeSchema, column.IsUserDefined, column.MaxLength, column.Precision, column.Scale);
+            var suffix = i < columns.Count - 1 ? "," : string.Empty;
+            lines.Add($"{QuoteIdentifier(column.Name)} {dataType}{suffix}");
+        }
+
+        lines.Add(")");
+        lines.Add($"WITH EXECUTE AS {executeAsClause}");
+
+        if (orderColumns.Count > 0)
+        {
+            lines.Add($"ORDER ({string.Join(", ", orderColumns.Select(column => $"{QuoteIdentifier(column.Name)} {(column.IsDescending ? "DESC" : "ASC")}"))})");
+        }
+
+        lines.Add($"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static IReadOnlyList<ClrFunctionParameter> ReadClrFunctionParameters(SqlConnection connection, int objectId)
+    {
+        var parameters = new List<ClrFunctionParameter>();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT p.parameter_id,
+       p.name,
+       t.name AS type_name,
+       ts.name AS type_schema,
+       t.is_user_defined,
+       p.max_length,
+       p.precision,
+       p.scale,
+       p.is_output,
+       p.is_readonly,
+       p.has_default_value,
+       p.default_value
+FROM sys.parameters p
+JOIN sys.types t ON t.user_type_id = p.user_type_id
+JOIN sys.schemas ts ON ts.schema_id = t.schema_id
+WHERE p.object_id = @object_id
+ORDER BY p.parameter_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            parameters.Add(new ClrFunctionParameter(
+                reader.GetInt32(0),
+                reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetBoolean(4),
+                reader.GetInt16(5),
+                reader.GetByte(6),
+                reader.GetByte(7),
+                reader.GetBoolean(8),
+                reader.GetBoolean(9),
+                reader.GetBoolean(10),
+                reader.IsDBNull(11) ? null : reader.GetValue(11)));
+        }
+
+        return parameters;
+    }
+
+    private static IReadOnlyList<ClrTableValuedFunctionColumn> ReadClrTableValuedFunctionColumns(
+        SqlConnection connection,
+        int objectId)
+    {
+        var columns = new List<ClrTableValuedFunctionColumn>();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT c.column_id,
+       c.name,
+       t.name AS type_name,
+       ts.name AS type_schema,
+       t.is_user_defined,
+       c.max_length,
+       c.precision,
+       c.scale
+FROM sys.columns c
+JOIN sys.types t ON t.user_type_id = c.user_type_id
+JOIN sys.schemas ts ON ts.schema_id = t.schema_id
+WHERE c.object_id = @object_id
+ORDER BY c.column_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            columns.Add(new ClrTableValuedFunctionColumn(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetBoolean(4),
+                reader.GetInt16(5),
+                reader.GetByte(6),
+                reader.GetByte(7)));
+        }
+
+        return columns;
+    }
+
+    private static IReadOnlyList<ClrTableValuedFunctionOrderColumn> ReadClrTableValuedFunctionOrderColumns(SqlConnection connection, int objectId)
+    {
+        if (ResolveObjectId(connection, "sys.function_order_columns") is null)
+        {
+            return Array.Empty<ClrTableValuedFunctionOrderColumn>();
+        }
+
+        var columns = new List<ClrTableValuedFunctionOrderColumn>();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT foc.order_column_id,
+       c.name,
+       foc.is_descending
+FROM sys.function_order_columns foc
+JOIN sys.columns c
+  ON c.object_id = foc.object_id
+ AND c.column_id = foc.column_id
+WHERE foc.object_id = @object_id
+ORDER BY foc.order_column_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            columns.Add(new ClrTableValuedFunctionOrderColumn(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetBoolean(2)));
+        }
+
+        return columns;
     }
 
     private static string ScriptView(
@@ -6022,8 +6446,17 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             normalized = "CREATE " + normalized.Substring(createOrAlter.Length);
         }
 
+        normalized = NormalizeClrTableValuedFunctionReturnColumnLineKey(normalized);
         normalized = NormalizeModuleDeclarationLineKey(normalized);
         return normalized;
+    }
+
+    private static string NormalizeClrTableValuedFunctionReturnColumnLineKey(string normalized)
+    {
+        var match = ClrTableValuedFunctionReturnColumnNullRegex.Match(normalized);
+        return match.Success
+            ? match.Groups["prefix"].Value + match.Groups["suffix"].Value
+            : normalized;
     }
 
     private static string NormalizeModuleDeclarationLineKey(string normalized)

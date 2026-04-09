@@ -23,7 +23,7 @@ ORDER BY a.name;", MapObjectType),
 SELECT s.name AS schema_name, o.name AS object_name, o.type
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
-WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','FN','TF','IF')
+WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','PC','FN','TF','IF','FS','FT')
 ORDER BY s.name, o.name;", MapObjectType),
 
             () => RunQuery(options, @"
@@ -401,7 +401,7 @@ SELECT s.name AS schema_name, o.name AS object_name
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 WHERE o.is_ms_shipped = 0
-  AND o.type = 'P'
+  AND o.type IN ('P','PC')
   AND s.name = @schema
   AND o.name = @name
 ORDER BY s.name, o.name;
@@ -416,7 +416,7 @@ SELECT s.name AS schema_name, o.name AS object_name
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 WHERE o.is_ms_shipped = 0
-  AND o.type IN ('FN','TF','IF')
+  AND o.type IN ('FN','TF','IF','FS','FT')
   AND s.name = @schema
   AND o.name = @name
 ORDER BY s.name, o.name;
@@ -715,8 +715,8 @@ ORDER BY sp.name;
             "ASSEMBLY" => "Assembly",
             "U" => "Table",
             "V" => "View",
-            "P" => "StoredProcedure",
-            "FN" or "TF" or "IF" => "Function",
+            "P" or "PC" => "StoredProcedure",
+            "FN" or "TF" or "IF" or "FS" or "FT" => "Function",
             "SQ" => "Sequence",
             "SC" => "Schema",
             "SY" => "Synonym",
