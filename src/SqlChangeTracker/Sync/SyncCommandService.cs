@@ -39,6 +39,8 @@ internal enum ComparisonTarget
 internal sealed class SyncCommandService : ISyncCommandService
 {
     internal const string TableDataObjectType = "TableData";
+    private const string SqlIdentifierTokenPattern = @"(?:\[(?:[^\]]|\]\])+\]|""(?:""""|[^""])+""|[^\s;]+)";
+    private const string SqlStringOrIdentifierTokenPattern = @"(?:\[(?:[^\]]|\]\])+\]|""(?:""""|[^""])+""|'(?:''|[^'])*'|[^\s;]+)";
     private static readonly Regex ScalarUserDefinedTypeScriptRegex = new(
         @"\bCREATE\s+TYPE\b.*\bFROM\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
@@ -75,9 +77,18 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex SsmsObjectHeaderCommentRegex = new(
         @"^\s*/\*{5,}\s*Object:\s+(?:StoredProcedure|Procedure|View|Function|Trigger)\b.*Script Date:.*\*+/\s*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex AssemblyHeaderCommentRegex = new(
+        @"^\s*--\s*Assembly\b.*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex CompatibleTextImageOnRegex = new(
         @"^(?<prefix>\)\s*(?:ON\s+(?:\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s]+)(?:\s*\([^)]+\))?)?)\s+TEXTIMAGE_ON\s+(?<dataSpace>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s]+)(?<suffix>\s*)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex CreateAssemblyBlockRegex = new(
+        $@"^\s*CREATE\s+ASSEMBLY\s+(?<name>{SqlIdentifierTokenPattern})\s+(?:AUTHORIZATION\s+(?<owner>{SqlIdentifierTokenPattern})\s+)?FROM\s+(?<hex>0x(?:[0-9A-Fa-f\\\s])+?)\s+WITH\s+PERMISSION_SET\s*=\s*(?<permission>[A-Za-z_]+)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex AlterAssemblyAddFileBlockRegex = new(
+        $@"^\s*ALTER\s+ASSEMBLY\s+(?<name>{SqlIdentifierTokenPattern})\s+ADD\s+FILE\s+FROM\s+(?<hex>0x(?:[0-9A-Fa-f\\\s])+?)\s+AS\s+(?<file>{SqlStringOrIdentifierTokenPattern})\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -1710,6 +1721,12 @@ internal sealed class SyncCommandService : ISyncCommandService
             return BuildUserDefinedTypeComparableLinesForDiff(normalized);
         }
 
+        if (string.Equals(objectType, "Assembly", StringComparison.OrdinalIgnoreCase))
+        {
+            var normalized = PrepareScriptForReadableDiffDisplay(script, objectType);
+            return BuildAssemblyComparableLinesForDiff(normalized);
+        }
+
         return null;
     }
 
@@ -1729,6 +1746,11 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
             else if (IsProgrammableObjectTypeForHeaderCommentCompatibility(objectType) &&
                      SsmsObjectHeaderCommentRegex.IsMatch(lines[i]))
+            {
+                lines[i] = string.Empty;
+            }
+            else if (IsAssemblyObjectTypeForHeaderCommentCompatibility(objectType) &&
+                     AssemblyHeaderCommentRegex.IsMatch(lines[i]))
             {
                 lines[i] = string.Empty;
             }
@@ -1924,6 +1946,37 @@ internal sealed class SyncCommandService : ISyncCommandService
             comparableLines.Add(BuildComparableLineForStructuredBlock(
                 JoinBlockLines(block),
                 JoinBlockLines(block)));
+        }
+
+        return comparableLines.ToArray();
+    }
+
+    private static ComparableLine[] BuildAssemblyComparableLinesForDiff(string script)
+    {
+        var blocks = SplitGoDelimitedBlocks(script);
+        if (blocks.Count == 0)
+        {
+            return Array.Empty<ComparableLine>();
+        }
+
+        var comparableLines = new List<ComparableLine>(blocks.Count * 2);
+        foreach (var block in blocks)
+        {
+            var hasTerminalGo =
+                block.Length > 0 &&
+                string.Equals(block[^1].Trim(), "GO", StringComparison.OrdinalIgnoreCase);
+            var contentLines = hasTerminalGo ? block[..^1] : block;
+            if (contentLines.Any(line => line.Length > 0))
+            {
+                comparableLines.Add(BuildComparableLineForStructuredBlock(
+                    NormalizeAssemblyBlockContentForComparison(contentLines),
+                    string.Join("\n", contentLines)));
+            }
+
+            if (hasTerminalGo)
+            {
+                comparableLines.Add(new ComparableLine("GO", "GO"));
+            }
         }
 
         return comparableLines.ToArray();
@@ -2649,6 +2702,11 @@ internal sealed class SyncCommandService : ISyncCommandService
             {
                 lines[i] = string.Empty;
             }
+            else if (IsAssemblyObjectTypeForHeaderCommentCompatibility(objectType) &&
+                     AssemblyHeaderCommentRegex.IsMatch(lines[i]))
+            {
+                lines[i] = string.Empty;
+            }
         }
 
         if (IsProgrammableObjectTypeForHeaderCommentCompatibility(objectType))
@@ -2688,6 +2746,11 @@ internal sealed class SyncCommandService : ISyncCommandService
         else if (string.Equals(objectType, "Service", StringComparison.OrdinalIgnoreCase))
         {
             joined = NormalizeServiceBrokerScriptForComparison(joined, NormalizeServiceBaseBlockForComparison);
+        }
+
+        if (string.Equals(objectType, "Assembly", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizeAssemblyScriptForComparison(joined);
         }
 
         if (string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase))
@@ -2861,6 +2924,11 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
             else if (IsProgrammableObjectTypeForHeaderCommentCompatibility(objectType) &&
                      SsmsObjectHeaderCommentRegex.IsMatch(lines[i]))
+            {
+                lines[i] = string.Empty;
+            }
+            else if (IsAssemblyObjectTypeForHeaderCommentCompatibility(objectType) &&
+                     AssemblyHeaderCommentRegex.IsMatch(lines[i]))
             {
                 lines[i] = string.Empty;
             }
@@ -3059,6 +3127,163 @@ internal sealed class SyncCommandService : ISyncCommandService
         return string.IsNullOrWhiteSpace(suffix)
             ? rebuilt
             : rebuilt + " " + suffix;
+    }
+
+    private static string NormalizeAssemblyScriptForComparison(string script)
+    {
+        var blocks = SplitGoDelimitedBlocks(script);
+        if (blocks.Count == 0)
+        {
+            return script;
+        }
+
+        var normalizedBlocks = new List<string>(blocks.Count);
+        foreach (var block in blocks)
+        {
+            var hasTerminalGo =
+                block.Length > 0 &&
+                string.Equals(block[^1].Trim(), "GO", StringComparison.OrdinalIgnoreCase);
+            var contentLines = hasTerminalGo ? block[..^1] : block;
+            if (contentLines.Any(line => line.Length > 0))
+            {
+                normalizedBlocks.Add(NormalizeAssemblyBlockContentForComparison(contentLines));
+            }
+
+            if (hasTerminalGo)
+            {
+                normalizedBlocks.Add("GO");
+            }
+        }
+
+        return string.Join("\n", normalizedBlocks);
+    }
+
+    private static string NormalizeAssemblyBlockContentForComparison(IEnumerable<string> blockLines)
+    {
+        var contentLines = blockLines
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
+        if (contentLines.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (TryNormalizeCreateAssemblyBlockForComparison(contentLines, out var createAssembly))
+        {
+            return createAssembly;
+        }
+
+        if (TryNormalizeAlterAssemblyAddFileBlockForComparison(contentLines, out var addFileAssembly))
+        {
+            return addFileAssembly;
+        }
+
+        if (contentLines.Length == 1 && IsPermissionStatementLine(contentLines[0]))
+        {
+            return NormalizePermissionStatementForComparison(contentLines[0]);
+        }
+
+        if (contentLines.Length == 1 && IsExtendedPropertyStatementLine(contentLines[0]))
+        {
+            return NormalizeExtendedPropertyStatementForComparison(contentLines[0]);
+        }
+
+        return NormalizeSqlStatementTokensForComparison(string.Join(" ", contentLines));
+    }
+
+    private static bool TryNormalizeCreateAssemblyBlockForComparison(
+        IReadOnlyList<string> contentLines,
+        out string normalized)
+    {
+        var match = CreateAssemblyBlockRegex.Match(string.Join("\n", contentLines));
+        if (!match.Success)
+        {
+            normalized = string.Empty;
+            return false;
+        }
+
+        var normalizedLines = new List<string>
+        {
+            NormalizeSqlStatementTokensForComparison(
+                $"CREATE ASSEMBLY {QuoteIdentifierForComparison(UnquoteSqlIdentifier(match.Groups["name"].Value))}")
+        };
+
+        if (match.Groups["owner"].Success)
+        {
+            normalizedLines.Add(NormalizeSqlStatementTokensForComparison(
+                $"AUTHORIZATION {QuoteIdentifierForComparison(UnquoteSqlIdentifier(match.Groups["owner"].Value))}"));
+        }
+
+        normalizedLines.Add(NormalizeSqlStatementTokensForComparison(
+            $"FROM 0x{NormalizeAssemblyHexLiteralForComparison(match.Groups["hex"].Value)}"));
+        normalizedLines.Add(NormalizeSqlStatementTokensForComparison(
+            $"WITH PERMISSION_SET = {NormalizeAssemblyPermissionSetForComparison(match.Groups["permission"].Value)}"));
+        normalized = string.Join("\n", normalizedLines);
+        return true;
+    }
+
+    private static bool TryNormalizeAlterAssemblyAddFileBlockForComparison(
+        IReadOnlyList<string> contentLines,
+        out string normalized)
+    {
+        var match = AlterAssemblyAddFileBlockRegex.Match(string.Join("\n", contentLines));
+        if (!match.Success)
+        {
+            normalized = string.Empty;
+            return false;
+        }
+
+        normalized = NormalizeSqlStatementTokensForComparison(
+            $"ALTER ASSEMBLY {QuoteIdentifierForComparison(UnquoteSqlIdentifier(match.Groups["name"].Value))} " +
+            $"ADD FILE FROM 0x{NormalizeAssemblyHexLiteralForComparison(match.Groups["hex"].Value)} " +
+            $"AS {NormalizeAssemblyFileTokenForComparison(match.Groups["file"].Value)}");
+        return true;
+    }
+
+    private static string NormalizeAssemblyHexLiteralForComparison(string value)
+    {
+        var hexPrefixIndex = value.IndexOf("0x", StringComparison.OrdinalIgnoreCase);
+        if (hexPrefixIndex < 0)
+        {
+            return value.Trim().ToLowerInvariant();
+        }
+
+        var builder = new StringBuilder(value.Length);
+        for (var i = hexPrefixIndex + 2; i < value.Length; i++)
+        {
+            var current = value[i];
+            if (char.IsWhiteSpace(current) || current == '\\')
+            {
+                continue;
+            }
+
+            if (IsHexDigit(current))
+            {
+                builder.Append(char.ToLowerInvariant(current));
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static string NormalizeAssemblyPermissionSetForComparison(string value)
+        => value.Trim().ToUpperInvariant() switch
+        {
+            "SAFE" or "SAFE_ACCESS" => "SAFE",
+            "EXTERNAL_ACCESS" => "EXTERNAL_ACCESS",
+            "UNSAFE" or "UNSAFE_ACCESS" => "UNSAFE",
+            _ => value.Trim().ToUpperInvariant()
+        };
+
+    private static string NormalizeAssemblyFileTokenForComparison(string value)
+    {
+        if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'')
+        {
+            return QuoteIdentifierForComparison(UnescapeSqlStringLiteral(value[1..^1]));
+        }
+
+        return QuoteIdentifierForComparison(UnquoteSqlIdentifier(value));
     }
 
     private static string CollapseServiceBrokerWhitespace(string text)
@@ -3947,6 +4172,9 @@ internal sealed class SyncCommandService : ISyncCommandService
            || string.Equals(objectType, "View", StringComparison.OrdinalIgnoreCase)
            || string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase)
            || string.Equals(objectType, "Trigger", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAssemblyObjectTypeForHeaderCommentCompatibility(string? objectType)
+        => string.Equals(objectType, "Assembly", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsExtendedPropertyStatementLine(string line)
         => ExtendedPropertyStatementRegex.IsMatch(line);

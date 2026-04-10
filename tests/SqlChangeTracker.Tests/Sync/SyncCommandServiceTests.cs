@@ -2051,6 +2051,63 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Assembly_SuppressesEquivalentBannerWrappedHexAndQuotedAddFileDifferences()
+    {
+        var source =
+            "CREATE ASSEMBLY [AppLibrary]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "FROM 0xAABBCCDD\n" +
+            "WITH PERMISSION_SET = SAFE\n" +
+            "GO\n" +
+            "ALTER ASSEMBLY [AppLibrary] ADD FILE FROM 0x11223344 AS [AppLibrary.pdb]\n" +
+            "GO";
+        var target =
+            "--Assembly applibrary, version=0.0.0.0, culture=neutral, publickeytoken=null, processorarchitecture=msil\n" +
+            "--Assembly applibrary, version=0.0.0.0, culture=neutral, publickeytoken=null, processorarchitecture=msil\n" +
+            "CREATE ASSEMBLY applibrary\n" +
+            "AUTHORIZATION dbo\n" +
+            "FROM 0xaabb\\\n" +
+            "ccdd\n" +
+            "WITH PERMISSION_SET=safe\n" +
+            "GO\n" +
+            "ALTER ASSEMBLY applibrary\n" +
+            "ADD FILE FROM\n" +
+            "0x1122\\\n" +
+            "3344\n" +
+            "AS 'AppLibrary.pdb'\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Assembly", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Assembly_PreservesPermissionSetDifferencesWhenLegacyFormattingAlsoDiffers()
+    {
+        var source =
+            "CREATE ASSEMBLY [AppLibrary]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "FROM 0xAABBCCDD\n" +
+            "WITH PERMISSION_SET = SAFE\n" +
+            "GO";
+        var target =
+            "--Assembly applibrary, version=0.0.0.0, culture=neutral, publickeytoken=null, processorarchitecture=msil\n" +
+            "CREATE ASSEMBLY applibrary\n" +
+            "AUTHORIZATION dbo\n" +
+            "FROM 0xaabb\\\n" +
+            "ccdd\n" +
+            "WITH PERMISSION_SET=unsafe\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Assembly", "db", "folder", source, target);
+
+        Assert.NotEmpty(diff);
+        Assert.Contains("PERMISSION_SET", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--Assembly", diff, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NormalizeForComparison_DoesNotNormalizeUnicodeLiteralPrefixesOutsideTableData()
     {
         var plain = SyncCommandService.NormalizeForComparison(

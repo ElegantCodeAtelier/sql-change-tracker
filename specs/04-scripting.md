@@ -842,6 +842,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - For `Service`, comparison normalization MAY treat equivalent single-line and multi-line contract-list formatting as compatible and MAY compare contract item ordering as compatible when the emitted contract set is otherwise identical.
 - For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy explicit `NULL` tokens on return-column lines as compatible with canonical return-column lines that omit nullability, including legacy cases where the final return-column line also carries the closing `)` token.
 - For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy `COLLATE <name>` clauses on return-column lines as compatible when SQL Server ignores that collation metadata for the effective return shape.
+- For `Assembly`, comparison normalization MAY ignore leading legacy `--Assembly ...` banner comments and MAY treat wrapped or case-varied `0x...` payload literals, spacing-only `WITH PERMISSION_SET = ...` differences, and `ALTER ASSEMBLY ... ADD FILE ... AS [name]` versus `AS 'name'` as compatible when the effective assembly definition is otherwise identical.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.
