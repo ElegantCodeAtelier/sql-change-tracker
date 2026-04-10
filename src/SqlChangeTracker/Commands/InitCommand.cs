@@ -95,7 +95,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             bool addTrackedTables;
             if (isInteractive)
             {
-                addTrackedTables = ConfirmTrackedTables(proposedTables);
+                addTrackedTables = ConfirmAddTrackedTables(proposedTables);
             }
             else
             {
@@ -334,7 +334,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
             .ToList();
     }
 
-    private static bool ConfirmTrackedTables(IReadOnlyList<string> proposedTables)
+    private static bool ConfirmAddTrackedTables(IReadOnlyList<string> proposedTables)
     {
         Console.WriteLine();
         Console.WriteLine($"Found {proposedTables.Count} existing Data/*.sql file(s). Proposed trackedTables:");

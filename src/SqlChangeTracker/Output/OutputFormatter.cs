@@ -129,7 +129,7 @@ internal sealed class OutputFormatter
             }
         }
 
-        if (result.TrackedTables != null && result.TrackedTables.Count > 0)
+        if (result.TrackedTables?.Count > 0)
         {
             Console.WriteLine("Tracked tables:");
             foreach (var table in result.TrackedTables)
