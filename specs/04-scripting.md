@@ -812,6 +812,8 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Script generation MUST emit canonical scripting output per this document and MUST NOT include diff/status-specific normalization.
 - `status` and `diff` normalization behaviors are external contracts defined in `specs/01-cli.md` and `specs/05-output-formats.md`.
 - Scripting and comparison normalization responsibilities MUST remain decoupled.
+- Diff rendering MAY use comparison-normalized keys to identify compatible changes, but emitted diff text SHOULD remain human-readable and SHOULD prefer readable compatibility-preserving representations over opaque comparison-normalized forms.
+- For `Table` and table-valued `UserDefinedType` statements, readable diff rendering SHOULD retain structural body boundaries so body entries can diff at per-entry granularity when the compatibility-preserving representation exposes them.
 - Empty lines MUST be ignored during comparison, and whitespace-only lines MUST be normalized to empty lines first so that blank separators differing only by spaces or tabs compare as compatible.
 - Comparison normalization MAY ignore redundant empty or otherwise no-op `GO` batches, including batches that contain only standalone semicolon lines.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.

@@ -1680,8 +1680,86 @@ public sealed class SyncCommandServiceTests
 
         var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
 
-        Assert.Contains("add constraint pk_externaldef primary key clustered(externalid) on primary", diff, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("add constraint pk_externaldef primary key clustered(externalid) with(data_compression=page) on primary", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(diff);
+        Assert.Contains("data_compression", diff, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PreservesReadableStatementText_WhenLegacyFormattingAlsoNormalizes()
+    {
+        var source =
+            "CREATE TABLE [lab].[SampleMeasure]\n" +
+            "(\n" +
+            "[BatchId] [int] NOT NULL,\n" +
+            "[MeasureValue] [decimal] (15, 8) NULL\n" +
+            ") ON [PRIMARY]\n" +
+            "GO";
+        var target =
+            "create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,8) null,) on primary;\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains(" CREATE TABLE [lab].[SampleMeasure]", diff);
+        Assert.Contains("     [BatchId] [int] NOT NULL,", diff);
+        Assert.Contains("-    [MeasureValue] [decimal] (15, 8) NULL", diff);
+        Assert.Contains("+    measurevalue decimal(15,8) null", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,8) null) on primary", diff, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PinpointsChangedBodyEntryAndCloseLine_WhenLegacyFormattingAlsoDiffers()
+    {
+        var source =
+            "CREATE TABLE [lab].[SampleAmount]\n" +
+            "(\n" +
+            "[BatchId] [int] NOT NULL,\n" +
+            "[ItemId] [int] NOT NULL,\n" +
+            "[SourceAmount] [decimal] (15, 2) NOT NULL,\n" +
+            "[TargetAmount] [decimal] (15, 3) NOT NULL\n" +
+            ") ON [DATAFG]\n" +
+            "GO\n" +
+            "ALTER TABLE [lab].[SampleAmount] ADD CONSTRAINT [PK_SampleAmount] PRIMARY KEY CLUSTERED ([BatchId], [ItemId]) WITH (FILLFACTOR = 90) ON [DATAFG]\n" +
+            "GO";
+        var target =
+            "create table lab.sampleamount(batchid int not null,itemid int not null,sourceamount decimal(15,2) not null,targetamount decimal(15,2) not null) on datafg with(data_compression=page)\n" +
+            "GO\n" +
+            "alter table lab.sampleamount add constraint pk_sampleamount primary key clustered(batchid,itemid) with(fillfactor=90,data_compression=page) on datafg\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains("     [BatchId] [int] NOT NULL,", diff);
+        Assert.DoesNotContain("-    [BatchId] [int] NOT NULL,", diff);
+        Assert.DoesNotContain("+    batchid int not null,", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-    [TargetAmount] [decimal] (15, 3) NOT NULL", diff);
+        Assert.Contains("+    targetamount decimal(15,2) not null", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-) ON [DATAFG]", diff);
+        Assert.Contains("+) ON datafg with(data_compression=page)", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("-ALTER TABLE [lab].[SampleAmount] ADD CONSTRAINT [PK_SampleAmount] PRIMARY KEY CLUSTERED ([BatchId], [ItemId]) WITH (FILLFACTOR = 90) ON [DATAFG]", diff);
+        Assert.Contains("+alter table lab.sampleamount add constraint pk_sampleamount primary key clustered(batchid,itemid) with(fillfactor=90,data_compression=page) on datafg", diff, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_CanRenderNormalizedDiffForDebuggingWhenRequested()
+    {
+        var source =
+            "CREATE TABLE [lab].[SampleMeasure]\n" +
+            "(\n" +
+            "[BatchId] [int] NOT NULL,\n" +
+            "[MeasureValue] [decimal] (15, 8) NULL\n" +
+            ")\n" +
+            "GO";
+        var target =
+            "create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,8) null,) on primary;\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target, normalizedDiff: true);
+
+        Assert.Contains("create table lab.samplemeasure", diff, StringComparison.Ordinal);
+        Assert.Contains("measurevalue decimal(15,8) null", diff, StringComparison.Ordinal);
+        Assert.Contains("measurevalue decimal(15,8) null,)", diff, StringComparison.Ordinal);
+        Assert.DoesNotContain("[lab].[SampleMeasure]", diff, StringComparison.Ordinal);
     }
 
     [Fact]

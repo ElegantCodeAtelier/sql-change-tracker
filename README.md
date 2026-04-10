@@ -23,7 +23,7 @@ validate configuration, and generate reproducible scripts for Git and CI/CD.
 - `sqlct data untrack [<pattern>] [--object <pattern>] [--filter <regex>] [--project-dir <path>]`
 - `sqlct data list [--project-dir <path>]`
 - `sqlct status [--project-dir <path>] [--target <db|folder>]`
-- `sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>]`
+- `sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>] [--normalized-diff]`
 - `sqlct pull [--project-dir <path>] [--object <selector>] [--filter <pattern>...]`
 
 Current runtime scope for `status`, `diff`, and `pull` covers:

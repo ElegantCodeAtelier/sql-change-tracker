@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, or named-vs-positional argument forms within the same contiguous block.
 - Treat leading SSMS-generated banner comments on programmable objects as compatible during comparison.
 - Treat redundant empty or otherwise no-op `GO` batches as compatible during comparison.
+- Keep `diff` output readable by rendering compatible `Table` and `UserDefinedType` changes from readable script text instead of opaque comparison-normalized text.
+- Keep readable `diff` output for `Table` and table-valued `UserDefinedType` bodies at per-entry granularity instead of collapsing the entire body into one changed line.
+- Align readable `Table` and table-valued `UserDefinedType` diffs by individual body entries so a single changed column or inline constraint does not mark the entire body as changed.
 - Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 - Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes, including inside multi-line `INSERT ... VALUES (...)` statements.
@@ -42,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Next-steps suggestions are printed after `sqlct init` to guide users toward `pull`, `status`, and `diff` (#36).
 - Add `--object <selector>` to `sqlct pull` for exact-match filtering using the same selector forms as `diff --object` (#35).
 - Add `--filter <pattern>` to `sqlct pull` for regex-based filtering; multiple patterns may be provided and matching is case-insensitive (#35).
+- Add `--normalized-diff` to `sqlct diff` to render comparison-normalized diff text for debugging while preserving readable diff output by default.
 - Add `--filter <pattern>` to `sqlct diff` for regex-based filtering; without `--object` filters the output to matching objects, with `--object` additionally constrains the single-object result (#35).
 - SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
 - Support active object type `Assembly`, with deterministic scripting to `Assemblies/*.sql` for user-defined SQL Server assemblies.

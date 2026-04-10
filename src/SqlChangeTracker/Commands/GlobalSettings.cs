@@ -44,6 +44,9 @@ internal sealed class DiffCommandSettings : StatusCommandSettings
 
     [CommandOption("--context <N>")]
     public int? ContextLines { get; set; }
+
+    [CommandOption("--normalized-diff")]
+    public bool ShowNormalizedDiff { get; set; }
 }
 
 internal sealed class PullCommandSettings : ProjectCommandSettings

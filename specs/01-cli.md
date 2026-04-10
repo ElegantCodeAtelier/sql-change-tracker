@@ -224,7 +224,7 @@ Behavior:
 ### diff
 Show textual diffs.
 `
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>] [--normalized-diff]
 `
 Behavior:
 - Compare object script from DB vs folder.
@@ -234,6 +234,8 @@ Behavior:
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
+- Displayed diff hunks SHOULD preserve readable script text where possible and MUST NOT fall back to opaque comparison-normalized formatting when a readable compatibility-preserving representation is available.
+- For `Table` and table-valued `UserDefinedType` scripts, readable diff rendering SHOULD preserve structural body boundaries so column and inline-constraint changes remain pinpointed within the body instead of collapsing the entire statement into one changed line.
 - Empty lines are ignored during comparison, and whitespace-only lines are normalized to empty lines first so blank separators differing only by spaces or tabs compare as compatible.
 - Redundant empty or no-op `GO` batches compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
@@ -249,6 +251,7 @@ Behavior:
 - Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Trigger`) compare as compatible.
 - Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
 - `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.
+- `--normalized-diff` switches diff rendering to the exact comparison-normalized text used for compatibility evaluation. It is intended for debugging and is off by default.
 - When two change segments are close enough that their context regions overlap, they are merged into a single hunk.
 - Each hunk is prefixed with a `@@ -l,s +l,s @@` header indicating the source and target line ranges.
 - When `data.trackedTables` is configured, `diff` also supports data-script diffs for tracked tables.
