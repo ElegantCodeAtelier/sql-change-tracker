@@ -60,6 +60,11 @@ public sealed class SyncCommandServiceSqlTests
             Assert.Contains(
                 $"EXEC sp_addrolemember N'{fixture.FixedRoleName}', N'AppUser'",
                 File.ReadAllText(Path.Combine(projectDir, "Security", "Roles", $"{fixture.FixedRoleName}.sql")));
+            var schemaScript = File.ReadAllText(Path.Combine(projectDir, "Security", "Schemas", "Fixtures.sql"));
+            Assert.Contains("GRANT SELECT ON SCHEMA::[Fixtures] TO [AppUser]", schemaScript);
+            Assert.Contains(
+                "EXEC sp_addextendedproperty N'Caption', N'Fixture schema', 'SCHEMA', N'Fixtures', NULL, NULL, NULL, NULL",
+                schemaScript);
             Assert.Contains(
                 "CREATE SYNONYM [Fixtures].[TargetSynonym] FOR [Fixtures].[TargetTable]",
                 File.ReadAllText(Path.Combine(projectDir, "Synonyms", "Fixtures.TargetSynonym.sql")));
@@ -188,6 +193,10 @@ public sealed class SyncCommandServiceSqlTests
             Assert.True(schemaScopedDiff.Success, schemaScopedDiff.Error?.Detail ?? schemaScopedDiff.Error?.Message);
             Assert.Equal(string.Empty, schemaScopedDiff.Payload!.Diff);
 
+            var schemaDiff = service.RunDiff(projectDir, "db", "Schema:Fixtures");
+            Assert.True(schemaDiff.Success, schemaDiff.Error?.Detail ?? schemaDiff.Error?.Message);
+            Assert.Equal(string.Empty, schemaDiff.Payload!.Diff);
+
             var tableTypeDiff = service.RunDiff(projectDir, "db", "UserDefinedType:Fixtures.RequestList");
             Assert.True(tableTypeDiff.Success, tableTypeDiff.Error?.Detail ?? tableTypeDiff.Error?.Message);
             Assert.Equal(string.Empty, tableTypeDiff.Payload!.Diff);
@@ -249,6 +258,59 @@ public sealed class SyncCommandServiceSqlTests
         }
     }
 
+    [Fact]
+    public void PullAndStatus_ScriptBuiltInDboSchemaSubordinateState_WhenPresent()
+    {
+        var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return;
+        }
+
+        var databaseName = $"SqlctDboSchema_{Guid.NewGuid():N}";
+        var projectDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            CreateDboSchemaFixtureDatabase(server, databaseName);
+            CreateProject(server, databaseName, projectDir);
+
+            var service = new SyncCommandService();
+            var pull = service.RunPull(projectDir);
+
+            Assert.True(pull.Success, pull.Error?.Detail ?? pull.Error?.Message);
+
+            var schemaPath = Path.Combine(projectDir, "Security", "Schemas", "dbo.sql");
+            Assert.True(File.Exists(schemaPath));
+
+            var schemaScript = File.ReadAllText(schemaPath);
+            Assert.DoesNotContain("CREATE SCHEMA [dbo]", schemaScript);
+            Assert.DoesNotContain("AUTHORIZATION [dbo]", schemaScript);
+            Assert.Contains("GRANT SELECT ON SCHEMA::[dbo] TO [SchemaGrantRole]", schemaScript);
+            Assert.Contains(
+                "EXEC sp_addextendedproperty N'Caption', N'Built-in dbo schema', 'SCHEMA', N'dbo', NULL, NULL, NULL, NULL",
+                schemaScript);
+
+            var diff = service.RunDiff(projectDir, "db", "Schema:dbo");
+            Assert.True(diff.Success, diff.Error?.Detail ?? diff.Error?.Message);
+            Assert.Equal(string.Empty, diff.Payload!.Diff);
+
+            var status = service.RunStatus(projectDir, "db");
+            Assert.True(status.Success, status.Error?.Detail ?? status.Error?.Message);
+            Assert.Equal(0, status.Payload!.Summary.Schema.Added);
+            Assert.Equal(0, status.Payload.Summary.Schema.Changed);
+            Assert.Equal(0, status.Payload.Summary.Schema.Deleted);
+            Assert.Equal(0, status.Payload.Summary.Data.Added);
+            Assert.Equal(0, status.Payload.Summary.Data.Changed);
+            Assert.Equal(0, status.Payload.Summary.Data.Deleted);
+        }
+        finally
+        {
+            TryDeleteProject(projectDir);
+            DropDatabase(server, databaseName);
+        }
+    }
+
     private static void CreateProject(string server, string databaseName, string projectDir)
     {
         var seed = new BaselineProjectSeeder().Seed(projectDir);
@@ -261,6 +323,33 @@ public sealed class SyncCommandServiceSqlTests
 
         var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
         Assert.True(write.Success, write.Error?.Detail ?? write.Error?.Message);
+    }
+
+    private static void CreateDboSchemaFixtureDatabase(string server, string databaseName)
+    {
+        using var connection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, "master", "integrated", null, null, true));
+        connection.Open();
+
+        using (var createDatabase = connection.CreateCommand())
+        {
+            createDatabase.CommandText = $"CREATE DATABASE [{databaseName}];";
+            createDatabase.ExecuteNonQuery();
+        }
+
+        using var fixtureConnection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, databaseName, "integrated", null, null, true));
+        fixtureConnection.Open();
+
+        foreach (var statement in new[]
+        {
+            "CREATE ROLE [SchemaGrantRole] AUTHORIZATION [dbo];",
+            "GRANT SELECT ON SCHEMA::[dbo] TO [SchemaGrantRole];",
+            "EXEC sp_addextendedproperty N'Caption', N'Built-in dbo schema', 'SCHEMA', N'dbo';"
+        })
+        {
+            using var command = fixtureConnection.CreateCommand();
+            command.CommandText = statement;
+            command.ExecuteNonQuery();
+        }
     }
 
     private static FixtureDatabaseInfo CreateFixtureDatabase(string server, string databaseName)
@@ -329,6 +418,8 @@ ORDER BY [name];
 
         foreach (var statement in new[]
         {
+            "GRANT SELECT ON SCHEMA::[Fixtures] TO [AppUser];",
+            "EXEC sp_addextendedproperty N'Caption', N'Fixture schema', 'SCHEMA', N'Fixtures';",
             "GRANT REFERENCES ON XML SCHEMA COLLECTION::[Fixtures].[PayloadSchema] TO [AppUser];",
             "EXEC sp_addextendedproperty N'Caption', N'Fixture XML schema collection', 'SCHEMA', N'Fixtures', 'XML SCHEMA COLLECTION', N'PayloadSchema';",
             "GRANT REFERENCES ON MESSAGE TYPE::[//Sqlct/Request] TO [AppUser];",

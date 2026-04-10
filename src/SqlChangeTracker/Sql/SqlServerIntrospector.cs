@@ -23,7 +23,7 @@ ORDER BY a.name;", MapObjectType),
 SELECT s.name AS schema_name, o.name AS object_name, o.type
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
-WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','FN','TF','IF')
+WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','PC','FN','TF','IF','FS','FT')
 ORDER BY s.name, o.name;", MapObjectType),
 
             () => RunQuery(options, @"
@@ -35,20 +35,36 @@ ORDER BY s.name, seq.name;", MapObjectType),
             () => RunQuery(options, @"
 SELECT s.name AS schema_name, s.name AS object_name, 'SC' AS type
 FROM sys.schemas s
-WHERE s.name NOT IN (
-    'dbo',
-    'guest',
-    'sys',
-    'INFORMATION_SCHEMA',
-    'db_accessadmin',
-    'db_backupoperator',
-    'db_datareader',
-    'db_datawriter',
-    'db_ddladmin',
-    'db_denydatareader',
-    'db_denydatawriter',
-    'db_owner',
-    'db_securityadmin')
+WHERE (
+        s.name NOT IN (
+            'dbo',
+            'guest',
+            'sys',
+            'INFORMATION_SCHEMA',
+            'db_accessadmin',
+            'db_backupoperator',
+            'db_datareader',
+            'db_datawriter',
+            'db_ddladmin',
+            'db_denydatareader',
+            'db_denydatawriter',
+            'db_owner',
+            'db_securityadmin')
+        OR (
+            s.name = 'dbo'
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM sys.database_permissions dp
+                    WHERE dp.class_desc = 'SCHEMA'
+                      AND dp.major_id = s.schema_id)
+                OR EXISTS (
+                    SELECT 1
+                    FROM sys.extended_properties ep
+                    WHERE ep.class_desc = 'SCHEMA'
+                      AND ep.major_id = s.schema_id))
+        )
+      )
 ORDER BY s.name;", MapObjectType),
 
             () => RunQuery(options, @"
@@ -273,6 +289,41 @@ ORDER BY ps.name;", MapObjectType),
             .ToArray();
     }
 
+    public virtual string? GetTableCompatibleOmittedTextImageOnDataSpaceName(
+        SqlConnectionOptions options,
+        string schema,
+        string name)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT CASE
+           WHEN t.lob_data_space_id <> 0
+            AND default_ds.data_space_id IS NOT NULL
+            AND t.lob_data_space_id = default_ds.data_space_id
+           THEN lob_ds.name
+           ELSE NULL
+       END
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+LEFT JOIN sys.data_spaces lob_ds ON lob_ds.data_space_id = t.lob_data_space_id
+OUTER APPLY (
+    SELECT TOP (1) ds.data_space_id
+    FROM sys.data_spaces ds
+    WHERE ds.is_default = 1
+    ORDER BY ds.data_space_id
+) default_ds
+WHERE s.name = @schema
+  AND t.name = @name;
+""";
+        command.Parameters.AddWithValue("@schema", schema);
+        command.Parameters.AddWithValue("@name", name);
+
+        return command.ExecuteScalar() as string;
+    }
+
     internal static int ResolveParallelism(int configured)
         => configured > 0 ? configured : Environment.ProcessorCount;
 
@@ -401,7 +452,7 @@ SELECT s.name AS schema_name, o.name AS object_name
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 WHERE o.is_ms_shipped = 0
-  AND o.type = 'P'
+  AND o.type IN ('P','PC')
   AND s.name = @schema
   AND o.name = @name
 ORDER BY s.name, o.name;
@@ -416,7 +467,7 @@ SELECT s.name AS schema_name, o.name AS object_name
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 WHERE o.is_ms_shipped = 0
-  AND o.type IN ('FN','TF','IF')
+  AND o.type IN ('FN','TF','IF','FS','FT')
   AND s.name = @schema
   AND o.name = @name
 ORDER BY s.name, o.name;
@@ -443,20 +494,36 @@ ORDER BY s.name, seq.name;
 SELECT '' AS schema_name, s.name AS object_name
 FROM sys.schemas s
 WHERE s.name = @name
-  AND s.name NOT IN (
-    'dbo',
-    'guest',
-    'sys',
-    'INFORMATION_SCHEMA',
-    'db_accessadmin',
-    'db_backupoperator',
-    'db_datareader',
-    'db_datawriter',
-    'db_ddladmin',
-    'db_denydatareader',
-    'db_denydatawriter',
-    'db_owner',
-    'db_securityadmin')
+  AND (
+        s.name NOT IN (
+            'dbo',
+            'guest',
+            'sys',
+            'INFORMATION_SCHEMA',
+            'db_accessadmin',
+            'db_backupoperator',
+            'db_datareader',
+            'db_datawriter',
+            'db_ddladmin',
+            'db_denydatareader',
+            'db_denydatawriter',
+            'db_owner',
+            'db_securityadmin')
+        OR (
+            s.name = 'dbo'
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM sys.database_permissions dp
+                    WHERE dp.class_desc = 'SCHEMA'
+                      AND dp.major_id = s.schema_id)
+                OR EXISTS (
+                    SELECT 1
+                    FROM sys.extended_properties ep
+                    WHERE ep.class_desc = 'SCHEMA'
+                      AND ep.major_id = s.schema_id))
+        )
+      )
 ORDER BY s.name;
 """;
                 command.Parameters.AddWithValue("@name", name);
@@ -715,8 +782,8 @@ ORDER BY sp.name;
             "ASSEMBLY" => "Assembly",
             "U" => "Table",
             "V" => "View",
-            "P" => "StoredProcedure",
-            "FN" or "TF" or "IF" => "Function",
+            "P" or "PC" => "StoredProcedure",
+            "FN" or "TF" or "IF" or "FS" or "FT" => "Function",
             "SQ" => "Sequence",
             "SC" => "Schema",
             "SY" => "Synonym",

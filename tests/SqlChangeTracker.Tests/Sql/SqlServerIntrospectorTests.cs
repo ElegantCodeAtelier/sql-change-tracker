@@ -78,6 +78,56 @@ public sealed class SqlServerIntrospectorTests
         }
     }
 
+    [Fact]
+    public void ListObjects_IncludesClrTableValuedFunctions_WhenPresent()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var expected = FindFirstClrTableValuedFunction(options);
+        if (expected == null)
+        {
+            return;
+        }
+
+        var introspector = new SqlServerIntrospector();
+        var results = introspector.ListObjects(options);
+
+        Assert.Contains(
+            results,
+            item => string.Equals(item.ObjectType, "Function", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Schema, expected.Value.Schema, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Name, expected.Value.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ListObjects_IncludesClrStoredProcedures_WhenPresent()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var expected = FindFirstClrStoredProcedure(options);
+        if (expected == null)
+        {
+            return;
+        }
+
+        var introspector = new SqlServerIntrospector();
+        var results = introspector.ListObjects(options);
+
+        Assert.Contains(
+            results,
+            item => string.Equals(item.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Schema, expected.Value.Schema, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Name, expected.Value.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static SqlConnectionOptions? GetOptions()
     {
         var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
@@ -94,5 +144,53 @@ public sealed class SqlServerIntrospectorTests
             null,
             null,
             true);
+    }
+
+    private static (string Schema, string Name)? FindFirstClrTableValuedFunction(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT TOP 1 s.name, o.name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'FT'
+ORDER BY s.name, o.name;
+""";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return (reader.GetString(0), reader.GetString(1));
+    }
+
+    private static (string Schema, string Name)? FindFirstClrStoredProcedure(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT TOP 1 s.name, o.name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'PC'
+ORDER BY s.name, o.name;
+""";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return (reader.GetString(0), reader.GetString(1));
     }
 }
