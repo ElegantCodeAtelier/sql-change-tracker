@@ -1425,6 +1425,154 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesRedundantEmptyGoBatchDifferences()
+    {
+        var source =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Row versioning column', 'SCHEMA', 'Accounting', 'TABLE', 'ExchangeRate', 'COLUMN', 'RateId'\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET ANSI_PADDING ON\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Row versioning column', 'SCHEMA', 'Accounting', 'TABLE', 'ExchangeRate', 'COLUMN', 'RateId'\n" +
+            "GO\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET ANSI_PADDING ON\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_View_SuppressesEquivalentExtendedPropertyNamedArgumentDifferences()
+    {
+        var source =
+            "CREATE VIEW [Reporting].[ExchangeRateView]\n" +
+            "AS\n" +
+            "SELECT 1 AS [Rate]\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Lightweight exchange-rate view', 'SCHEMA', N'Reporting', 'VIEW', N'ExchangeRateView', NULL, NULL\n" +
+            "GO";
+        var target =
+            "CREATE VIEW [Reporting].[ExchangeRateView]\n" +
+            "AS\n" +
+            "SELECT 1 AS [Rate]\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty @name=N'MS_Description', @value=N'Lightweight exchange-rate view', @level0type=N'SCHEMA', @level0name=N'Reporting', @level1type=N'VIEW', @level1name=N'ExchangeRateView'\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("View", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentPostCreatePackageOrderDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO\n" +
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_ExternalDef_Key] ON [dbo].[ExternalDef] ([ExternalId]) ON [PRIMARY]\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]\n" +
+            "GO\n" +
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_ExternalDef_Key] ON [dbo].[ExternalDef] ([ExternalId]) ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PreservesPostCreatePackageContentDifferencesWhenOrderAlsoDiffers()
+    {
+        var source =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) WITH (DATA_COMPRESSION = PAGE) ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains("ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]", diff);
+        Assert.Contains("ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) WITH (DATA_COMPRESSION = PAGE) ON [PRIMARY]", diff);
+    }
+
+    [Fact]
     public void NormalizeForComparison_DoesNotNormalizeUnicodeLiteralPrefixesOutsideTableData()
     {
         var plain = SyncCommandService.NormalizeForComparison(

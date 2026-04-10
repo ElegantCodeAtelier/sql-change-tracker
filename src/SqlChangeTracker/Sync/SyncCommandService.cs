@@ -1922,6 +1922,7 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         var isTableData = string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
         var joined = string.Join("\n", lines);
+        joined = NormalizeEmptyGoBatchesForComparison(joined);
         if (isTableData)
         {
             return !joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase) &&
@@ -1965,23 +1966,62 @@ internal sealed class SyncCommandService : ISyncCommandService
             joined = NormalizeExtendedPropertyBlocksForComparison(joined);
         }
 
+        if (string.Equals(objectType, "Table", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizeTableScriptForComparison(joined);
+        }
+
         if (!joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
         {
             return joined;
         }
 
-        for (var i = 0; i < lines.Length; i++)
+        var joinedLines = joined.Split('\n');
+        for (var i = 0; i < joinedLines.Length; i++)
         {
-            var line = lines[i];
+            var line = joinedLines[i];
             if (line.EndsWith(';') && LineStartsWithInsert(line))
             {
                 line = line[..^1];
             }
 
-            lines[i] = line;
+            joinedLines[i] = line;
         }
 
-        return string.Join("\n", lines);
+        return string.Join("\n", joinedLines);
+    }
+
+    private static string NormalizeEmptyGoBatchesForComparison(string script)
+    {
+        var lines = script.Split('\n');
+        var normalizedLines = new List<string>(lines.Length);
+        var pendingBatchLines = new List<string>();
+        var batchHasContent = false;
+
+        foreach (var line in lines)
+        {
+            if (string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            {
+                if (batchHasContent)
+                {
+                    normalizedLines.AddRange(pendingBatchLines);
+                    normalizedLines.Add("GO");
+                }
+
+                pendingBatchLines.Clear();
+                batchHasContent = false;
+                continue;
+            }
+
+            pendingBatchLines.Add(line);
+            if (line.Length > 0)
+            {
+                batchHasContent = true;
+            }
+        }
+
+        normalizedLines.AddRange(pendingBatchLines);
+        return string.Join("\n", normalizedLines);
     }
 
     private static string NormalizeQueueScriptForComparison(string script)
@@ -2310,10 +2350,136 @@ internal sealed class SyncCommandService : ISyncCommandService
         return string.Join("\n", normalizedLines);
     }
 
+    private static string NormalizeTableScriptForComparison(string script)
+    {
+        var blocks = SplitGoDelimitedBlocks(script);
+        if (blocks.Count == 0)
+        {
+            return script;
+        }
+
+        var createTableIndex = blocks.FindIndex(BlockContainsCreateTable);
+        if (createTableIndex < 0 || createTableIndex >= blocks.Count - 1)
+        {
+            return script;
+        }
+
+        var normalizedBlocks = new List<string>(blocks.Count);
+        normalizedBlocks.AddRange(blocks.Take(createTableIndex + 1).Select(JoinBlockLines));
+
+        var postCreatePackages = BuildTablePostCreatePackages(blocks, createTableIndex + 1);
+        foreach (var package in postCreatePackages.OrderBy(NormalizeTablePostCreatePackageKey, StringComparer.Ordinal))
+        {
+            normalizedBlocks.Add(package);
+        }
+
+        return string.Join("\n", normalizedBlocks);
+    }
+
+    private static List<string[]> SplitGoDelimitedBlocks(string script)
+    {
+        var lines = script.Split('\n');
+        var blocks = new List<string[]>();
+        var current = new List<string>();
+
+        foreach (var line in lines)
+        {
+            current.Add(line);
+            if (string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            {
+                blocks.Add(current.ToArray());
+                current.Clear();
+            }
+        }
+
+        if (current.Count > 0)
+        {
+            blocks.Add(current.ToArray());
+        }
+
+        return blocks;
+    }
+
+    private static bool BlockContainsCreateTable(string[] block)
+        => block.Any(line => line.TrimStart().StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase));
+
+    private static bool BlockContainsCreateTrigger(string[] block)
+        => block.Any(line =>
+            line.TrimStart().StartsWith("CREATE TRIGGER", StringComparison.OrdinalIgnoreCase) ||
+            line.TrimStart().StartsWith("ALTER TRIGGER", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsSetOnlyBlock(string[] block)
+    {
+        var contentLines = block
+            .TakeWhile(line => !string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            .Where(line => line.Trim().Length > 0)
+            .ToArray();
+
+        return contentLines.Length == 1 &&
+               contentLines[0].TrimStart().StartsWith("SET ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<string> BuildTablePostCreatePackages(IReadOnlyList<string[]> blocks, int startIndex)
+    {
+        var packages = new List<string>();
+        for (var i = startIndex; i < blocks.Count; i++)
+        {
+            if (IsSetOnlyBlock(blocks[i]))
+            {
+                var setStart = i;
+                while (i < blocks.Count && IsSetOnlyBlock(blocks[i]))
+                {
+                    i++;
+                }
+
+                if (i < blocks.Count && BlockContainsCreateTrigger(blocks[i]))
+                {
+                    var packageLines = new List<string>();
+                    for (var blockIndex = setStart; blockIndex <= i; blockIndex++)
+                    {
+                        packageLines.AddRange(blocks[blockIndex]);
+                    }
+
+                    packages.Add(string.Join("\n", packageLines));
+                    continue;
+                }
+
+                for (var blockIndex = setStart; blockIndex < i; blockIndex++)
+                {
+                    packages.Add(JoinBlockLines(blocks[blockIndex]));
+                }
+
+                i--;
+                continue;
+            }
+
+            packages.Add(JoinBlockLines(blocks[i]));
+        }
+
+        return packages;
+    }
+
+    private static string NormalizeTablePostCreatePackageKey(string package)
+        => Regex.Replace(package, @"\s+", " ", RegexOptions.CultureInvariant).Trim();
+
+    private static string JoinBlockLines(IEnumerable<string> block)
+        => string.Join("\n", block);
+
     private static bool IsExtendedPropertyStatementLine(string line)
         => ExtendedPropertyStatementRegex.IsMatch(line);
 
     private static string NormalizeExtendedPropertyStatementForComparison(string statement)
+    {
+        var normalized = NormalizeExtendedPropertyStatementWhitespace(statement);
+        if (TryNormalizeExtendedPropertyStatementArguments(normalized, out var canonical))
+        {
+            return canonical;
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeExtendedPropertyStatementWhitespace(string statement)
     {
         var builder = new StringBuilder(statement.Length);
         var inSingleQuotedString = false;
@@ -2408,6 +2574,236 @@ internal sealed class SyncCommandService : ISyncCommandService
             @"(?i)^EXEC(?:UTE)?\s+SYS\.SP_ADDEXTENDEDPROPERTY\b",
             "EXEC sp_addextendedproperty",
             RegexOptions.CultureInvariant);
+    }
+
+    private static bool TryNormalizeExtendedPropertyStatementArguments(string statement, out string canonical)
+    {
+        const string parameterOrderList = "name,value,level0type,level0name,level1type,level1name,level2type,level2name";
+        var prefixMatch = Regex.Match(
+            statement,
+            @"^\s*EXEC(?:UTE)?\s+(?:sys\.)?sp_addextendedproperty\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        if (!prefixMatch.Success)
+        {
+            canonical = string.Empty;
+            return false;
+        }
+
+        var argumentsText = statement[prefixMatch.Length..].Trim();
+        if (argumentsText.Length == 0)
+        {
+            canonical = "EXEC sp_addextendedproperty";
+            return true;
+        }
+
+        var parameterOrder = parameterOrderList.Split(',');
+        var parameterValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var nextPositionalIndex = 0;
+
+        foreach (var token in SplitSqlArgumentList(argumentsText))
+        {
+            var trimmedToken = token.Trim();
+            if (trimmedToken.Length == 0)
+            {
+                canonical = string.Empty;
+                return false;
+            }
+
+            var equalsIndex = FindTopLevelEquals(trimmedToken);
+            if (equalsIndex >= 0)
+            {
+                var parameterName = trimmedToken[..equalsIndex].Trim().TrimStart('@');
+                var parameterValue = trimmedToken[(equalsIndex + 1)..].Trim();
+                if (parameterName.Length == 0 ||
+                    parameterValue.Length == 0 ||
+                    !parameterOrder.Contains(parameterName, StringComparer.OrdinalIgnoreCase))
+                {
+                    canonical = string.Empty;
+                    return false;
+                }
+
+                parameterValues[parameterName] = NormalizeExtendedPropertyArgumentValueForComparison(parameterName, parameterValue);
+                continue;
+            }
+
+            while (nextPositionalIndex < parameterOrder.Length &&
+                   parameterValues.ContainsKey(parameterOrder[nextPositionalIndex]))
+            {
+                nextPositionalIndex++;
+            }
+
+            if (nextPositionalIndex >= parameterOrder.Length)
+            {
+                canonical = string.Empty;
+                return false;
+            }
+
+            parameterValues[parameterOrder[nextPositionalIndex]] =
+                NormalizeExtendedPropertyArgumentValueForComparison(parameterOrder[nextPositionalIndex], trimmedToken);
+            nextPositionalIndex++;
+        }
+
+        var canonicalArguments = parameterOrder
+            .Select(name => parameterValues.TryGetValue(name, out var value) ? value : "NULL")
+            .ToArray();
+        canonical = "EXEC sp_addextendedproperty " + string.Join(", ", canonicalArguments);
+        return true;
+    }
+
+    private static IEnumerable<string> SplitSqlArgumentList(string argumentsText)
+    {
+        var current = new StringBuilder(argumentsText.Length);
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+        var parenthesisDepth = 0;
+
+        for (var i = 0; i < argumentsText.Length; i++)
+        {
+            var ch = argumentsText[i];
+
+            if (inSingleQuotedString)
+            {
+                current.Append(ch);
+                if (ch == '\'')
+                {
+                    if (i + 1 < argumentsText.Length && argumentsText[i + 1] == '\'')
+                    {
+                        current.Append(argumentsText[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                current.Append(ch);
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '\'':
+                    inSingleQuotedString = true;
+                    current.Append(ch);
+                    break;
+                case '[':
+                    inBracketedIdentifier = true;
+                    current.Append(ch);
+                    break;
+                case '(':
+                    parenthesisDepth++;
+                    current.Append(ch);
+                    break;
+                case ')':
+                    if (parenthesisDepth > 0)
+                    {
+                        parenthesisDepth--;
+                    }
+
+                    current.Append(ch);
+                    break;
+                case ',' when parenthesisDepth == 0:
+                    yield return current.ToString();
+                    current.Clear();
+                    break;
+                default:
+                    current.Append(ch);
+                    break;
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            yield return current.ToString();
+        }
+    }
+
+    private static int FindTopLevelEquals(string text)
+    {
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (inSingleQuotedString)
+            {
+                if (ch == '\'')
+                {
+                    if (i + 1 < text.Length && text[i + 1] == '\'')
+                    {
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuotedString = true;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                continue;
+            }
+
+            if (ch == '=')
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string NormalizeExtendedPropertyArgumentValueForComparison(string parameterName, string value)
+    {
+        var trimmed = value.Trim();
+        if (string.Equals(trimmed, "NULL", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NULL";
+        }
+
+        if (!string.Equals(parameterName, "value", StringComparison.OrdinalIgnoreCase) &&
+            trimmed.Length >= 3 &&
+            (trimmed[0] == 'N' || trimmed[0] == 'n') &&
+            trimmed[1] == '\'' &&
+            trimmed[^1] == '\'')
+        {
+            return trimmed[1..];
+        }
+
+        return trimmed;
     }
 
     private static void TrimTrailingSpaces(StringBuilder builder)
