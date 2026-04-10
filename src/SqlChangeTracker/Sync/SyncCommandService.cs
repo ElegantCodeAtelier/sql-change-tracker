@@ -63,6 +63,9 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex ExtendedPropertyStatementRegex = new(
         @"^\s*EXEC(?:UTE)?\s+(?:sys\.)?sp_addextendedproperty\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex SsmsObjectHeaderCommentRegex = new(
+        @"^\s*/\*{5,}\s*Object:\s+(?:StoredProcedure|Procedure|View|Function|Trigger)\b.*Script Date:.*\*+/\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex CompatibleTextImageOnRegex = new(
         @"^(?<prefix>\)\s*(?:ON\s+(?:\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s]+)(?:\s*\([^)]+\))?)?)\s+TEXTIMAGE_ON\s+(?<dataSpace>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s]+)(?<suffix>\s*)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -2040,7 +2043,19 @@ internal sealed class SyncCommandService : ISyncCommandService
             {
                 lines[i] = string.Empty;
             }
+            else if (IsProgrammableObjectTypeForHeaderCommentCompatibility(objectType) &&
+                     SsmsObjectHeaderCommentRegex.IsMatch(lines[i]))
+            {
+                lines[i] = string.Empty;
+            }
         }
+
+        if (IsProgrammableObjectTypeForHeaderCommentCompatibility(objectType))
+        {
+            lines = TrimLeadingEmptyLinesForComparison(lines);
+        }
+
+        lines = RemoveEmptyLinesForComparison(lines);
 
         var isTableData = string.Equals(objectType, TableDataObjectType, StringComparison.OrdinalIgnoreCase);
         var joined = string.Join("\n", lines);
@@ -2192,6 +2207,20 @@ internal sealed class SyncCommandService : ISyncCommandService
         var trimmed = line.Trim();
         return trimmed.All(ch => ch == ';');
     }
+
+    private static string[] TrimLeadingEmptyLinesForComparison(string[] lines)
+    {
+        var startIndex = 0;
+        while (startIndex < lines.Length && lines[startIndex].Length == 0)
+        {
+            startIndex++;
+        }
+
+        return startIndex == 0 ? lines : lines[startIndex..];
+    }
+
+    private static string[] RemoveEmptyLinesForComparison(string[] lines)
+        => lines.Where(line => line.Length > 0).ToArray();
 
     private static string NormalizeQueueScriptForComparison(string script)
     {
@@ -2534,10 +2563,13 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         var normalizedBlocks = new List<string>(blocks.Count);
-        normalizedBlocks.AddRange(blocks.Take(createTableIndex + 1).Select(JoinBlockLines));
+        normalizedBlocks.AddRange(blocks.Take(createTableIndex).Select(NormalizeTableBlockForComparison));
+        normalizedBlocks.Add(NormalizeTableBlockForComparison(blocks[createTableIndex]));
 
         var postCreatePackages = BuildTablePostCreatePackages(blocks, createTableIndex + 1);
-        foreach (var package in postCreatePackages.OrderBy(NormalizeTablePostCreatePackageKey, StringComparer.Ordinal))
+        foreach (var package in postCreatePackages
+                     .Select(NormalizeTablePostCreatePackageForComparison)
+                     .OrderBy(NormalizeTablePostCreatePackageKey, StringComparer.Ordinal))
         {
             normalizedBlocks.Add(package);
         }
@@ -2631,8 +2663,189 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static string NormalizeTablePostCreatePackageKey(string package)
         => Regex.Replace(package, @"\s+", " ", RegexOptions.CultureInvariant).Trim();
 
+    private static string NormalizeTableBlockForComparison(string[] block)
+    {
+        var firstLine = GetFirstMeaningfulLine(block);
+        if (string.IsNullOrEmpty(firstLine))
+        {
+            return JoinBlockLines(block);
+        }
+
+        if (firstLine.StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase) ||
+            firstLine.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) ||
+            (firstLine.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase) &&
+             firstLine.IndexOf(" INDEX ", StringComparison.OrdinalIgnoreCase) >= 0))
+        {
+            return NormalizeLegacyTableStatementBlockForComparison(block);
+        }
+
+        return JoinBlockLines(block);
+    }
+
+    private static string NormalizeTablePostCreatePackageForComparison(string package)
+    {
+        var blocks = SplitGoDelimitedBlocks(package);
+        if (blocks.Count != 1)
+        {
+            return package;
+        }
+
+        return NormalizeTableBlockForComparison(blocks[0]);
+    }
+
+    private static string NormalizeLegacyTableStatementBlockForComparison(IEnumerable<string> block)
+    {
+        var statement = string.Join(
+            " ",
+            block.Where(line => !string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                 .Select(line => line.Trim())
+                 .Where(line => line.Length > 0));
+
+        if (statement.Length == 0)
+        {
+            return "GO";
+        }
+
+        return NormalizeLegacyTableStatementTextForComparison(statement) + "\nGO";
+    }
+
+    private static string NormalizeLegacyTableStatementTextForComparison(string statement)
+    {
+        var normalized = NormalizeSqlStatementTokensForComparison(statement);
+        string previous;
+        do
+        {
+            previous = normalized;
+            normalized = Regex.Replace(
+                normalized,
+                @"\bdefault\(\((?<expr>[-+]?\d+(?:\.\d+)?)\)\)",
+                "default(${expr})",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        while (!string.Equals(previous, normalized, StringComparison.Ordinal));
+
+        return normalized;
+    }
+
+    private static string NormalizeSqlStatementTokensForComparison(string statement)
+    {
+        var builder = new StringBuilder(statement.Length);
+        var pendingSpace = false;
+
+        for (var i = 0; i < statement.Length; i++)
+        {
+            var ch = statement[i];
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingSpace = builder.Length > 0;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                if (pendingSpace &&
+                    builder.Length > 0 &&
+                    builder[^1] is not '(' and not '.' and not ',' and not '=')
+                {
+                    builder.Append(' ');
+                }
+
+                pendingSpace = false;
+                builder.Append(ch);
+                while (++i < statement.Length)
+                {
+                    builder.Append(statement[i]);
+                    if (statement[i] == '\'')
+                    {
+                        if (i + 1 < statement.Length && statement[i + 1] == '\'')
+                        {
+                            builder.Append(statement[++i]);
+                            continue;
+                        }
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            if (ch == '[' || ch == '"')
+            {
+                var quote = ch;
+                var start = i;
+                var tokenBuilder = new StringBuilder();
+                while (++i < statement.Length)
+                {
+                    var current = statement[i];
+                    if (current == (quote == '[' ? ']' : '"'))
+                    {
+                        if (i + 1 < statement.Length && statement[i + 1] == current)
+                        {
+                            tokenBuilder.Append(current);
+                            i++;
+                            continue;
+                        }
+
+                        break;
+                    }
+
+                    tokenBuilder.Append(current);
+                }
+
+                if (pendingSpace &&
+                    builder.Length > 0 &&
+                    builder[^1] is not '(' and not '.' and not ',' and not '=')
+                {
+                    builder.Append(' ');
+                }
+
+                pendingSpace = false;
+                builder.Append(tokenBuilder.ToString().ToLowerInvariant());
+                continue;
+            }
+
+            if (ch == ';')
+            {
+                pendingSpace = false;
+                continue;
+            }
+
+            if (ch is '(' or ')' or ',' or '=' or '.')
+            {
+                TrimTrailingSpaces(builder);
+                builder.Append(ch);
+                pendingSpace = false;
+                continue;
+            }
+
+            if (pendingSpace &&
+                builder.Length > 0 &&
+                builder[^1] is not '(' and not '.' and not ',' and not '=')
+            {
+                builder.Append(' ');
+            }
+
+            pendingSpace = false;
+            builder.Append(char.ToLowerInvariant(ch));
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static string? GetFirstMeaningfulLine(IEnumerable<string> lines)
+        => lines
+            .Select(line => line.TrimStart())
+            .FirstOrDefault(line => line.Length > 0 && !string.Equals(line, "GO", StringComparison.OrdinalIgnoreCase));
+
     private static string JoinBlockLines(IEnumerable<string> block)
         => string.Join("\n", block);
+
+    private static bool IsProgrammableObjectTypeForHeaderCommentCompatibility(string? objectType)
+        => string.Equals(objectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(objectType, "View", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(objectType, "Trigger", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsExtendedPropertyStatementLine(string line)
         => ExtendedPropertyStatementRegex.IsMatch(line);

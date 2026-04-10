@@ -16,13 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Treat legacy Service Broker message-type validation synonyms and equivalent contract/service body formatting and item ordering as compatible during comparison.
 - Treat equivalent `TableData` scripts as compatible during comparison when the normalized `INSERT` statements differ only by row ordering within the same contiguous data block.
 - Treat equivalent `Table` scripts as compatible during comparison when post-create statement packages differ only by ordering after the base `CREATE TABLE` block.
+- Treat equivalent legacy `Table` statement formatting as compatible during comparison when normalized table definitions, post-create table statements, and persisted option values are otherwise identical.
 - Treat omitted `TEXTIMAGE_ON` on `Table` scripts as compatible during comparison only when DB metadata shows the table LOB data space matches the current default data space.
 - Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, or named-vs-positional argument forms within the same contiguous block.
+- Treat leading SSMS-generated banner comments on programmable objects as compatible during comparison.
 - Treat redundant empty or otherwise no-op `GO` batches as compatible during comparison.
 - Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 - Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes, including inside multi-line `INSERT ... VALUES (...)` statements.
-- Whitespace-only separator lines now compare as compatible with empty blank lines during `status` and `diff`.
+- Empty separator lines are now ignored during `status` and `diff`, and whitespace-only separator lines compare as compatible after normalization.
 - Preserve reference banner-comment formatting and module-declaration identifier quoting during programmable-object compatibility reconciliation.
 - Preserve compatible computed-column arithmetic grouping parentheses during table compatibility reconciliation.
 
@@ -44,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Support active object type `Assembly`, with deterministic scripting to `Assemblies/*.sql` for user-defined SQL Server assemblies.
 - Support additional active object types: `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
 - Script standalone user-created table statistics as deterministic post-create table statements, including filtered, effective sampling, persisted-sample, incremental, and auto-drop metadata when available.
+- Script persisted key and index storage options such as fill factor, pad index, duplicate-key handling, and row/page locking when those options differ from defaults.
 - Add `--object <pattern>` to `sqlct data track` and `sqlct data untrack` as a flag alias for the positional pattern argument.
 - Add `--filter <regex>` to `sqlct data track` and `sqlct data untrack` for regex-based table matching; matched case-insensitively against the full `schema.table` display name. Exactly one of the positional pattern, `--object`, or `--filter` must be provided; combining any two returns exit code 2.
 - `sqlct diff` now uses a chunked diff format: only changed segments and configurable surrounding context lines are shown instead of the full file. Use `--context <N>` to control the number of context lines (default: 3) (#39).

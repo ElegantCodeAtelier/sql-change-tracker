@@ -552,6 +552,24 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void BuildIndexWithClause_EmitsStablePersistedIndexOptionsInDeterministicOrder()
+    {
+        var clause = SqlServerScripter.BuildIndexWithClause(new SqlServerScripter.IndexScriptingOptions(
+            Compression: "PAGE",
+            PartitionColumn: null,
+            StatisticsIncremental: true,
+            PadIndex: true,
+            FillFactor: 80,
+            IgnoreDupKey: true,
+            AllowRowLocks: false,
+            AllowPageLocks: false));
+
+        Assert.Equal(
+            " WITH (PAD_INDEX = ON, FILLFACTOR = 80, IGNORE_DUP_KEY = ON, STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = PAGE, ALLOW_ROW_LOCKS = OFF, ALLOW_PAGE_LOCKS = OFF)",
+            clause);
+    }
+
+    [Fact]
     public void BuildIndexOnClause_EmitsPartitionColumn_WhenPresent()
     {
         var clause = SqlServerScripter.BuildIndexOnClause("ExamplePartitionScheme", "PartitionKeyId");

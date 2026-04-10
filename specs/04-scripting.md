@@ -253,10 +253,16 @@ Each emitted statement MUST be followed by `GO`.
   - index type contains `CLUSTERED` -> `CLUSTERED`
   - otherwise -> `NONCLUSTERED`
 - Key columns MUST be ordered by `key_ordinal` and include `DESC` on descending keys.
-- Constraint-level `WITH` options MUST include `STATISTICS_INCREMENTAL=ON` when the backing index statistics are incremental.
-- Constraint-level `WITH` options MUST include `DATA_COMPRESSION = <PAGE|ROW>` when compression is not `NONE`.
-- When both constraint-level options are present, they MUST be emitted in this order:
-  - `WITH (STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = <PAGE|ROW>)`
+- Constraint-level `WITH` options MUST include:
+  - `PAD_INDEX = ON` when the backing index is padded,
+  - `FILLFACTOR = <n>` when the backing index fill factor is non-zero,
+  - `IGNORE_DUP_KEY = ON` when the backing index ignores duplicate keys,
+  - `STATISTICS_INCREMENTAL=ON` when the backing index statistics are incremental,
+  - `DATA_COMPRESSION = <PAGE|ROW>` when compression is not `NONE`,
+  - `ALLOW_ROW_LOCKS = OFF` when the backing index disables row locks,
+  - `ALLOW_PAGE_LOCKS = OFF` when the backing index disables page locks.
+- When multiple constraint-level options are present, they MUST be emitted in this order:
+  - `WITH (PAD_INDEX = ON, FILLFACTOR = <n>, IGNORE_DUP_KEY = ON, STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = <PAGE|ROW>, ALLOW_ROW_LOCKS = OFF, ALLOW_PAGE_LOCKS = OFF)`
 - `ON [data_space]` MUST be emitted when available.
 - `ON [data_space] ([partition_column])` MUST be emitted when the backing index is partitioned and the partitioning column is available from catalog metadata.
 
@@ -270,10 +276,16 @@ Each emitted statement MUST be followed by `GO`.
 - Key columns MUST be ordered by `key_ordinal`, then `index_column_id`.
 - Included columns MUST be emitted in `INCLUDE (...)` when present.
 - Filtered index predicate MUST be emitted as `WHERE <filter_definition>` when present.
-- Index `WITH` options MUST include `STATISTICS_INCREMENTAL=ON` when the backing index statistics are incremental.
-- Index compression MUST emit `DATA_COMPRESSION = <PAGE|ROW>` when not `NONE`.
-- When both index-level options are present, they MUST be emitted in this order:
-  - `WITH (STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = <PAGE|ROW>)`
+- Index `WITH` options MUST include:
+  - `PAD_INDEX = ON` when the index is padded,
+  - `FILLFACTOR = <n>` when the index fill factor is non-zero,
+  - `IGNORE_DUP_KEY = ON` when the index ignores duplicate keys,
+  - `STATISTICS_INCREMENTAL=ON` when the backing index statistics are incremental,
+  - `DATA_COMPRESSION = <PAGE|ROW>` when compression is not `NONE`,
+  - `ALLOW_ROW_LOCKS = OFF` when the index disables row locks,
+  - `ALLOW_PAGE_LOCKS = OFF` when the index disables page locks.
+- When multiple index-level options are present, they MUST be emitted in this order:
+  - `WITH (PAD_INDEX = ON, FILLFACTOR = <n>, IGNORE_DUP_KEY = ON, STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = <PAGE|ROW>, ALLOW_ROW_LOCKS = OFF, ALLOW_PAGE_LOCKS = OFF)`
 - `ON [data_space]` MUST be emitted when available.
 - `ON [data_space] ([partition_column])` MUST be emitted when the index is partitioned and the partitioning column is available from catalog metadata.
 
@@ -800,15 +812,17 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Script generation MUST emit canonical scripting output per this document and MUST NOT include diff/status-specific normalization.
 - `status` and `diff` normalization behaviors are external contracts defined in `specs/01-cli.md` and `specs/05-output-formats.md`.
 - Scripting and comparison normalization responsibilities MUST remain decoupled.
-- Whitespace-only lines MUST be normalized to empty lines during comparison so that blank separators differing only by spaces or tabs compare as compatible.
+- Empty lines MUST be ignored during comparison, and whitespace-only lines MUST be normalized to empty lines first so that blank separators differing only by spaces or tabs compare as compatible.
 - Comparison normalization MAY ignore redundant empty or otherwise no-op `GO` batches, including batches that contain only standalone semicolon lines.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
 - For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
 - For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside single-line or multi-line `INSERT ... VALUES (...)` statements as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
 - For `TableData`, comparison normalization MAY treat reordered `INSERT ... VALUES (...)` statements within the same contiguous data block as compatible when the normalized inserted-row set is otherwise identical.
 - For `Table`, comparison normalization MAY treat reordered post-create statement packages as compatible when the normalized package set after the base table `CREATE` block is otherwise identical. Table-scoped trigger packages MUST include the trigger body together with any immediately preceding programmable-object `SET` blocks.
+- For `Table`, comparison normalization MAY treat equivalent legacy formatting for `CREATE TABLE`, `ALTER TABLE`, and `CREATE ... INDEX` statement blocks as compatible when normalized identifiers, type tokens, default expressions, semicolons, and persisted option values are otherwise identical.
 - For `Table`, comparison normalization MAY treat omitted `TEXTIMAGE_ON [name]` as compatible with an explicit clause only when DB metadata shows that the table `lob_data_space_id` resolves to the current default data space named `[name]`; otherwise omission remains a semantic difference.
 - For extended-property blocks, comparison normalization MAY treat reordered `EXEC sp_addextendedproperty ...` statements as compatible within the same contiguous extended-property block when the normalized property statement set is otherwise identical, MAY ignore equivalent spacing around commas and arguments in those statements, and MAY treat equivalent named-vs-positional argument forms with omitted trailing `NULL` levels as compatible.
+- For programmable `StoredProcedure`, `View`, `Function`, and `Trigger` scripts, comparison normalization MAY ignore leading SSMS-generated `/*** Object: ... Script Date: ... ***/` banner comments.
 - For `Queue`, comparison normalization MUST treat equivalent single-line and multi-line queue option formatting as compatible, MAY treat explicit `ON [PRIMARY]` as equivalent to an omitted default primary filegroup, and MAY treat disabled activation containing only default owner execution context as equivalent to omitted activation.
 - For `Role`, comparison normalization MAY treat legacy `EXEC sp_addrolemember N'<role>', N'<member>'` statements as compatible with `ALTER ROLE [role] ADD MEMBER [member]` when the effective role-membership change is otherwise identical.
 - For `MessageType`, comparison normalization MAY treat legacy `VALIDATION = XML` as compatible with canonical `VALIDATION = WELL_FORMED_XML`, and MAY ignore equivalent spacing around the validation assignment.

@@ -88,10 +88,15 @@ internal class SqlServerScripter
         string? PartitionColumn,
         string? LobDataSpace);
 
-    private readonly record struct IndexScriptingOptions(
+    internal readonly record struct IndexScriptingOptions(
         string Compression,
         string? PartitionColumn,
-        bool StatisticsIncremental);
+        bool StatisticsIncremental,
+        bool PadIndex,
+        byte FillFactor,
+        bool IgnoreDupKey,
+        bool AllowRowLocks,
+        bool AllowPageLocks);
 
     private readonly record struct StatisticsScriptingOptions(
         string? SamplingClause,
@@ -2792,22 +2797,58 @@ WHERE name = @name;";
     }
 
     internal static string BuildIndexWithClause(string compression, bool statisticsIncremental)
+        => BuildIndexWithClause(new IndexScriptingOptions(
+            compression,
+            null,
+            statisticsIncremental,
+            PadIndex: false,
+            FillFactor: 0,
+            IgnoreDupKey: false,
+            AllowRowLocks: true,
+            AllowPageLocks: true));
+
+    internal static string BuildIndexWithClause(IndexScriptingOptions options)
     {
-        var options = new List<string>();
-        if (statisticsIncremental)
+        var clauseOptions = new List<string>();
+        if (options.PadIndex)
         {
-            options.Add("STATISTICS_INCREMENTAL=ON");
+            clauseOptions.Add("PAD_INDEX = ON");
         }
 
-        if (!string.IsNullOrWhiteSpace(compression) &&
-            !string.Equals(compression, "NONE", StringComparison.OrdinalIgnoreCase))
+        if (options.FillFactor > 0)
         {
-            options.Add($"DATA_COMPRESSION = {compression}");
+            clauseOptions.Add($"FILLFACTOR = {options.FillFactor}");
         }
 
-        return options.Count == 0
+        if (options.IgnoreDupKey)
+        {
+            clauseOptions.Add("IGNORE_DUP_KEY = ON");
+        }
+
+        if (options.StatisticsIncremental)
+        {
+            clauseOptions.Add("STATISTICS_INCREMENTAL=ON");
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.Compression) &&
+            !string.Equals(options.Compression, "NONE", StringComparison.OrdinalIgnoreCase))
+        {
+            clauseOptions.Add($"DATA_COMPRESSION = {options.Compression}");
+        }
+
+        if (!options.AllowRowLocks)
+        {
+            clauseOptions.Add("ALLOW_ROW_LOCKS = OFF");
+        }
+
+        if (!options.AllowPageLocks)
+        {
+            clauseOptions.Add("ALLOW_PAGE_LOCKS = OFF");
+        }
+
+        return clauseOptions.Count == 0
             ? string.Empty
-            : $" WITH ({string.Join(", ", options)})";
+            : $" WITH ({string.Join(", ", clauseOptions)})";
     }
 
     internal static string BuildStatisticsWithClause(
@@ -3951,7 +3992,7 @@ ORDER BY i.index_id, kc.name;";
                 ? "CLUSTERED"
                 : "NONCLUSTERED";
             var indexOptions = ReadIndexScriptingOptions(connection, objectId, indexId);
-            var withClause = BuildIndexWithClause(indexOptions.Compression, indexOptions.StatisticsIncremental);
+            var withClause = BuildIndexWithClause(indexOptions);
             var onClause = BuildIndexOnClause(dataSpace, indexOptions.PartitionColumn);
 
             if (keyLineMap != null && keyLineMap.TryGetValue(name, out var line))
@@ -4069,7 +4110,7 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
                 var columnstoreType = index.TypeDesc.StartsWith("CLUSTERED", StringComparison.OrdinalIgnoreCase)
                     ? "CLUSTERED COLUMNSTORE"
                     : "NONCLUSTERED COLUMNSTORE";
-                var columnstoreWithClause = BuildIndexWithClause("NONE", indexOptions.StatisticsIncremental);
+                var columnstoreWithClause = BuildIndexWithClause(indexOptions with { Compression = "NONE" });
                 var columnstoreOnClause = BuildIndexOnClause(index.DataSpace, indexOptions.PartitionColumn);
 
                 lines.Add($"CREATE {columnstoreType} INDEX [{index.Name}] ON {fullName}{columnstoreWithClause}{columnstoreOnClause}");
@@ -4086,7 +4127,7 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
             var type = string.Equals(index.TypeDesc, "CLUSTERED", StringComparison.OrdinalIgnoreCase) ? "CLUSTERED" : "NONCLUSTERED";
             var includeClause = includes.Count > 0 ? $" INCLUDE ({string.Join(", ", includes)})" : string.Empty;
             var filterClause = string.IsNullOrWhiteSpace(index.Filter) ? string.Empty : $" WHERE {index.Filter}";
-            var withClause = BuildIndexWithClause(indexOptions.Compression, indexOptions.StatisticsIncremental);
+            var withClause = BuildIndexWithClause(indexOptions);
             var onClause = BuildIndexOnClause(index.DataSpace, indexOptions.PartitionColumn);
 
             if (indexLineMap != null && indexLineMap.TryGetValue(index.Name, out var lineNonColumnstore))
@@ -4257,10 +4298,44 @@ WHERE s.object_id = @obj
 
     private static IndexScriptingOptions ReadIndexScriptingOptions(SqlConnection connection, int objectId, int indexId)
     {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT i.is_padded,
+       i.fill_factor,
+       i.ignore_dup_key,
+       i.allow_row_locks,
+       i.allow_page_locks
+FROM sys.indexes i
+WHERE i.object_id = @obj AND i.index_id = @idx;";
+        command.Parameters.AddWithValue("@obj", objectId);
+        command.Parameters.AddWithValue("@idx", indexId);
+
+        var padIndex = false;
+        byte fillFactor = 0;
+        var ignoreDupKey = false;
+        var allowRowLocks = true;
+        var allowPageLocks = true;
+        using (var reader = command.ExecuteReader())
+        {
+            if (reader.Read())
+            {
+                padIndex = !reader.IsDBNull(0) && reader.GetBoolean(0);
+                fillFactor = reader.IsDBNull(1) ? (byte)0 : reader.GetByte(1);
+                ignoreDupKey = !reader.IsDBNull(2) && reader.GetBoolean(2);
+                allowRowLocks = reader.IsDBNull(3) || reader.GetBoolean(3);
+                allowPageLocks = reader.IsDBNull(4) || reader.GetBoolean(4);
+            }
+        }
+
         return new IndexScriptingOptions(
             ReadIndexCompression(connection, objectId, indexId),
             ReadIndexPartitionColumn(connection, objectId, indexId),
-            ReadIndexStatisticsIncremental(connection, objectId, indexId));
+            ReadIndexStatisticsIncremental(connection, objectId, indexId),
+            padIndex,
+            fillFactor,
+            ignoreDupKey,
+            allowRowLocks,
+            allowPageLocks);
     }
 
     private static string ReadIndexCompression(SqlConnection connection, int objectId, int indexId)

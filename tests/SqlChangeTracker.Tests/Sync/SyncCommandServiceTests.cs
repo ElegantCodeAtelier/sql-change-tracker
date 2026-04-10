@@ -1486,6 +1486,33 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesPureBlankLineDifferences()
+    {
+        var source =
+            "CREATE TABLE [Accounting].[RateCache]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Rate identifier', 'SCHEMA', 'Accounting', 'TABLE', 'RateCache', 'COLUMN', 'RateId'\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [Accounting].[RateCache]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Rate identifier', 'SCHEMA', 'Accounting', 'TABLE', 'RateCache', 'COLUMN', 'RateId'\n" +
+            "GO\n" +
+            "\n";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_View_SuppressesEquivalentExtendedPropertyNamedArgumentDifferences()
     {
         var source =
@@ -1556,6 +1583,39 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentLegacyTableFormattingDifferences()
+    {
+        var source =
+            "CREATE TABLE [stg].[SampleImport]\n" +
+            "(\n" +
+            "[RowId] [int] NOT NULL,\n" +
+            "[LoadFlag] [bit] NOT NULL CONSTRAINT [DF_SampleImport_LoadFlag] DEFAULT ((1)),\n" +
+            "[BatchCode] [varchar] (100) NULL\n" +
+            ") ON [PRIMARY]\n" +
+            "GO\n" +
+            "ALTER TABLE [stg].[SampleImport] ADD CONSTRAINT [PK_SampleImport] PRIMARY KEY CLUSTERED ([RowId]) WITH (FILLFACTOR = 90) ON [PRIMARY]\n" +
+            "GO\n" +
+            "ALTER TABLE [stg].[SampleImport] SET ( LOCK_ESCALATION = AUTO )\n" +
+            "GO";
+        var target =
+            "CREATE TABLE stg.SampleImport(\n" +
+            "       RowId INT NOT NULL,\n" +
+            "       LoadFlag BIT NOT NULL CONSTRAINT DF_SampleImport_LoadFlag DEFAULT(1),\n" +
+            "       BatchCode VARCHAR(100) NULL\n" +
+            ") ON PRIMARY;\n" +
+            "GO\n" +
+            "ALTER TABLE stg.SampleImport ADD CONSTRAINT PK_SampleImport PRIMARY KEY CLUSTERED (RowId) WITH (FILLFACTOR=90) ON PRIMARY;\n" +
+            "GO\n" +
+            "\n" +
+            "ALTER TABLE stg.SampleImport SET ( LOCK_ESCALATION = AUTO )\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_Table_PreservesPostCreatePackageContentDifferencesWhenOrderAlsoDiffers()
     {
         var source =
@@ -1595,8 +1655,36 @@ public sealed class SyncCommandServiceTests
 
         var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
 
-        Assert.Contains("ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]", diff);
-        Assert.Contains("ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) WITH (DATA_COMPRESSION = PAGE) ON [PRIMARY]", diff);
+        Assert.Contains("add constraint pk_externaldef primary key clustered(externalid) on primary", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("add constraint pk_externaldef primary key clustered(externalid) with(data_compression=page) on primary", diff, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_StoredProcedure_SuppressesLeadingSsmsHeaderComment()
+    {
+        var source =
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE PROCEDURE [stg].[LoadLookup]\n" +
+            "AS\n" +
+            "SELECT 1\n" +
+            "GO";
+        var target =
+            "/****** Object:  StoredProcedure [stg].[LoadLookup]    Script Date: 2017-08-10 00:32:47 ******/\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE PROCEDURE [stg].[LoadLookup]\n" +
+            "AS\n" +
+            "SELECT 1\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("StoredProcedure", "db", "folder", source, target);
+
+        Assert.Empty(diff);
     }
 
     [Fact]

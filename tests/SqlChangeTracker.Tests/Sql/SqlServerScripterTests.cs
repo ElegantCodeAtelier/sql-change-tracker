@@ -246,6 +246,36 @@ public sealed class SqlServerScripterTests
     }
 
     [Fact]
+    public void ScriptTable_EmitsPersistedIndexOptions_WhenConfigured()
+    {
+        var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return;
+        }
+
+        var databaseName = $"SqlctIndexOptions_{Guid.NewGuid():N}";
+        try
+        {
+            var expectedLines = CreateIndexOptionsFixtureDatabase(server, databaseName);
+            var options = new SqlConnectionOptions(server, databaseName, "integrated", null, null, true);
+
+            var scripter = new SqlServerScripter();
+            var script = scripter.ScriptObject(options, new DbObjectInfo("dbo", "SampleStorage", "Table"));
+
+            var primaryKeyLine = FindScriptLineContainingName(script, "PK_SampleStorage");
+            var indexLine = FindScriptLineContainingName(script, "IX_SampleStorage_ItemCode");
+
+            Assert.Equal(expectedLines.PrimaryKeyLine, primaryKeyLine);
+            Assert.Equal(expectedLines.IndexLine, indexLine);
+        }
+        finally
+        {
+            DropDatabase(server, databaseName);
+        }
+    }
+
+    [Fact]
     public void ScriptView_EmitsIndexedViewIndex_ForAdventureWorksView()
     {
         var options = GetAdventureWorksOptions();
@@ -1096,6 +1126,45 @@ INSERT INTO [dbo].[SampleTable] ([KeyAlpha], [KeyBeta], [KeyGamma], [StatusFlag]
         }
 
         return expectedStatisticsLine;
+    }
+
+    private static (string PrimaryKeyLine, string IndexLine) CreateIndexOptionsFixtureDatabase(string server, string databaseName)
+    {
+        using var connection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, "master", "integrated", null, null, true));
+        connection.Open();
+
+        using (var createDatabase = connection.CreateCommand())
+        {
+            createDatabase.CommandText = $"CREATE DATABASE [{databaseName}];";
+            createDatabase.ExecuteNonQuery();
+        }
+
+        using var fixtureConnection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, databaseName, "integrated", null, null, true));
+        fixtureConnection.Open();
+
+        var setupStatements = new[]
+        {
+            """
+CREATE TABLE [dbo].[SampleStorage] (
+    [SampleStorageId] [int] NOT NULL,
+    [ItemCode] [int] NOT NULL,
+    [ItemName] [nvarchar](50) NULL
+);
+""",
+            "ALTER TABLE [dbo].[SampleStorage] ADD CONSTRAINT [PK_SampleStorage] PRIMARY KEY CLUSTERED ([SampleStorageId]) WITH (FILLFACTOR = 90);",
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_SampleStorage_ItemCode] ON [dbo].[SampleStorage] ([ItemCode]) WITH (PAD_INDEX = ON, FILLFACTOR = 80, IGNORE_DUP_KEY = ON, ALLOW_ROW_LOCKS = OFF, ALLOW_PAGE_LOCKS = OFF);"
+        };
+
+        foreach (var statement in setupStatements)
+        {
+            using var command = fixtureConnection.CreateCommand();
+            command.CommandText = statement;
+            command.ExecuteNonQuery();
+        }
+
+        return (
+            "ALTER TABLE [dbo].[SampleStorage] ADD CONSTRAINT [PK_SampleStorage] PRIMARY KEY CLUSTERED ([SampleStorageId]) WITH (FILLFACTOR = 90) ON [PRIMARY]",
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_SampleStorage_ItemCode] ON [dbo].[SampleStorage] ([ItemCode]) WITH (PAD_INDEX = ON, FILLFACTOR = 80, IGNORE_DUP_KEY = ON, ALLOW_ROW_LOCKS = OFF, ALLOW_PAGE_LOCKS = OFF) ON [PRIMARY]");
     }
 
     private static void DropDatabase(string? server, string databaseName)
