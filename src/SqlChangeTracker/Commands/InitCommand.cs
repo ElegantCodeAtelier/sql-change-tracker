@@ -3,6 +3,7 @@ using System.Threading;
 using SqlChangeTracker.Config;
 using SqlChangeTracker.Output;
 using SqlChangeTracker.Sql;
+using SqlChangeTracker.Sync;
 
 namespace SqlChangeTracker.Commands;
 
@@ -85,6 +86,29 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         }
 
         var config = BuildConfig(connectionSetup);
+
+        // Scan for existing Data/*.sql files and propose trackedTables.
+        var proposedTables = ScanDataFileTableNames(projectDir);
+        IReadOnlyList<string>? addedTrackedTables = null;
+        if (proposedTables.Count > 0)
+        {
+            bool addTrackedTables;
+            if (isInteractive)
+            {
+                addTrackedTables = ConfirmAddTrackedTables(proposedTables);
+            }
+            else
+            {
+                addTrackedTables = true;
+            }
+
+            if (addTrackedTables)
+            {
+                config.Data.TrackedTables.AddRange(proposedTables);
+                addedTrackedTables = proposedTables;
+            }
+        }
+
         var configWriter = new SqlctConfigWriter();
         var configPath = SqlctConfigWriter.GetDefaultPath(projectDir);
         var configResult = configWriter.Write(configPath, config);
@@ -98,7 +122,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
 
         var created = projectSeedResult.Created.Concat(configResult.Created).ToList();
         var skipped = projectSeedResult.Skipped.Concat(configResult.Skipped).ToList();
-        var result = new InitResult("init", displayProjectDir, created, skipped, connectionTestResult, nextSteps);
+        var result = new InitResult("init", displayProjectDir, created, skipped, connectionTestResult, nextSteps, addedTrackedTables);
         output.WriteInit(result);
         return ExitCodes.Success;
     }
@@ -284,6 +308,45 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         }
 
         return password.ToString();
+    }
+
+    private static IReadOnlyList<string> ScanDataFileTableNames(string projectDir)
+    {
+        var dataDir = Path.Combine(projectDir, "Data");
+        if (!Directory.Exists(dataDir))
+        {
+            return [];
+        }
+
+        var tables = new List<string>();
+        foreach (var file in Directory.GetFiles(dataDir, "*.sql", SearchOption.TopDirectoryOnly))
+        {
+            var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(file);
+            if (SyncCommandService.TryParseDataFileName(fileNameWithoutExtension, out var schema, out var name))
+            {
+                tables.Add($"{schema}.{name}");
+            }
+        }
+
+        return tables
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool ConfirmAddTrackedTables(IReadOnlyList<string> proposedTables)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Found {proposedTables.Count} existing Data/*.sql file(s). Proposed trackedTables:");
+        foreach (var table in proposedTables)
+        {
+            Console.WriteLine($"  - {table}");
+        }
+        Console.Write("Add these tables to trackedTables in config? [Y/n]: ");
+        var response = Console.ReadLine()?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(response)
+            || string.Equals(response, "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(response, "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ConfirmCurrentDirectory(string displayProjectDir)

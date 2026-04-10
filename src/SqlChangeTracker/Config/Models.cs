@@ -15,7 +15,8 @@ internal sealed record InitResult(
     IReadOnlyList<string> Created,
     IReadOnlyList<string> Skipped,
     InitConnectionTestResult? ConnectionTest = null,
-    IReadOnlyList<string>? NextSteps = null);
+    IReadOnlyList<string>? NextSteps = null,
+    IReadOnlyList<string>? TrackedTables = null);
 
 internal sealed record InitConnectionTestResult(
     bool Success,

@@ -104,6 +104,11 @@ Behavior:
 - Password input during interactive prompts is masked.
 - When connection details are collected, attempt a connection test **before** creating any project files (5-second timeout).
 - If the connection test fails, print troubleshooting hints and prompt `"Proceed anyway? [y/N]:"`. If declined, exit without creating any files. If confirmed, proceed to create the directory structure and write config.
+- After seeding the project structure, scan `Data/*.sql` files in the project directory. Files whose names match the `Schema.Table_Data.sql` convention are parsed as `schema.table` candidates for `data.trackedTables`.
+  - In interactive mode: display the proposed table list and prompt `"Add these tables to trackedTables in config? [Y/n]:"` (default: yes). If confirmed, write the tables to `data.trackedTables` in the config. If declined, leave `data.trackedTables` empty.
+  - In non-interactive mode (with `--project-dir`): auto-include all discovered tables in `data.trackedTables` without a prompt.
+  - Files whose names do not match the naming convention are silently ignored.
+  - If no `Data/*.sql` files are found, `data.trackedTables` remains empty and no prompt is shown.
 - After init completes, print context-aware next-steps: `pull`, `status`, `diff` on success; edit config and run `sqlct config` on failure.
 - Exit codes:
   - `0` success.

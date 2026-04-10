@@ -330,6 +330,194 @@ public sealed class InitAndConfigCommandTests
         }
     }
 
+    [Fact]
+    public void Init_WithProjectDir_WithExistingDataFiles_AutoIncludesTrackedTables()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var dataDir = Path.Combine(projectDir, "Data");
+            Directory.CreateDirectory(dataDir);
+            File.WriteAllText(Path.Combine(dataDir, "dbo.Customer_Data.sql"), "-- data");
+            File.WriteAllText(Path.Combine(dataDir, "Sales.Order_Data.sql"), "-- data");
+
+            var exitCode = Program.Main(["init", "--project-dir", projectDir]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+
+            var configPath = Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName);
+            Assert.True(File.Exists(configPath));
+
+            var config = new SqlctConfigReader().Read(configPath);
+            Assert.True(config.Success);
+            Assert.Contains("dbo.Customer", config.Config!.Data.TrackedTables, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("Sales.Order", config.Config!.Data.TrackedTables, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithProjectDir_WithNoDataFiles_ProducesEmptyTrackedTables()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+
+            var exitCode = Program.Main(["init", "--project-dir", projectDir]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+
+            var configPath = Path.Combine(projectDir, ConfigFileNames.SqlctConfigFileName);
+            Assert.True(File.Exists(configPath));
+
+            var config = new SqlctConfigReader().Read(configPath);
+            Assert.True(config.Success);
+            Assert.Empty(config.Config!.Data.TrackedTables);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithoutProjectDir_WithExistingDataFiles_WhenConfirmed_IncludesTrackedTables()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            var dataDir = Path.Combine(tempDir, "Data");
+            Directory.CreateDirectory(dataDir);
+            File.WriteAllText(Path.Combine(dataDir, "dbo.Customer_Data.sql"), "-- data");
+
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(true, null);
+            try
+            {
+                // "y" confirms directory; empty lines for connection prompts (defaults); "y" confirms tracked tables.
+                Console.SetIn(new StringReader(
+                    "y" + Environment.NewLine +   // confirm directory
+                    Environment.NewLine +          // server → localhost
+                    Environment.NewLine +          // database → empty
+                    Environment.NewLine +          // auth → integrated
+                    Environment.NewLine +          // trust cert → n
+                    "y" + Environment.NewLine));   // confirm tracked tables
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+
+                var configPath = Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName);
+                Assert.True(File.Exists(configPath));
+
+                var config = new SqlctConfigReader().Read(configPath);
+                Assert.True(config.Success);
+                Assert.Contains("dbo.Customer", config.Config!.Data.TrackedTables, StringComparer.OrdinalIgnoreCase);
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithoutProjectDir_WithExistingDataFiles_WhenDeclined_ExcludesTrackedTables()
+    {
+        var tempDir = CreateTempDir();
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var originalInput = Console.In;
+
+        try
+        {
+            Environment.CurrentDirectory = tempDir;
+            var dataDir = Path.Combine(tempDir, "Data");
+            Directory.CreateDirectory(dataDir);
+            File.WriteAllText(Path.Combine(dataDir, "dbo.Customer_Data.sql"), "-- data");
+
+            InitCommand.ConnectionTesterOverride = new StubConnectionTester(true, null);
+            try
+            {
+                // "y" confirms directory; empty lines for connection prompts (defaults); "n" declines tracked tables.
+                Console.SetIn(new StringReader(
+                    "y" + Environment.NewLine +   // confirm directory
+                    Environment.NewLine +          // server → localhost
+                    Environment.NewLine +          // database → empty
+                    Environment.NewLine +          // auth → integrated
+                    Environment.NewLine +          // trust cert → n
+                    "n" + Environment.NewLine));   // decline tracked tables
+
+                var exitCode = Program.Main(["init"]);
+
+                Assert.Equal(ExitCodes.Success, exitCode);
+
+                var configPath = Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName);
+                Assert.True(File.Exists(configPath));
+
+                var config = new SqlctConfigReader().Read(configPath);
+                Assert.True(config.Success);
+                Assert.Empty(config.Config!.Data.TrackedTables);
+            }
+            finally
+            {
+                InitCommand.ConnectionTesterOverride = null;
+            }
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void Init_WithProjectDir_WithMalformedDataFileNames_SkipsInvalidFiles()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var dataDir = Path.Combine(projectDir, "Data");
+            Directory.CreateDirectory(dataDir);
+            // Valid file
+            File.WriteAllText(Path.Combine(dataDir, "dbo.Customer_Data.sql"), "-- data");
+            // Malformed files (no _Data suffix or no schema separator)
+            File.WriteAllText(Path.Combine(dataDir, "NotADataFile.sql"), "-- not data");
+            File.WriteAllText(Path.Combine(dataDir, "missingschema_Data.sql"), "-- no dot");
+
+            var exitCode = Program.Main(["init", "--project-dir", projectDir]);
+
+            Assert.Equal(ExitCodes.Success, exitCode);
+
+            var config = new SqlctConfigReader().Read(SqlctConfigWriter.GetDefaultPath(projectDir));
+            Assert.True(config.Success);
+            Assert.Single(config.Config!.Data.TrackedTables);
+            Assert.Contains("dbo.Customer", config.Config!.Data.TrackedTables, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
     private static string CreateTempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));

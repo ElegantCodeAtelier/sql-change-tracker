@@ -84,7 +84,8 @@ internal sealed class OutputFormatter
                 connectionTest = result.ConnectionTest != null
                     ? new { result.ConnectionTest.Success, result.ConnectionTest.ErrorMessage }
                     : (object?)null,
-                nextSteps = result.NextSteps
+                nextSteps = result.NextSteps,
+                trackedTables = result.TrackedTables
             };
             WriteJson(payload);
             return;
@@ -125,6 +126,15 @@ internal sealed class OutputFormatter
             if (!result.ConnectionTest.Success && !string.IsNullOrWhiteSpace(result.ConnectionTest.ErrorMessage))
             {
                 Console.WriteLine($"  {result.ConnectionTest.ErrorMessage}");
+            }
+        }
+
+        if (result.TrackedTables?.Count > 0)
+        {
+            Console.WriteLine("Tracked tables:");
+            foreach (var table in result.TrackedTables)
+            {
+                Console.WriteLine($"  {table}");
             }
         }
 

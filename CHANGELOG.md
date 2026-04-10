@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Preserve compatible computed-column arithmetic grouping parentheses during table compatibility reconciliation.
 
 ### Added
+- `sqlct init` now scans the target project directory for existing `Data/*.sql` files, extracts table names from the file names, and proposes a `trackedTables` list: in interactive mode the user is prompted to confirm before the tables are written to config; in non-interactive mode (with `--project-dir`) the tables are added automatically.
 - Discover and script SQL CLR scalar functions as `Function` objects.
 - Discover and script SQL CLR table-valued functions as `Function` objects.
 - Discover and script SQL CLR stored procedures as `StoredProcedure` objects.
