@@ -52,6 +52,14 @@ Current runtime scope for `status`, `diff`, and `pull` covers:
 - `FullTextStoplist`
 - `SearchPropertyList`
 
+Schema scripting covers user-defined schemas and also emits built-in `dbo` when it has explicit schema permissions or schema-level extended properties; `dbo` is scripted without `CREATE SCHEMA`.
+
+Stored procedure scripting covers T-SQL procedures and SQL CLR stored procedures (`sys.objects.type = 'P'` and `PC`).
+
+Table scripting also includes standalone user-created table statistics (`CREATE STATISTICS`) as post-create table statements. Current statistics option coverage includes effective sampling (`FULLSCAN` or `SAMPLE <n> PERCENT`), `PERSIST_SAMPLE_PERCENT = ON`, `NORECOMPUTE`, `INCREMENTAL=ON`, and `AUTO_DROP = ON|OFF` when the source server exposes the required metadata. `MAXDOP`, `STATS_STREAM`, `ROWCOUNT`, and `PAGECOUNT` remain deferred.
+
+Function scripting covers T-SQL scalar/table functions and SQL CLR scalar/table-valued functions (`sys.objects.type = 'FS'` and `FT`), including `EXTERNAL NAME` assembly bindings.
+
 When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 
 `--object` selectors support:

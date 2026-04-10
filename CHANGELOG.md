@@ -8,10 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Script schema-level permissions after schema creation and before schema extended properties.
+- Match legacy non-canonical schema-less object filenames to the scripted object name when the canonical name requires percent escaping.
+- Allow bare `--object` selectors with dotted schema-less names (for example assemblies) to resolve correctly during targeted `status`, `diff`, and `pull`.
+- Treat equivalent queue option formatting, explicit default `ON [PRIMARY]`, and disabled default activation as compatible during comparison.
+- Treat equivalent role-membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` as compatible during comparison.
+- Treat legacy Service Broker message-type validation synonyms and equivalent contract/service body formatting and item ordering as compatible during comparison.
+- Treat equivalent `TableData` scripts as compatible during comparison when the normalized `INSERT` statements differ only by row ordering within the same contiguous data block.
+- Treat equivalent `Table` scripts as compatible during comparison when post-create statement packages differ only by ordering after the base `CREATE TABLE` block.
+- Treat omitted `TEXTIMAGE_ON` on `Table` scripts as compatible during comparison only when DB metadata shows the table LOB data space matches the current default data space.
+- Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, or named-vs-positional argument forms within the same contiguous block.
+- Treat redundant empty or otherwise no-op `GO` batches as compatible during comparison.
+- Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
+- Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes, including inside multi-line `INSERT ... VALUES (...)` statements.
+- Whitespace-only separator lines now compare as compatible with empty blank lines during `status` and `diff`.
+- Preserve reference banner-comment formatting and module-declaration identifier quoting during programmable-object compatibility reconciliation.
+- Preserve compatible computed-column arithmetic grouping parentheses during table compatibility reconciliation.
 
 ### Added
 - `sqlct init` now scans the target project directory for existing `Data/*.sql` files, extracts table names from the file names, and proposes a `trackedTables` list: in interactive mode the user is prompted to confirm before the tables are written to config; in non-interactive mode (with `--project-dir`) the tables are added automatically.
+- Discover and script SQL CLR scalar functions as `Function` objects.
+- Discover and script SQL CLR table-valued functions as `Function` objects.
+- Discover and script SQL CLR stored procedures as `StoredProcedure` objects.
+- Discover and script built-in `dbo` as a `Schema` object when it has explicit schema permissions or schema-level extended properties, without emitting `CREATE SCHEMA`.
 - `sqlct init` now prompts interactively for connection details (server, database, auth, credentials, trust-server-certificate) when run without flags in a new project directory (#36).
 - Connection flags (`--server`, `--database`, `--auth`, `--user`, `--password`, `--trust-server-certificate`) for non-interactive/scripted `init` use (#36).
 - `--skip-connection-test` flag for `sqlct init` to bypass the connection test step (#36).
@@ -23,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - SQL Authentication support: set `database.auth` to `"sql"` and supply `database.user` (and optionally `database.password`) in `sqlct.config.json` to connect using SQL Server Authentication (#30).
 - Support active object type `Assembly`, with deterministic scripting to `Assemblies/*.sql` for user-defined SQL Server assemblies.
 - Support additional active object types: `TableType`, `XmlSchemaCollection`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, and `SearchPropertyList`.
+- Script standalone user-created table statistics as deterministic post-create table statements, including filtered, effective sampling, persisted-sample, incremental, and auto-drop metadata when available.
 - Add `--object <pattern>` to `sqlct data track` and `sqlct data untrack` as a flag alias for the positional pattern argument.
 - Add `--filter <regex>` to `sqlct data track` and `sqlct data untrack` for regex-based table matching; matched case-insensitively against the full `schema.table` display name. Exactly one of the positional pattern, `--object`, or `--filter` must be provided; combining any two returns exit code 2.
 - `sqlct diff` now uses a chunked diff format: only changed segments and configurable surrounding context lines are shown instead of the full file. Use `--context <N>` to control the number of context lines (default: 3) (#39).

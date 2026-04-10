@@ -56,6 +56,7 @@ Defines the baseline `sqlct` schema-folder structure and naming rules.
 - Data tracking uses `Data/` for scripts derived from tables explicitly listed in `data.trackedTables`.
 - Schema-less objects omit the schema prefix (e.g., `Assemblies/AppClr.sql`, `Security/Schemas/AppSecurity.sql`, `Security/Roles/AppReader.sql`, `Storage/Partition Functions/FiscalYear_PF.sql`, `Storage/Full Text Catalogs/DocumentCatalog.sql`, `Storage/Search Property Lists/DocumentProperties.sql`, `Service Broker/Contracts/%2F%2FApp%2FMessaging%2FContract.sql`, `Service Broker/Services/AppInitiatorService.sql`, `Service Broker/Event Notifications/NotifySchemaChanges.sql`, `Service Broker/Remote Service Bindings/AppRemoteBinding.sql`).
 - Replace invalid file name characters in `Schema` or `Object` with percent-encoded hex (e.g., `:` -> `%3A`, `/` -> `%2F`).
+- Folder readers MAY recover object identity for legacy schema-less files whose names are not canonical percent-encoded paths by reading the top-level `CREATE` statement when the scripted object name contains characters that require escaping; writers MUST continue to use canonical percent-encoded file names.
 - Folder names and casing must remain stable within a project.
 - Line endings must match existing output (typically CRLF); do not force-normalize.
 - Object matching is case-insensitive.

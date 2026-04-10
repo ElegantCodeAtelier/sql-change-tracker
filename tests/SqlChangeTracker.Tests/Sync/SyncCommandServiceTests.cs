@@ -39,8 +39,57 @@ public sealed class SyncCommandServiceTests
     }
 
     [Theory]
+    [InlineData(
+        "MessageType",
+        "__App_Messaging_Request",
+        "CREATE MESSAGE TYPE [//App/Messaging/Request]\r\nVALIDATION = NONE\r\nGO",
+        "__App_Messaging_Request",
+        true,
+        "//App/Messaging/Request")]
+    [InlineData(
+        "Contract",
+        "__App_Messaging_Contract",
+        "CREATE CONTRACT [//App/Messaging/Contract]\r\n(\r\n)\r\nGO",
+        "__App_Messaging_Contract",
+        true,
+        "//App/Messaging/Contract")]
+    [InlineData(
+        "MessageType",
+        "%2F%2FApp%2FMessaging%2FRequest",
+        "CREATE MESSAGE TYPE [//App/Messaging/Request]\r\nVALIDATION = NONE\r\nGO",
+        "//App/Messaging/Request",
+        false,
+        "")]
+    [InlineData(
+        "Role",
+        "AppReader",
+        "CREATE ROLE [OtherRole]\r\nGO",
+        "AppReader",
+        false,
+        "")]
+    public void TryResolveSchemaLessFolderIdentityFromScript_UsesDefinitionOnlyForEscapedLegacyNames(
+        string objectType,
+        string fileName,
+        string script,
+        string parsedFileName,
+        bool expected,
+        string expectedName)
+    {
+        var success = SyncCommandService.TryResolveSchemaLessFolderIdentityFromScript(
+            objectType,
+            fileName,
+            script,
+            parsedFileName,
+            out var name);
+
+        Assert.Equal(expected, success);
+        Assert.Equal(expectedName, name);
+    }
+
+    [Theory]
     [InlineData("dbo.Customer", null, "dbo", "Customer", false)]
     [InlineData("ServiceUser", null, "", "ServiceUser", true)]
+    [InlineData("App.Core.Assembly", null, "", "App.Core.Assembly", true)]
     [InlineData("Role:AppReader", "Role", "", "AppReader", true)]
     [InlineData("Assembly:AppClr", "Assembly", "", "AppClr", true)]
     [InlineData("SearchPropertyList:DocumentProperties", "SearchPropertyList", "", "DocumentProperties", true)]
@@ -62,6 +111,56 @@ public sealed class SyncCommandServiceTests
         Assert.Equal(expectedSchema, result.Payload.Schema);
         Assert.Equal(expectedName, result.Payload.Name);
         Assert.Equal(expectedSchemaLess, result.Payload.IsSchemaLess);
+    }
+
+    [Fact]
+    public void RunStatus_MatchesLegacySchemaLessFileNameToScriptObjectName()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var script = "CREATE MESSAGE TYPE [//App/Messaging/Request]\r\nVALIDATION = NONE\r\nGO\r\n";
+            CreateFile(projectDir, Path.Combine("Service Broker", "Message Types", "__App_Messaging_Request.sql"), script);
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects = [new DbObjectInfo(string.Empty, "//App/Messaging/Request", "MessageType")]
+            };
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) => script
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Empty(result.Payload!.Objects);
+            Assert.Equal(0, result.Payload.Summary.Schema.Added);
+            Assert.Equal(0, result.Payload.Summary.Schema.Deleted);
+            Assert.Equal(0, result.Payload.Summary.Schema.Changed);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
     }
 
     [Theory]
@@ -757,6 +856,15 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_TreatsWhitespaceOnlyLinesAsBlankLines()
+    {
+        var blank = SyncCommandService.NormalizeForComparison("SET ANSI_NULLS ON\nGO\n\n/* comment */");
+        var whitespaceOnly = SyncCommandService.NormalizeForComparison("SET ANSI_NULLS ON\nGO\n   \t\n/* comment */");
+
+        Assert.Equal(blank, whitespaceOnly);
+    }
+
+    [Fact]
     public void NormalizeForComparison_NormalizesTrailingSemicolonsOnInsertStatements()
     {
         // Trailing semicolons on INSERT statements are normalized away so that scripts emitted
@@ -780,6 +888,726 @@ public sealed class SyncCommandServiceTests
         var diff = SyncCommandService.BuildUnifiedDiff("db", "folder", source, target);
 
         Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_SuppressesWhitespaceOnlyBlankLineDifferences()
+    {
+        var source = "SET ANSI_NULLS ON\nGO\n\n/* comment */\nCREATE PROCEDURE [dbo].[Sample]\nAS\nSELECT 1\nGO";
+        var target = "SET ANSI_NULLS ON\nGO\n \t \n/* comment */\nCREATE PROCEDURE [dbo].[Sample]\nAS\nSELECT 1\nGO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("StoredProcedure", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Queue_SuppressesDefaultPrimaryAndDisabledActivationDifferences()
+    {
+        var source =
+            "CREATE QUEUE [dbo].[AppInboxQueue]\n" +
+            "WITH STATUS = ON, RETENTION = OFF, POISON_MESSAGE_HANDLING (STATUS = ON), ACTIVATION (STATUS = OFF, EXECUTE AS 'dbo')\n" +
+            "GO";
+        var target =
+            "CREATE QUEUE [dbo].[AppInboxQueue]\n" +
+            "WITH STATUS=ON,\n" +
+            "RETENTION=OFF,\n" +
+            "POISON_MESSAGE_HANDLING (STATUS=ON)\n" +
+            "ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Queue", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Queue_SuppressesEquivalentMultilineActivationFormatting()
+    {
+        var source =
+            "CREATE QUEUE [dbo].[AppWorkQueue]\n" +
+            "WITH STATUS = ON, RETENTION = OFF, POISON_MESSAGE_HANDLING (STATUS = ON), ACTIVATION (STATUS = ON, PROCEDURE_NAME = [dbo].[ProcessAppMessages], MAX_QUEUE_READERS = 1, EXECUTE AS OWNER)\n" +
+            "GO";
+        var target =
+            "CREATE QUEUE [dbo].[AppWorkQueue]\n" +
+            "WITH STATUS=ON,\n" +
+            "RETENTION=OFF,\n" +
+            "POISON_MESSAGE_HANDLING (STATUS=ON),\n" +
+            "ACTIVATION (\n" +
+            "STATUS=ON,\n" +
+            "PROCEDURE_NAME=[dbo].[ProcessAppMessages],\n" +
+            "MAX_QUEUE_READERS=1,\n" +
+            "EXECUTE AS OWNER\n" +
+            ")\n" +
+            "ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Queue", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Role_SuppressesLegacyAndAlterRoleMembershipSyntaxDifferences_ForFixedRole()
+    {
+        var source =
+            "EXEC sp_addrolemember N'db_datareader', N'ReadOnlyUser'\n" +
+            "GO\n" +
+            "EXEC sp_addrolemember N'db_datareader', N'ReportUser'\n" +
+            "GO";
+        var target =
+            "ALTER ROLE [db_datareader] ADD MEMBER [ReadOnlyUser]\n" +
+            "GO\n" +
+            "ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Role_SuppressesLegacyAndAlterRoleMembershipSyntaxDifferences_ForUserDefinedRole()
+    {
+        var source =
+            "CREATE ROLE [ReportingRole]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "GO\n" +
+            "EXEC sp_addrolemember N'ReportingRole', N'ReportUser'\n" +
+            "GO";
+        var target =
+            "CREATE ROLE [ReportingRole]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "GO\n" +
+            "ALTER ROLE [ReportingRole] ADD MEMBER [ReportUser]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Role_PreservesMembershipTargetDifferences()
+    {
+        var source =
+            "EXEC sp_addrolemember N'db_datareader', N'ReadOnlyUser'\n" +
+            "GO";
+        var target =
+            "ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER [ReadOnlyUser]", diff);
+        Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_MessageType_SuppressesLegacyValidationXmlSynonymAndSpacing()
+    {
+        var source =
+            "CREATE MESSAGE TYPE [//App/Reply]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "VALIDATION = XML\n" +
+            "GO";
+        var target =
+            "CREATE MESSAGE TYPE [//App/Reply]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "VALIDATION=WELL_FORMED_XML\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("MessageType", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Contract_SuppressesEquivalentFormattingAndMessageUsageOrderDifferences()
+    {
+        var source =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "(\n" +
+            "[//App/Reply] SENT BY TARGET,\n" +
+            "[//App/Request] SENT BY INITIATOR\n" +
+            ")\n" +
+            "GO";
+        var target =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo] (\n" +
+            "[//App/Request] SENT BY INITIATOR,\n" +
+            "[//App/Reply] SENT BY TARGET\n" +
+            ")\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Contract", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Contract_PreservesSentBySemanticDifferences()
+    {
+        var source =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "(\n" +
+            "[//App/Reply] SENT BY TARGET,\n" +
+            "[//App/Request] SENT BY INITIATOR\n" +
+            ")\n" +
+            "GO";
+        var target =
+            "CREATE CONTRACT [//App/Contract]\n" +
+            "AUTHORIZATION [dbo] (\n" +
+            "[//App/Request] SENT BY ANY,\n" +
+            "[//App/Reply] SENT BY TARGET\n" +
+            ")\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Contract", "db", "folder", source, target);
+
+        Assert.Contains("[//App/Request] SENT BY INITIATOR", diff);
+        Assert.Contains("[//App/Request] SENT BY ANY", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Service_SuppressesEquivalentContractListFormatting()
+    {
+        var source =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue] ([//App/Contract])\n" +
+            "GO";
+        var target =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue]\n" +
+            "(\n" +
+            "[//App/Contract]\n" +
+            ")\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Service", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Service_PreservesContractMembershipDifferences()
+    {
+        var source =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue] ([//App/Contract])\n" +
+            "GO";
+        var target =
+            "CREATE SERVICE [AppTargetService]\n" +
+            "AUTHORIZATION [dbo]\n" +
+            "ON QUEUE [dbo].[AppTargetQueue]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Service", "db", "folder", source, target);
+
+        Assert.Contains("ON QUEUE [dbo].[AppTargetQueue]([//App/Contract])", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_SuppressesClrTableValuedFunctionNullOnlyDifferences()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int],\n" +
+            "[Value] [nvarchar] (MAX)\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int] NULL,\n" +
+            "[Value] [nvarchar] (MAX) NULL\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_SuppressesClrTableValuedFunctionNullAndCloseParenLineDifferences()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int],\n" +
+            "[Value] [nvarchar] (MAX)\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[Ordinal] [int] NULL,\n" +
+            "[Value] [nvarchar] (MAX) NULL)\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_ReportsOnlyClrTableValuedFunctionExternalNameDifference_WhenLegacyNullCloseParenAlsoDiffers()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[RandomVector] (@length [int])\n" +
+            "RETURNS TABLE (\n" +
+            "[RndValue] [int]\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[RandomVector]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[RandomVector] (@length [int])\n" +
+            "RETURNS TABLE (\n" +
+            "[RndValue] [int] NULL)\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClrLegacy].[App.Database.TabularFunctions].[RandomVector]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Contains("EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[RandomVector]", diff);
+        Assert.Contains("EXTERNAL NAME [AppClrLegacy].[App.Database.TabularFunctions].[RandomVector]", diff);
+        Assert.DoesNotContain("[RndValue] [int] NULL)", diff);
+    }
+
+    [Fact]
+    public void NormalizeForComparison_TableData_NormalizesLegacyIdentityInsertAndUnicodeLiteralPrefixes()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[Customer] ON;\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, 'A', 'Alpha');\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF;",
+            SyncCommandService.TableDataObjectType);
+        var legacy = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[Customer] ON\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, N'A', N'Alpha')\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, legacy);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesLegacyIdentityInsertAndUnicodeLiteralPrefixDifferences()
+    {
+        var source =
+            "SET IDENTITY_INSERT [dbo].[Customer] ON;\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, 'A', 'Alpha');\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF;";
+        var target =
+            "SET IDENTITY_INSERT [dbo].[Customer] ON\n" +
+            "INSERT INTO [dbo].[Customer] ([CustomerID], [Code], [Description]) VALUES (1, N'A', N'Alpha')\n" +
+            "SET IDENTITY_INSERT [dbo].[Customer] OFF";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void NormalizeForComparison_TableData_NormalizesLegacyPrefixesInMultilineInsertValues()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', 'ScoreApl', 'EmploymentBasis', 0);",
+            SyncCommandService.TableDataObjectType);
+        var legacy = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', N'ScoreApl', N'EmploymentBasis', 0)",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, legacy);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesLegacyPrefixesInMultilineInsertValues()
+    {
+        var source =
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', 'ScoreApl', 'EmploymentBasis', 0);";
+        var target =
+            "INSERT INTO [dbo].[Variable] ([Description], [GroupCode], [Name], [Flag]) VALUES ('Line 1\n" +
+            "Line 2\n" +
+            "0 - empty', N'ScoreApl', N'EmploymentBasis', 0)";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void NormalizeForComparison_TableData_SortsEquivalentInsertStatementsWithinRun()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON;\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, 'C');\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF;",
+            SyncCommandService.TableDataObjectType);
+        var reordered = SyncCommandService.NormalizeForComparison(
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, N'C')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, N'A')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, N'B')\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, reordered);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesEquivalentInsertOrderDifferences()
+    {
+        var source =
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON;\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, 'C');\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF;";
+        var target =
+            "SET IDENTITY_INSERT [dbo].[LookupValue] ON\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (3, 'C')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B')\n" +
+            "SET IDENTITY_INSERT [dbo].[LookupValue] OFF";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_PreservesValueDifferencesWhenInsertOrderAlsoDiffers()
+    {
+        var source =
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'A');\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B');";
+        var target =
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (2, 'B')\n" +
+            "INSERT INTO [dbo].[LookupValue] ([LookupValueID], [LookupCode]) VALUES (1, 'Z')";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Contains("VALUES (1, 'A')", diff);
+        Assert.Contains("VALUES (1, 'Z')", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentExtendedPropertyOrderAndSpacingDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'System details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'UserAgentInfo'\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[SessionLog] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details' , 'SCHEMA', N'dbo', 'TABLE', N'SessionLog','COLUMN', N'UserAgentInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'System details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[SessionLog] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PreservesExtendedPropertyValueDifferencesWhenOrderAlsoDiffers()
+    {
+        var source =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'System details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'UserAgentInfo'\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Client software details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'UserAgentInfo'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Updated system details', 'SCHEMA', N'dbo', 'TABLE', N'SessionLog', 'COLUMN', N'SystemInfo'\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains("N'System details'", diff);
+        Assert.Contains("N'Updated system details'", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesRedundantEmptyGoBatchDifferences()
+    {
+        var source =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Row versioning column', 'SCHEMA', 'Accounting', 'TABLE', 'ExchangeRate', 'COLUMN', 'RateId'\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET ANSI_PADDING ON\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Row versioning column', 'SCHEMA', 'Accounting', 'TABLE', 'ExchangeRate', 'COLUMN', 'RateId'\n" +
+            "GO\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET ANSI_PADDING ON\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesRedundantSemicolonOnlyGoBatchDifferences()
+    {
+        var source =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "ALTER TABLE [Accounting].[ExchangeRate] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            ";\n" +
+            "GO\n" +
+            "ALTER TABLE [Accounting].[ExchangeRate] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_View_SuppressesEquivalentExtendedPropertyNamedArgumentDifferences()
+    {
+        var source =
+            "CREATE VIEW [Reporting].[ExchangeRateView]\n" +
+            "AS\n" +
+            "SELECT 1 AS [Rate]\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty N'MS_Description', N'Lightweight exchange-rate view', 'SCHEMA', N'Reporting', 'VIEW', N'ExchangeRateView', NULL, NULL\n" +
+            "GO";
+        var target =
+            "CREATE VIEW [Reporting].[ExchangeRateView]\n" +
+            "AS\n" +
+            "SELECT 1 AS [Rate]\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty @name=N'MS_Description', @value=N'Lightweight exchange-rate view', @level0type=N'SCHEMA', @level0name=N'Reporting', @level1type=N'VIEW', @level1name=N'ExchangeRateView'\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("View", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentPostCreatePackageOrderDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO\n" +
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_ExternalDef_Key] ON [dbo].[ExternalDef] ([ExternalId]) ON [PRIMARY]\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]\n" +
+            "GO\n" +
+            "CREATE UNIQUE NONCLUSTERED INDEX [IX_ExternalDef_Key] ON [dbo].[ExternalDef] ([ExternalId]) ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PreservesPostCreatePackageContentDifferencesWhenOrderAlsoDiffers()
+    {
+        var source =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[ExternalDef]\n" +
+            "(\n" +
+            "[ExternalId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "SET ANSI_NULLS ON\n" +
+            "GO\n" +
+            "SET QUOTED_IDENTIFIER ON\n" +
+            "GO\n" +
+            "CREATE TRIGGER [dbo].[TR_ExternalDef_Audit] ON [dbo].[ExternalDef] AFTER INSERT AS\n" +
+            "BEGIN\n" +
+            "SELECT 1\n" +
+            "END\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[ExternalDef] ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) WITH (DATA_COMPRESSION = PAGE) ON [PRIMARY]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains("ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) ON [PRIMARY]", diff);
+        Assert.Contains("ADD CONSTRAINT [PK_ExternalDef] PRIMARY KEY CLUSTERED ([ExternalId]) WITH (DATA_COMPRESSION = PAGE) ON [PRIMARY]", diff);
+    }
+
+    [Fact]
+    public void NormalizeForComparison_DoesNotNormalizeUnicodeLiteralPrefixesOutsideTableData()
+    {
+        var plain = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Name]) VALUES ('Alpha')");
+        var prefixed = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[T] ([Name]) VALUES (N'Alpha')");
+
+        Assert.NotEqual(plain, prefixed);
     }
 
     [Fact]
@@ -1000,6 +1828,55 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunPull_WithDottedSchemaLessObjectSelector_DeletesMatchingAssemblyFile()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            var assemblyPath = CreateFile(
+                projectDir,
+                Path.Combine("Assemblies", "App.Core.Legacy.sql"),
+                "CREATE ASSEMBLY [App.Core.Legacy]\r\nFROM 0x00\r\nWITH PERMISSION_SET = SAFE\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector();
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                new TrackingScripter(),
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunPull(projectDir, objectSelector: "App.Core.Legacy");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.False(introspector.ListObjectsCalled);
+            Assert.True(introspector.ListMatchingObjectsCalled);
+            Assert.Equal(string.Empty, introspector.LastRequestedSchema);
+            Assert.Equal("App.Core.Legacy", introspector.LastRequestedName);
+            Assert.Equal(1, result.Payload!.Summary.Schema.Deleted);
+            Assert.Single(result.Payload.Objects);
+            Assert.Equal("deleted", result.Payload.Objects[0].Change);
+            Assert.Equal("App.Core.Legacy", result.Payload.Objects[0].Name);
+            Assert.False(File.Exists(assemblyPath));
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunDiff_WithFilterPattern_LimitsDbScriptingToMatchingObjects()
     {
         var tempDir = CreateTempDir();
@@ -1042,6 +1919,112 @@ public sealed class SyncCommandServiceTests
             Assert.True(introspector.ListObjectsCalled);
             Assert.False(introspector.ListMatchingObjectsCalled);
             Assert.Equal(new[] { "Table:dbo.Customer" }, scripter.ScriptedObjects);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunDiff_Table_SuppressesCompatibleOmittedTextImageOnDifference_WhenDbMetadataAllowsOmission()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(
+                projectDir,
+                Path.Combine("Tables", "dbo.DocumentStore.sql"),
+                "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY]\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("dbo", "DocumentStore", "Table")]
+            };
+            introspector.CompatibleOmittedTextImageOnDataSpaceNames["dbo.DocumentStore"] = "PRIMARY";
+
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) =>
+                    "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]\r\nGO\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "dbo.DocumentStore");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Payload!.Diff);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Table_PreservesTextImageOnDifference_WhenDbMetadataDoesNotAllowOmission()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(
+                projectDir,
+                Path.Combine("Tables", "dbo.DocumentStore.sql"),
+                "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY]\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects = [new DbObjectInfo("dbo", "DocumentStore", "Table")]
+            };
+
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) =>
+                    "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]\r\nGO\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.DiffExists, result.ExitCode);
+            Assert.Equal(1, result.Payload!.Summary.Schema.Changed);
+            Assert.Single(result.Payload.Objects);
+            Assert.Equal("changed", result.Payload.Objects[0].Change);
+            Assert.Equal("dbo.DocumentStore", result.Payload.Objects[0].Name);
         }
         finally
         {
@@ -1282,6 +2265,9 @@ public sealed class SyncCommandServiceTests
 
         public IReadOnlyList<DbObjectInfo> MatchingObjects { get; init; } = [];
 
+        public Dictionary<string, string?> CompatibleOmittedTextImageOnDataSpaceNames { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public override IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
         {
             ListObjectsCalled = true;
@@ -1303,6 +2289,14 @@ public sealed class SyncCommandServiceTests
             LastRequestedName = name;
             return MatchingObjects;
         }
+
+        public override string? GetTableCompatibleOmittedTextImageOnDataSpaceName(
+            SqlConnectionOptions options,
+            string schema,
+            string name)
+            => CompatibleOmittedTextImageOnDataSpaceNames.TryGetValue($"{schema}.{name}", out var value)
+                ? value
+                : null;
     }
 
     private sealed class TrackingScripter : SqlServerScripter

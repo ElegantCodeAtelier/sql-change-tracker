@@ -18,11 +18,18 @@ internal class SqlServerScripter
     private static readonly Regex ComputedColumnLineRegex = new(
         @"^\s*\[[^\]]+\]\s+AS\s+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ModuleDeclarationLineRegex = new(
+        @"^(?<prefix>CREATE\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ClrTableValuedFunctionReturnColumnNullRegex = new(
+        @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*,?\s*)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private enum TablePostCreateStatementKind
     {
         KeyConstraint,
         NonConstraintIndex,
+        UserCreatedStatistic,
         XmlIndex
     }
 
@@ -40,6 +47,42 @@ internal class SqlServerScripter
         bool IsVisible,
         IReadOnlyList<AssemblyBinaryFile> Files);
 
+    private sealed record ClrFunctionMetadata(
+        string AssemblyName,
+        string AssemblyClass,
+        string AssemblyMethod,
+        int? ExecuteAsPrincipalId,
+        string ExecuteAsPrincipalName);
+
+    private sealed record ClrFunctionParameter(
+        int ParameterId,
+        string Name,
+        string TypeName,
+        string TypeSchema,
+        bool IsUserDefined,
+        short MaxLength,
+        byte Precision,
+        byte Scale,
+        bool IsOutput,
+        bool IsReadOnly,
+        bool HasDefaultValue,
+        object? DefaultValue);
+
+    private sealed record ClrTableValuedFunctionColumn(
+        int ColumnId,
+        string Name,
+        string TypeName,
+        string TypeSchema,
+        bool IsUserDefined,
+        short MaxLength,
+        byte Precision,
+        byte Scale);
+
+    private sealed record ClrTableValuedFunctionOrderColumn(
+        int OrderColumnId,
+        string Name,
+        bool IsDescending);
+
     private readonly record struct TableStorageInfo(
         string? DataSpace,
         string? PartitionColumn,
@@ -49,6 +92,13 @@ internal class SqlServerScripter
         string Compression,
         string? PartitionColumn,
         bool StatisticsIncremental);
+
+    private readonly record struct StatisticsScriptingOptions(
+        string? SamplingClause,
+        bool PersistSamplePercent,
+        bool NoRecompute,
+        bool Incremental,
+        bool? AutoDrop);
 
     private sealed record TableDataColumn(
         int ColumnId,
@@ -524,27 +574,57 @@ ORDER BY af.file_id;";
         bool insertBlankLineAfterSet,
         string[]? referenceLines)
     {
-        var fullName = $"[{obj.Schema}].[{obj.Name}]";
+        var fullName = $"{QuoteIdentifier(obj.Schema)}.{QuoteIdentifier(obj.Name)}";
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT m.definition, m.uses_ansi_nulls, m.uses_quoted_identifier
+SELECT o.object_id,
+       o.type,
+       m.definition,
+       m.uses_ansi_nulls,
+       m.uses_quoted_identifier,
+       OBJECTPROPERTY(o.object_id, 'ExecIsAnsiNullsOn') AS ansi_nulls_property,
+       OBJECTPROPERTY(o.object_id, 'ExecIsQuotedIdentOn') AS quoted_identifier_property
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
-JOIN sys.sql_modules m ON m.object_id = o.object_id
+LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id
 WHERE s.name = @schema AND o.name = @name";
         command.Parameters.AddWithValue("@schema", obj.Schema);
         command.Parameters.AddWithValue("@name", obj.Name);
 
+        int objectId;
+        string objectType;
+        string definitionText;
+        bool ansiNulls;
+        bool quotedIdentifier;
         using var reader = command.ExecuteReader();
         if (!reader.Read())
         {
-            throw new InvalidOperationException($"Object not found: [{obj.Schema}].[{obj.Name}].");
+            throw new InvalidOperationException($"Object not found: {fullName}.");
         }
 
-        var definitionText = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-        var ansiNulls = reader.IsDBNull(1) || reader.GetBoolean(1);
-        var quotedIdentifier = reader.IsDBNull(2) || reader.GetBoolean(2);
+        objectId = reader.GetInt32(0);
+        objectType = reader.GetString(1);
+        definitionText = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+        var isClrStoredProcedure = string.Equals(objectType, "PC", StringComparison.OrdinalIgnoreCase);
+        var isClrScalarFunction = string.Equals(objectType, "FS", StringComparison.OrdinalIgnoreCase);
+        var isClrTableValuedFunction = string.Equals(objectType, "FT", StringComparison.OrdinalIgnoreCase);
+        var isClrModule = isClrStoredProcedure || isClrScalarFunction || isClrTableValuedFunction;
+        ansiNulls = ReadModuleSetOption(reader, moduleColumn: 3, propertyColumn: 5, defaultValue: !isClrModule);
+        quotedIdentifier = ReadModuleSetOption(reader, moduleColumn: 4, propertyColumn: 6, defaultValue: !isClrModule);
         reader.Close();
+
+        if (isClrStoredProcedure && string.IsNullOrWhiteSpace(definitionText))
+        {
+            definitionText = BuildClrStoredProcedureDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
+        else if (isClrScalarFunction && string.IsNullOrWhiteSpace(definitionText))
+        {
+            definitionText = BuildClrScalarFunctionDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
+        else if (isClrTableValuedFunction && string.IsNullOrWhiteSpace(definitionText))
+        {
+            definitionText = BuildClrTableValuedFunctionDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
 
         var (lines, hasGoAfterDefinition) = BuildProgrammableObjectLines(
             definitionText,
@@ -570,6 +650,361 @@ WHERE s.name = @schema AND o.name = @name";
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static bool ReadModuleSetOption(SqlDataReader reader, int moduleColumn, int propertyColumn, bool defaultValue)
+    {
+        if (!reader.IsDBNull(moduleColumn))
+        {
+            return reader.GetBoolean(moduleColumn);
+        }
+
+        if (!reader.IsDBNull(propertyColumn))
+        {
+            return Convert.ToInt32(reader.GetValue(propertyColumn), CultureInfo.InvariantCulture) != 0;
+        }
+
+        return defaultValue;
+    }
+
+    private static ClrFunctionMetadata ReadClrFunctionMetadata(SqlConnection connection, int objectId, string schema, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT a.name AS assembly_name,
+       am.assembly_class,
+       am.assembly_method,
+       am.execute_as_principal_id,
+       dp.name AS execute_as_name
+FROM sys.assembly_modules am
+JOIN sys.assemblies a ON a.assembly_id = am.assembly_id
+LEFT JOIN sys.database_principals dp ON dp.principal_id = am.execute_as_principal_id
+WHERE am.object_id = @object_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvalidOperationException($"CLR function metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        return new ClrFunctionMetadata(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? (int?)null : Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture),
+            reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
+    }
+
+    private static string BuildClrScalarFunctionDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrFunctionMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId);
+        var returnParameter = parameters.FirstOrDefault(parameter => parameter.ParameterId == 0);
+        if (returnParameter == null)
+        {
+            throw new InvalidOperationException($"CLR scalar function return type metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var argumentList = string.Join(
+            ", ",
+            parameters
+                .Where(parameter => parameter.ParameterId > 0)
+                .OrderBy(parameter => parameter.ParameterId)
+                .Select(parameter => $"{parameter.Name} {FormatTypeName(parameter.TypeName, parameter.TypeSchema, parameter.IsUserDefined, parameter.MaxLength, parameter.Precision, parameter.Scale)}"));
+        var returnType = FormatTypeName(
+            returnParameter.TypeName,
+            returnParameter.TypeSchema,
+            returnParameter.IsUserDefined,
+            returnParameter.MaxLength,
+            returnParameter.Precision,
+            returnParameter.Scale);
+        var executeAsClause = metadata.ExecuteAsPrincipalId switch
+        {
+            null => "CALLER",
+            -2 => "OWNER",
+            _ when !string.IsNullOrWhiteSpace(metadata.ExecuteAsPrincipalName) => $"'{EscapeSqlStringLiteral(metadata.ExecuteAsPrincipalName)}'",
+            _ => "CALLER"
+        };
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"CREATE FUNCTION {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({argumentList})",
+                $"RETURNS {returnType}",
+                $"WITH EXECUTE AS {executeAsClause}",
+                $"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}"
+            ]);
+    }
+
+    private static string BuildClrStoredProcedureDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrFunctionMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId)
+            .Where(parameter => parameter.ParameterId > 0)
+            .OrderBy(parameter => parameter.ParameterId)
+            .ToArray();
+        var parameterList = string.Join(", ", parameters.Select(FormatClrProcedureParameter));
+        var executeAsClause = metadata.ExecuteAsPrincipalId switch
+        {
+            null => "CALLER",
+            -2 => "OWNER",
+            _ when !string.IsNullOrWhiteSpace(metadata.ExecuteAsPrincipalName) => $"'{EscapeSqlStringLiteral(metadata.ExecuteAsPrincipalName)}'",
+            _ => "CALLER"
+        };
+        var createLine = parameters.Length == 0
+            ? $"CREATE PROCEDURE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}"
+            : $"CREATE PROCEDURE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({parameterList})";
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                createLine,
+                $"WITH EXECUTE AS {executeAsClause}",
+                $"AS EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}"
+            ]);
+    }
+
+    private static string FormatClrProcedureParameter(ClrFunctionParameter parameter)
+    {
+        var typeName = FormatTypeName(
+            parameter.TypeName,
+            parameter.TypeSchema,
+            parameter.IsUserDefined,
+            parameter.MaxLength,
+            parameter.Precision,
+            parameter.Scale);
+        var builder = new StringBuilder()
+            .Append(parameter.Name)
+            .Append(' ')
+            .Append(typeName);
+
+        if (parameter.HasDefaultValue)
+        {
+            builder.Append(" = ").Append(FormatClrParameterDefaultValue(parameter));
+        }
+
+        if (parameter.IsOutput)
+        {
+            builder.Append(" OUTPUT");
+        }
+
+        if (parameter.IsReadOnly)
+        {
+            builder.Append(" READONLY");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string FormatClrParameterDefaultValue(ClrFunctionParameter parameter)
+    {
+        var value = parameter.DefaultValue;
+        if (value is null || value == DBNull.Value)
+        {
+            return "NULL";
+        }
+
+        var typeName = parameter.TypeName.ToLowerInvariant();
+        return value switch
+        {
+            string s when typeName is "nchar" or "nvarchar" or "ntext" or "xml" => $"N'{EscapeSqlStringLiteral(s)}'",
+            string s => $"'{EscapeSqlStringLiteral(s)}'",
+            char ch when typeName is "nchar" or "nvarchar" or "ntext" or "xml" => $"N'{EscapeSqlStringLiteral(ch.ToString())}'",
+            char ch => $"'{EscapeSqlStringLiteral(ch.ToString())}'",
+            bool booleanValue => booleanValue ? "1" : "0",
+            byte[] bytes => $"0x{Convert.ToHexString(bytes)}",
+            Guid guid => $"'{guid:D}'",
+            DateTime dateTime => $"'{dateTime:yyyy-MM-ddTHH:mm:ss.fffffff}'",
+            DateTimeOffset dateTimeOffset => $"'{dateTimeOffset:yyyy-MM-ddTHH:mm:ss.fffffff zzz}'",
+            float singleValue => singleValue.ToString("R", CultureInfo.InvariantCulture),
+            double doubleValue => doubleValue.ToString("R", CultureInfo.InvariantCulture),
+            decimal decimalValue => decimalValue.ToString(CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? "NULL",
+            _ => throw new InvalidOperationException(
+                $"Unsupported CLR parameter default value type '{value.GetType().FullName}' for parameter {parameter.Name}.")
+        };
+    }
+
+    private static string BuildClrTableValuedFunctionDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrFunctionMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId)
+            .Where(parameter => parameter.ParameterId > 0)
+            .OrderBy(parameter => parameter.ParameterId)
+            .ToArray();
+        var columns = ReadClrTableValuedFunctionColumns(connection, objectId);
+        if (columns.Count == 0)
+        {
+            throw new InvalidOperationException($"CLR table-valued function return columns not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var orderColumns = ReadClrTableValuedFunctionOrderColumns(connection, objectId);
+        var argumentList = string.Join(
+            ", ",
+            parameters.Select(parameter =>
+                $"{parameter.Name} {FormatTypeName(parameter.TypeName, parameter.TypeSchema, parameter.IsUserDefined, parameter.MaxLength, parameter.Precision, parameter.Scale)}"));
+        var executeAsClause = metadata.ExecuteAsPrincipalId switch
+        {
+            null => "CALLER",
+            -2 => "OWNER",
+            _ when !string.IsNullOrWhiteSpace(metadata.ExecuteAsPrincipalName) => $"'{EscapeSqlStringLiteral(metadata.ExecuteAsPrincipalName)}'",
+            _ => "CALLER"
+        };
+
+        var lines = new List<string>
+        {
+            $"CREATE FUNCTION {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({argumentList})",
+            "RETURNS TABLE ("
+        };
+
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var column = columns[i];
+            var dataType = FormatTypeName(column.TypeName, column.TypeSchema, column.IsUserDefined, column.MaxLength, column.Precision, column.Scale);
+            var suffix = i < columns.Count - 1 ? "," : string.Empty;
+            lines.Add($"{QuoteIdentifier(column.Name)} {dataType}{suffix}");
+        }
+
+        lines.Add(")");
+        lines.Add($"WITH EXECUTE AS {executeAsClause}");
+
+        if (orderColumns.Count > 0)
+        {
+            lines.Add($"ORDER ({string.Join(", ", orderColumns.Select(column => $"{QuoteIdentifier(column.Name)} {(column.IsDescending ? "DESC" : "ASC")}"))})");
+        }
+
+        lines.Add($"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static IReadOnlyList<ClrFunctionParameter> ReadClrFunctionParameters(SqlConnection connection, int objectId)
+    {
+        var parameters = new List<ClrFunctionParameter>();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT p.parameter_id,
+       p.name,
+       t.name AS type_name,
+       ts.name AS type_schema,
+       t.is_user_defined,
+       p.max_length,
+       p.precision,
+       p.scale,
+       p.is_output,
+       p.is_readonly,
+       p.has_default_value,
+       p.default_value
+FROM sys.parameters p
+JOIN sys.types t ON t.user_type_id = p.user_type_id
+JOIN sys.schemas ts ON ts.schema_id = t.schema_id
+WHERE p.object_id = @object_id
+ORDER BY p.parameter_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            parameters.Add(new ClrFunctionParameter(
+                reader.GetInt32(0),
+                reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetBoolean(4),
+                reader.GetInt16(5),
+                reader.GetByte(6),
+                reader.GetByte(7),
+                reader.GetBoolean(8),
+                reader.GetBoolean(9),
+                reader.GetBoolean(10),
+                reader.IsDBNull(11) ? null : reader.GetValue(11)));
+        }
+
+        return parameters;
+    }
+
+    private static IReadOnlyList<ClrTableValuedFunctionColumn> ReadClrTableValuedFunctionColumns(
+        SqlConnection connection,
+        int objectId)
+    {
+        var columns = new List<ClrTableValuedFunctionColumn>();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT c.column_id,
+       c.name,
+       t.name AS type_name,
+       ts.name AS type_schema,
+       t.is_user_defined,
+       c.max_length,
+       c.precision,
+       c.scale
+FROM sys.columns c
+JOIN sys.types t ON t.user_type_id = c.user_type_id
+JOIN sys.schemas ts ON ts.schema_id = t.schema_id
+WHERE c.object_id = @object_id
+ORDER BY c.column_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            columns.Add(new ClrTableValuedFunctionColumn(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetBoolean(4),
+                reader.GetInt16(5),
+                reader.GetByte(6),
+                reader.GetByte(7)));
+        }
+
+        return columns;
+    }
+
+    private static IReadOnlyList<ClrTableValuedFunctionOrderColumn> ReadClrTableValuedFunctionOrderColumns(SqlConnection connection, int objectId)
+    {
+        if (ResolveObjectId(connection, "sys.function_order_columns") is null)
+        {
+            return Array.Empty<ClrTableValuedFunctionOrderColumn>();
+        }
+
+        var columns = new List<ClrTableValuedFunctionOrderColumn>();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT foc.order_column_id,
+       c.name,
+       foc.is_descending
+FROM sys.function_order_columns foc
+JOIN sys.columns c
+  ON c.object_id = foc.object_id
+ AND c.column_id = foc.column_id
+WHERE foc.object_id = @object_id
+ORDER BY foc.order_column_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            columns.Add(new ClrTableValuedFunctionOrderColumn(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetBoolean(2)));
+        }
+
+        return columns;
     }
 
     private static string ScriptView(
@@ -774,13 +1209,23 @@ WHERE s.name = @name";
 
         var schemaName = reader.GetString(0);
         var ownerName = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-        var lines = new List<string> { $"CREATE SCHEMA [{schemaName}]" };
-        if (!string.IsNullOrWhiteSpace(ownerName))
+        var isBuiltInDboSchema = string.Equals(schemaName, "dbo", StringComparison.OrdinalIgnoreCase);
+        var lines = new List<string>();
+        if (!isBuiltInDboSchema)
         {
-            lines.Add($"AUTHORIZATION [{ownerName}]");
+            lines.Add($"CREATE SCHEMA [{schemaName}]");
+            if (!string.IsNullOrWhiteSpace(ownerName))
+            {
+                lines.Add($"AUTHORIZATION [{ownerName}]");
+            }
         }
         reader.Close();
-        lines.Add("GO");
+        if (!isBuiltInDboSchema)
+        {
+            lines.Add("GO");
+        }
+
+        lines.AddRange(ReadSchemaPermissions(connection, schemaName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadSchemaExtendedProperties(connection, schemaName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
@@ -2268,8 +2713,9 @@ WHERE name = @name;";
         lines.AddRange(ReadIndexSetOptions(referenceLines));
         var keyConstraintLines = ReadTableKeyConstraints(connection, fullName, referenceLines).ToList();
         var nonConstraintIndexLines = ReadNonConstraintIndexes(connection, fullName, referenceLines).ToList();
+        var userCreatedStatisticLines = ReadTableUserCreatedStatistics(connection, fullName, referenceLines).ToList();
         var xmlIndexLines = ReadTableXmlIndexes(connection, fullName).ToList();
-        lines.AddRange(ReorderTableKeyAndIndexStatements(referenceLines, keyConstraintLines, nonConstraintIndexLines, xmlIndexLines));
+        lines.AddRange(ReorderTableKeyAndIndexStatements(referenceLines, keyConstraintLines, nonConstraintIndexLines, userCreatedStatisticLines, xmlIndexLines));
         lines.AddRange(ReadTableForeignKeys(connection, fullName));
         lines.AddRange(ReadTableGrants(connection, fullName));
         lines.AddRange(ReadTableExtendedProperties(connection, obj.Schema, obj.Name, referenceLines));
@@ -2362,6 +2808,67 @@ WHERE name = @name;";
         return options.Count == 0
             ? string.Empty
             : $" WITH ({string.Join(", ", options)})";
+    }
+
+    internal static string BuildStatisticsWithClause(
+        string? samplingClause,
+        bool persistSamplePercent,
+        bool noRecompute,
+        bool incremental,
+        bool? autoDrop)
+    {
+        var options = new List<string>();
+        if (!string.IsNullOrWhiteSpace(samplingClause))
+        {
+            options.Add(samplingClause);
+        }
+
+        if (persistSamplePercent)
+        {
+            options.Add("PERSIST_SAMPLE_PERCENT = ON");
+        }
+
+        if (noRecompute)
+        {
+            options.Add("NORECOMPUTE");
+        }
+
+        if (incremental)
+        {
+            options.Add("INCREMENTAL=ON");
+        }
+
+        if (autoDrop.HasValue)
+        {
+            options.Add(autoDrop.Value ? "AUTO_DROP = ON" : "AUTO_DROP = OFF");
+        }
+
+        return options.Count == 0
+            ? string.Empty
+            : $" WITH {string.Join(", ", options)}";
+    }
+
+    internal static string? BuildStatisticsSamplingClause(long rowCount, long rowsSampled, double? persistedSamplePercent)
+    {
+        if (persistedSamplePercent.HasValue && persistedSamplePercent.Value > 0d)
+        {
+            return persistedSamplePercent.Value >= 100d
+                ? "FULLSCAN"
+                : $"SAMPLE {FormatStatisticsSamplePercent((decimal)persistedSamplePercent.Value)} PERCENT";
+        }
+
+        if (rowCount <= 0 || rowsSampled <= 0)
+        {
+            return null;
+        }
+
+        if (rowsSampled >= rowCount)
+        {
+            return "FULLSCAN";
+        }
+
+        var effectivePercent = (rowsSampled * 100m) / rowCount;
+        return $"SAMPLE {FormatStatisticsSamplePercent(effectivePercent)} PERCENT";
     }
 
     private static string? TryGetCompatibleReferenceTableOnLine(string[]? referenceLines, string generatedOnLine)
@@ -2597,8 +3104,204 @@ WHERE name = @name;";
             position = normalizedCall.Value.NextIndex;
         }
 
-        return builder.ToString();
+        return NormalizeRedundantComputedArithmeticGroupingParentheses(builder.ToString());
     }
+
+    private static string NormalizeRedundantComputedArithmeticGroupingParentheses(string line)
+    {
+        var normalized = line;
+        while (TryRemoveRedundantComputedArithmeticGroupingParentheses(normalized, out var updated))
+        {
+            normalized = updated;
+        }
+
+        return normalized;
+    }
+
+    private static bool TryRemoveRedundantComputedArithmeticGroupingParentheses(string line, out string updated)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] != '(' || !IsRedundantComputedArithmeticGroupingStart(line, i))
+            {
+                continue;
+            }
+
+            var closeIndex = FindMatchingParenthesis(line, i);
+            if (closeIndex < 0)
+            {
+                continue;
+            }
+
+            var inner = line.Substring(i + 1, closeIndex - i - 1);
+            if (!CanRemoveComputedArithmeticGroupingParentheses(inner))
+            {
+                continue;
+            }
+
+            updated = line.Remove(closeIndex, 1).Remove(i, 1);
+            return true;
+        }
+
+        updated = line;
+        return false;
+    }
+
+    private static bool IsRedundantComputedArithmeticGroupingStart(string line, int openParenIndex)
+    {
+        var operatorIndex = FindPreviousNonWhitespaceIndex(line, openParenIndex - 1);
+        if (operatorIndex < 0 || !IsArithmeticOperator(line[operatorIndex]))
+        {
+            return false;
+        }
+
+        var operandEndIndex = FindPreviousNonWhitespaceIndex(line, operatorIndex - 1);
+        return operandEndIndex >= 0 && IsOperandTerminator(line[operandEndIndex]);
+    }
+
+    private static bool CanRemoveComputedArithmeticGroupingParentheses(string expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return false;
+        }
+
+        var depth = 0;
+        var inSingleQuotedString = false;
+        var inBracketedIdentifier = false;
+        var expectUnaryOperator = true;
+
+        for (var i = 0; i < expression.Length; i++)
+        {
+            var ch = expression[i];
+            if (inSingleQuotedString)
+            {
+                if (ch == '\'')
+                {
+                    if (i + 1 < expression.Length && expression[i + 1] == '\'')
+                    {
+                        i++;
+                    }
+                    else
+                    {
+                        inSingleQuotedString = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (inBracketedIdentifier)
+            {
+                if (ch == ']')
+                {
+                    inBracketedIdentifier = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuotedString = true;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                expectUnaryOperator = false;
+                continue;
+            }
+
+            if (char.IsLetter(ch))
+            {
+                return false;
+            }
+
+            if (char.IsDigit(ch))
+            {
+                expectUnaryOperator = false;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                depth++;
+                expectUnaryOperator = true;
+                continue;
+            }
+
+            if (ch == ')')
+            {
+                if (depth == 0)
+                {
+                    return false;
+                }
+
+                depth--;
+                expectUnaryOperator = false;
+                continue;
+            }
+
+            if (depth == 0)
+            {
+                if (ch is '+' or '-')
+                {
+                    if (!expectUnaryOperator)
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                if (ch is '*' or '/' or '%')
+                {
+                    expectUnaryOperator = true;
+                    continue;
+                }
+
+                if (ch is '.' or '$')
+                {
+                    expectUnaryOperator = false;
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (ch is ',' or ';')
+            {
+                return false;
+            }
+        }
+
+        return depth == 0 && !inSingleQuotedString && !inBracketedIdentifier;
+    }
+
+    private static int FindPreviousNonWhitespaceIndex(string text, int startIndex)
+    {
+        for (var i = startIndex; i >= 0; i--)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsArithmeticOperator(char ch) => ch is '+' or '-' or '*' or '/' or '%';
+
+    private static bool IsOperandTerminator(char ch)
+        => ch == ']' || ch == ')' || ch == '\'' || char.IsLetterOrDigit(ch);
 
     private static (string Text, int NextIndex)? NormalizeConvertCall(string line, int startIndex)
     {
@@ -3400,6 +4103,158 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
         return lines;
     }
 
+    private static IEnumerable<string> ReadTableUserCreatedStatistics(
+        SqlConnection connection,
+        string fullName,
+        string[]? referenceLines)
+    {
+        var supportsStatsAutoDrop = HasSystemObjectColumn(connection, "stats", "auto_drop");
+        var supportsPersistedSamplePercent = HasSystemObjectColumn(connection, "dm_db_stats_properties", "persisted_sample_percent");
+
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT s.object_id,
+       s.stats_id,
+       s.name,
+       s.no_recompute,
+       s.has_filter,
+       s.filter_definition,
+       s.is_incremental
+FROM sys.stats s
+WHERE s.object_id = OBJECT_ID(@full)
+  AND s.user_created = 1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes i
+      WHERE i.object_id = s.object_id
+        AND i.index_id = s.stats_id)
+ORDER BY s.name;";
+        command.Parameters.AddWithValue("@full", fullName);
+
+        var statisticsLineMap = BuildStatisticsLineMap(referenceLines);
+        var statistics = new List<(int ObjectId, int StatsId, string Name, bool HasFilter, string? FilterDefinition, bool NoRecompute, bool Incremental)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                statistics.Add((
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetString(2),
+                    reader.GetBoolean(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.GetBoolean(3),
+                    !reader.IsDBNull(6) && reader.GetBoolean(6)));
+            }
+        }
+
+        var lines = new List<string>();
+        foreach (var statistic in statistics)
+        {
+            if (statisticsLineMap != null &&
+                statisticsLineMap.TryGetValue(statistic.Name, out var compatibleLine))
+            {
+                lines.Add(compatibleLine);
+                lines.Add("GO");
+                continue;
+            }
+
+            command.Parameters.Clear();
+            command.CommandText = @"
+SELECT c.name
+FROM sys.stats_columns sc
+JOIN sys.columns c ON c.object_id = sc.object_id AND c.column_id = sc.column_id
+WHERE sc.object_id = @obj
+  AND sc.stats_id = @stats
+ORDER BY sc.stats_column_id;";
+            command.Parameters.AddWithValue("@obj", statistic.ObjectId);
+            command.Parameters.AddWithValue("@stats", statistic.StatsId);
+
+            var columns = new List<string>();
+            using (var reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    columns.Add(QuoteIdentifier(reader.GetString(0)));
+                }
+            }
+
+            if (columns.Count == 0)
+            {
+                continue;
+            }
+
+            var scriptingOptions = ReadStatisticsScriptingOptions(
+                connection,
+                statistic.ObjectId,
+                statistic.StatsId,
+                statistic.NoRecompute,
+                statistic.Incremental,
+                supportsPersistedSamplePercent,
+                supportsStatsAutoDrop);
+            var filterClause = statistic.HasFilter && !string.IsNullOrWhiteSpace(statistic.FilterDefinition)
+                ? $" WHERE {statistic.FilterDefinition}"
+                : string.Empty;
+            var withClause = BuildStatisticsWithClause(
+                scriptingOptions.SamplingClause,
+                scriptingOptions.PersistSamplePercent,
+                scriptingOptions.NoRecompute,
+                scriptingOptions.Incremental,
+                scriptingOptions.AutoDrop);
+
+            lines.Add($"CREATE STATISTICS {QuoteIdentifier(statistic.Name)} ON {fullName} ({string.Join(", ", columns)}){filterClause}{withClause}");
+            lines.Add("GO");
+        }
+
+        return lines;
+    }
+
+    private static StatisticsScriptingOptions ReadStatisticsScriptingOptions(
+        SqlConnection connection,
+        int objectId,
+        int statsId,
+        bool noRecompute,
+        bool incremental,
+        bool supportsPersistedSamplePercent,
+        bool supportsStatsAutoDrop)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $@"
+SELECT dsp.rows,
+       dsp.rows_sampled,
+       {(supportsPersistedSamplePercent ? "dsp.persisted_sample_percent" : "CAST(NULL AS float)")},
+       {(supportsStatsAutoDrop ? "s.auto_drop" : "CAST(NULL AS bit)")}
+FROM sys.stats s
+OUTER APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) dsp
+WHERE s.object_id = @obj
+  AND s.stats_id = @stats;";
+        command.Parameters.AddWithValue("@obj", objectId);
+        command.Parameters.AddWithValue("@stats", statsId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return new StatisticsScriptingOptions(
+                null,
+                false,
+                noRecompute,
+                incremental,
+                null);
+        }
+
+        var rowCount = reader.IsDBNull(0) ? 0L : Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
+        var rowsSampled = reader.IsDBNull(1) ? 0L : Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture);
+        var persistedSamplePercent = reader.IsDBNull(2) ? (double?)null : Convert.ToDouble(reader.GetValue(2), CultureInfo.InvariantCulture);
+        var autoDrop = reader.IsDBNull(3) ? (bool?)null : Convert.ToBoolean(reader.GetValue(3), CultureInfo.InvariantCulture);
+
+        return new StatisticsScriptingOptions(
+            BuildStatisticsSamplingClause(rowCount, rowsSampled, persistedSamplePercent),
+            persistedSamplePercent.HasValue && persistedSamplePercent.Value > 0d,
+            noRecompute,
+            incremental,
+            autoDrop);
+    }
+
     private static IndexScriptingOptions ReadIndexScriptingOptions(SqlConnection connection, int objectId, int indexId)
     {
         return new IndexScriptingOptions(
@@ -3465,6 +4320,27 @@ WHERE s.object_id = @obj AND s.stats_id = @idx;";
         command.Parameters.AddWithValue("@idx", indexId);
 
         return command.ExecuteScalar() is bool isIncremental && isIncremental;
+    }
+
+    private static bool HasSystemObjectColumn(SqlConnection connection, string objectName, string columnName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM sys.all_columns c
+    JOIN sys.all_objects o ON o.object_id = c.object_id
+    JOIN sys.schemas s ON s.schema_id = o.schema_id
+    WHERE s.name = N'sys'
+      AND o.name = @objectName
+      AND c.name = @columnName)
+THEN CAST(1 AS bit)
+ELSE CAST(0 AS bit)
+END;";
+        command.Parameters.AddWithValue("@objectName", objectName);
+        command.Parameters.AddWithValue("@columnName", columnName);
+
+        return command.ExecuteScalar() is bool exists && exists;
     }
 
     private static IEnumerable<string> ReadTableForeignKeys(SqlConnection connection, string fullName)
@@ -3569,6 +4445,24 @@ WHERE dp.major_id = OBJECT_ID(@full) AND dp.class_desc = 'OBJECT_OR_COLUMN'
 ORDER BY pr.name, dp.permission_name;",
             command => command.Parameters.AddWithValue("@full", fullName),
             fullName,
+            referenceLines);
+
+    private static IEnumerable<string> ReadSchemaPermissions(
+        SqlConnection connection,
+        string schemaName,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.schemas s ON s.schema_id = dp.major_id
+WHERE dp.class_desc = 'SCHEMA'
+  AND s.name = @name
+ORDER BY pr.name, dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", schemaName),
+            $"SCHEMA::{QuoteIdentifier(schemaName)}",
             referenceLines);
 
     private static IEnumerable<string> ExecutePermissionQuery(
@@ -3971,11 +4865,13 @@ ORDER BY p.name, ep.name;";
         string[]? referenceLines,
         IReadOnlyList<string> keyConstraintLines,
         IReadOnlyList<string> nonConstraintIndexLines,
+        IReadOnlyList<string> userCreatedStatisticLines,
         IReadOnlyList<string> xmlIndexLines)
     {
         var statements = new List<TablePostCreateStatement>();
         statements.AddRange(ParseTablePostCreateStatements(keyConstraintLines, TablePostCreateStatementKind.KeyConstraint));
         statements.AddRange(ParseTablePostCreateStatements(nonConstraintIndexLines, TablePostCreateStatementKind.NonConstraintIndex));
+        statements.AddRange(ParseTablePostCreateStatements(userCreatedStatisticLines, TablePostCreateStatementKind.UserCreatedStatistic));
         statements.AddRange(ParseTablePostCreateStatements(xmlIndexLines, TablePostCreateStatementKind.XmlIndex));
 
         if (statements.Count == 0)
@@ -4136,6 +5032,19 @@ ORDER BY p.name, ep.name;";
 
             kind = TablePostCreateStatementKind.XmlIndex;
             name = indexName;
+            return true;
+        }
+
+        if (firstLine.StartsWith("CREATE STATISTICS [", StringComparison.OrdinalIgnoreCase))
+        {
+            var statisticsName = ExtractBracketedIdentifier(firstLine, "CREATE STATISTICS [");
+            if (statisticsName == null)
+            {
+                return false;
+            }
+
+            kind = TablePostCreateStatementKind.UserCreatedStatistic;
+            name = statisticsName;
             return true;
         }
 
@@ -5372,7 +6281,7 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
         return string.Join(Environment.NewLine, trimmed);
     }
 
-    private static string ApplyDefinitionFormatting(string definition, string[]? referenceLines)
+    internal static string ApplyDefinitionFormatting(string definition, string[]? referenceLines)
     {
         var referenceBlock = GetReferenceDefinitionBlock(referenceLines);
         if (referenceBlock != null && DefinitionMatchesReference(definition, referenceBlock))
@@ -5406,48 +6315,14 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
 
     private static string[]? GetReferenceDefinitionBlock(string[]? referenceLines)
     {
-        if (referenceLines == null || referenceLines.Length == 0)
+        var range = TryGetReferenceDefinitionRange(referenceLines);
+        if (range == null)
         {
             return null;
         }
 
-        var start = -1;
-        for (var i = 0; i < referenceLines.Length; i++)
-        {
-            if (referenceLines[i].TrimStart().StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase))
-            {
-                start = i;
-                break;
-            }
-        }
-
-        if (start < 0)
-        {
-            return null;
-        }
-
-        var end = -1;
-        for (var i = start + 1; i < referenceLines.Length; i++)
-        {
-            if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
-            {
-                end = i;
-                break;
-            }
-        }
-
-        if (end < 0)
-        {
-            end = referenceLines.Length;
-        }
-
-        if (end <= start)
-        {
-            return null;
-        }
-
-        var block = new string[end - start];
-        Array.Copy(referenceLines, start, block, 0, end - start);
+        var block = new string[range.Value.End - range.Value.Start];
+        Array.Copy(referenceLines!, range.Value.Start, block, 0, block.Length);
         return block;
     }
 
@@ -5511,51 +6386,17 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
 
     private static Dictionary<string, string>? BuildDefinitionLineMap(string[]? referenceLines)
     {
-        if (referenceLines == null || referenceLines.Length == 0)
-        {
-            return null;
-        }
-
-        var start = -1;
-        for (var i = 0; i < referenceLines.Length; i++)
-        {
-            if (referenceLines[i].TrimStart().StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase))
-            {
-                start = i;
-                break;
-            }
-        }
-
-        if (start < 0)
-        {
-            return null;
-        }
-
-        var end = -1;
-        for (var i = start + 1; i < referenceLines.Length; i++)
-        {
-            if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
-            {
-                end = i;
-                break;
-            }
-        }
-
-        if (end < 0)
-        {
-            end = referenceLines.Length;
-        }
-
-        if (end <= start)
+        var range = TryGetReferenceDefinitionRange(referenceLines);
+        if (range == null)
         {
             return null;
         }
 
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = start; i < end; i++)
+        for (var i = range.Value.Start; i < range.Value.End; i++)
         {
-            var key = NormalizeDefinitionLineKey(referenceLines[i]);
+            var key = NormalizeDefinitionLineKey(referenceLines![i]);
             if (key.Length == 0)
             {
                 continue;
@@ -5614,7 +6455,105 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             normalized = "CREATE " + normalized.Substring(createOrAlter.Length);
         }
 
+        normalized = NormalizeClrTableValuedFunctionReturnColumnLineKey(normalized);
+        normalized = NormalizeModuleDeclarationLineKey(normalized);
         return normalized;
+    }
+
+    private static string NormalizeClrTableValuedFunctionReturnColumnLineKey(string normalized)
+    {
+        var match = ClrTableValuedFunctionReturnColumnNullRegex.Match(normalized);
+        return match.Success
+            ? match.Groups["prefix"].Value + match.Groups["suffix"].Value
+            : normalized;
+    }
+
+    private static string NormalizeModuleDeclarationLineKey(string normalized)
+    {
+        var match = ModuleDeclarationLineRegex.Match(normalized);
+        if (!match.Success)
+        {
+            return normalized;
+        }
+
+        var canonicalName = NormalizeMultipartIdentifierToken(match.Groups["name"].Value);
+        return match.Groups["prefix"].Value + canonicalName + match.Groups["suffix"].Value;
+    }
+
+    private static string NormalizeMultipartIdentifierToken(string identifier)
+    {
+        var parts = SplitMultipartIdentifier(identifier);
+        if (parts.Count == 0)
+        {
+            return identifier;
+        }
+
+        return string.Join(".", parts.Select(UnquoteIdentifierPart));
+    }
+
+    private static List<string> SplitMultipartIdentifier(string identifier)
+    {
+        var parts = new List<string>();
+        var current = new StringBuilder();
+        var inBracketedIdentifier = false;
+
+        for (var i = 0; i < identifier.Length; i++)
+        {
+            var ch = identifier[i];
+            if (inBracketedIdentifier)
+            {
+                current.Append(ch);
+                if (ch == ']')
+                {
+                    if (i + 1 < identifier.Length && identifier[i + 1] == ']')
+                    {
+                        current.Append(identifier[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        inBracketedIdentifier = false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                inBracketedIdentifier = true;
+                current.Append(ch);
+                continue;
+            }
+
+            if (ch == '.')
+            {
+                parts.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        if (current.Length > 0)
+        {
+            parts.Add(current.ToString());
+        }
+
+        return parts;
+    }
+
+    private static string UnquoteIdentifierPart(string part)
+    {
+        if (part.Length >= 2 &&
+            part[0] == '[' &&
+            part[^1] == ']')
+        {
+            return part.Substring(1, part.Length - 2).Replace("]]", "]");
+        }
+
+        return part;
     }
 
     private static List<string> BuildSetHeaderLines(string[]? referenceLines, string quotedLine, string ansiLine)
@@ -5961,14 +6900,99 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
         }
 
         var indentPrefix = string.Empty;
-        if (createIndex >= 0)
+        var firstDefinitionIndex = goIndex + 1;
+        while (firstDefinitionIndex < referenceLines.Length &&
+               referenceLines[firstDefinitionIndex].Trim().Length == 0)
         {
-            var line = referenceLines[createIndex];
+            firstDefinitionIndex++;
+        }
+
+        if (firstDefinitionIndex < referenceLines.Length)
+        {
+            var line = referenceLines[firstDefinitionIndex];
             var firstNonSpace = line.Length - line.TrimStart().Length;
             indentPrefix = firstNonSpace > 0 ? line.Substring(0, firstNonSpace) : string.Empty;
         }
 
         return new ModuleFormat(leadingBlank, blankBeforeGo, indentPrefix, hasGoAfterDefinition);
+    }
+
+    private static (int Start, int End)? TryGetReferenceDefinitionRange(string[]? referenceLines)
+    {
+        if (referenceLines == null || referenceLines.Length == 0)
+        {
+            return null;
+        }
+
+        var start = TryGetReferenceDefinitionStart(referenceLines);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var end = -1;
+        for (var i = start + 1; i < referenceLines.Length; i++)
+        {
+            if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            {
+                end = i;
+                break;
+            }
+        }
+
+        if (end < 0)
+        {
+            end = referenceLines.Length;
+        }
+
+        return end > start ? (start, end) : null;
+    }
+
+    private static int TryGetReferenceDefinitionStart(string[] referenceLines)
+    {
+        var ansiIndex = -1;
+        var quotedIndex = -1;
+        for (var i = 0; i < referenceLines.Length; i++)
+        {
+            var normalized = NormalizeStatementTerminator(referenceLines[i]);
+            if (ansiIndex < 0 &&
+                normalized.StartsWith("SET ANSI_NULLS ", StringComparison.OrdinalIgnoreCase))
+            {
+                ansiIndex = i;
+            }
+            else if (quotedIndex < 0 &&
+                     normalized.StartsWith("SET QUOTED_IDENTIFIER ", StringComparison.OrdinalIgnoreCase))
+            {
+                quotedIndex = i;
+            }
+
+            if (ansiIndex >= 0 && quotedIndex >= 0)
+            {
+                break;
+            }
+        }
+
+        var lastSetIndex = Math.Max(ansiIndex, quotedIndex);
+        if (lastSetIndex >= 0)
+        {
+            for (var i = lastSetIndex + 1; i < referenceLines.Length; i++)
+            {
+                if (string.Equals(referenceLines[i].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                {
+                    return i + 1;
+                }
+            }
+        }
+
+        for (var i = 0; i < referenceLines.Length; i++)
+        {
+            if (referenceLines[i].Trim().Length > 0)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static string NormalizeStatementTerminator(string line)
@@ -5977,6 +7001,12 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
         return trimmed.EndsWith(";", StringComparison.Ordinal)
             ? trimmed.Substring(0, trimmed.Length - 1).TrimEnd()
             : trimmed;
+    }
+
+    private static string FormatStatisticsSamplePercent(decimal value)
+    {
+        var rounded = decimal.Round(value, 12, MidpointRounding.AwayFromZero);
+        return rounded.ToString("0.############", CultureInfo.InvariantCulture);
     }
 
     private static Dictionary<string, string>? BuildCheckConstraintLineMap(string[]? referenceLines)
@@ -6090,6 +7120,39 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             }
 
             start += "INDEX [".Length;
+            var end = trimmed.IndexOf(']', start);
+            if (end <= start)
+            {
+                continue;
+            }
+
+            var name = trimmed.Substring(start, end - start);
+            if (!map.ContainsKey(name))
+            {
+                map[name] = trimmed;
+            }
+        }
+
+        return map.Count == 0 ? null : map;
+    }
+
+    private static Dictionary<string, string>? BuildStatisticsLineMap(string[]? referenceLines)
+    {
+        if (referenceLines == null || referenceLines.Length == 0)
+        {
+            return null;
+        }
+
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in referenceLines)
+        {
+            var trimmed = line.TrimStart();
+            if (!trimmed.StartsWith("CREATE STATISTICS [", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var start = "CREATE STATISTICS [".Length;
             var end = trimmed.IndexOf(']', start);
             if (end <= start)
             {

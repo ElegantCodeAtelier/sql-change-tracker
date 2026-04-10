@@ -41,6 +41,213 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void ApplyDefinitionFormatting_PreservesReferenceCommentBeforeCreate()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "\t/* =============================================",
+            string.Empty,
+            "\tAuthor: example",
+            "CREATE PROCEDURE [dbo].[Sample]",
+            "\t@ExecutionID int",
+            "AS",
+            "SELECT 1"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER ON",
+            "GO",
+            "SET ANSI_NULLS ON",
+            "GO",
+            "/* =============================================",
+            string.Empty,
+            "\tAuthor: example",
+            "CREATE PROCEDURE [dbo].[Sample]",
+            "\t@ExecutionID int",
+            "AS",
+            "SELECT 1",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+        var firstLine = formatted.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)[0];
+
+        Assert.Equal("/* =============================================", firstLine);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesReferenceCreateLineIdentifierQuoting()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE PROCEDURE Reporting.Sample_Proc",
+            "\t@ModelConfigID int",
+            "AS",
+            "BEGIN",
+            "\tSELECT @ModelConfigID",
+            "END"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER ON",
+            "GO",
+            "SET ANSI_NULLS ON",
+            "GO",
+            string.Empty,
+            "CREATE PROCEDURE [Reporting].[Sample_Proc]",
+            "\t@ModelConfigID int",
+            "AS",
+            "BEGIN",
+            "\tSELECT @ModelConfigID",
+            "END",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+        var createLine = formatted
+            .Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)
+            .First(line => line.Length > 0);
+
+        Assert.Equal("CREATE PROCEDURE [Reporting].[Sample_Proc]", createLine);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesCompatibleClrFunctionReferenceDefinition()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE FUNCTION [dbo].[JoinParts] (@separator [nvarchar] (MAX), @first [nvarchar] (MAX), @second [nvarchar] (MAX))",
+            "RETURNS [nvarchar] (MAX)",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.StringFunctions].[JoinParts]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE FUNCTION [dbo].[JoinParts] (@separator [nvarchar] (max), @first [nvarchar] (max), @second [nvarchar] (max))",
+            "RETURNS [nvarchar] (max)",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.StringFunctions].[JoinParts]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(4)),
+            formatted);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesCompatibleClrStoredProcedureReferenceDefinition()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE PROCEDURE [dbo].[BuildBuckets] (@executionId [int], @portfolioId [int])",
+            "WITH EXECUTE AS CALLER",
+            "AS EXTERNAL NAME [AppClr].[App.Database.StoredProcedures].[BuildBuckets]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE PROCEDURE [dbo].[BuildBuckets] (@executionId [int], @portfolioId [int])",
+            "WITH EXECUTE AS CALLER",
+            "AS EXTERNAL NAME [AppClr].[App.Database.StoredProcedures].[BuildBuckets]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(3)),
+            formatted);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesCompatibleClrTableValuedFunctionReferenceDefinition()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int],",
+            "[Value] [nvarchar] (MAX)",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (max))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int],",
+            "[Value] [nvarchar] (max)",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(7)),
+            formatted);
+    }
+
+    [Fact]
+    public void ApplyDefinitionFormatting_PreservesClrTableValuedFunctionReferenceNullTokensWhenOtherwiseCompatible()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int],",
+            "[Value] [nvarchar] (MAX)",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]"
+        });
+
+        var referenceLines = new[]
+        {
+            "SET QUOTED_IDENTIFIER OFF",
+            "GO",
+            "SET ANSI_NULLS OFF",
+            "GO",
+            "CREATE FUNCTION [dbo].[SplitValues] (@input [nvarchar] (MAX))",
+            "RETURNS TABLE (",
+            "[Ordinal] [int] NULL,",
+            "[Value] [nvarchar] (MAX) NULL",
+            ")",
+            "WITH EXECUTE AS CALLER",
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[SplitValues]",
+            "GO"
+        };
+
+        var formatted = SqlServerScripter.ApplyDefinitionFormatting(definition, referenceLines);
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, referenceLines.Skip(4).Take(7)),
+            formatted);
+    }
+
+    [Fact]
     public void BuildReferenceTableColumnTypeMap_ReadsCompatibleTypeTokens()
     {
         var referenceLines = new[]
@@ -194,6 +401,31 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void TryGetCompatibleReferenceCreateTableBlock_PreservesEquivalentComputedColumnArithmeticGrouping()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE TABLE [Example].[SampleTable]",
+            "(",
+            "[AmountDelta] AS (([BaseAmount]-[OffsetAmount])-(([AdjustedBase]-[AdjustedOffset])/[ScaleFactor]))",
+            ") ON [PRIMARY]"
+        };
+
+        var generatedCreateBlock = new List<string>
+        {
+            "CREATE TABLE [Example].[SampleTable]",
+            "(",
+            "[AmountDelta] AS (([BaseAmount]-[OffsetAmount])-([AdjustedBase]-[AdjustedOffset])/[ScaleFactor])",
+            ") ON [PRIMARY]"
+        };
+
+        var compatibleBlock = SqlServerScripter.TryGetCompatibleReferenceCreateTableBlock(referenceLines, generatedCreateBlock);
+
+        Assert.NotNull(compatibleBlock);
+        Assert.Equal(referenceLines, compatibleBlock);
+    }
+
+    [Fact]
     public void ReorderTableKeyAndIndexStatements_UsesCompatibleReferenceOrder()
     {
         var referenceLines = new[]
@@ -236,6 +468,7 @@ public sealed class SqlServerScripterCompatibilityTests
             referenceLines,
             keyConstraintLines,
             nonConstraintIndexLines,
+            Array.Empty<string>(),
             Array.Empty<string>());
 
         Assert.Equal(new[]
@@ -249,6 +482,55 @@ public sealed class SqlServerScripterCompatibilityTests
             "CREATE UNIQUE NONCLUSTERED INDEX [AK_Document_rowguid] ON [Production].[Document] ([rowguid]) ON [PRIMARY]",
             "GO",
             "ALTER TABLE [Production].[Document] ADD CONSTRAINT [UQ__Document__F73921F7C81C642F] UNIQUE NONCLUSTERED ([rowguid]) ON [PRIMARY]",
+            "GO"
+        }, reordered);
+    }
+
+    [Fact]
+    public void ReorderTableKeyAndIndexStatements_PreservesCompatibleStatisticOrder()
+    {
+        var referenceLines = new[]
+        {
+            "CREATE NONCLUSTERED INDEX [IX_SampleTable_KeyBeta] ON [Example].[SampleTable] ([KeyBeta]) ON [PRIMARY]",
+            "GO",
+            "CREATE STATISTICS [STAT_SampleTable_KeyAlpha_KeyBeta] ON [Example].[SampleTable] ([KeyAlpha], [KeyBeta]) WITH NORECOMPUTE",
+            "GO",
+            "CREATE XML INDEX [XML_SampleTable_DetailXml] ON [Example].[SampleTable] ([DetailXml]) USING XML INDEX [PXML_SampleTable_DetailXml] FOR PATH",
+            "GO"
+        };
+
+        var nonConstraintIndexLines = new List<string>
+        {
+            "CREATE NONCLUSTERED INDEX [IX_SampleTable_KeyBeta] ON [Example].[SampleTable] ([KeyBeta]) ON [PRIMARY]",
+            "GO"
+        };
+
+        var userCreatedStatisticLines = new List<string>
+        {
+            "CREATE STATISTICS [STAT_SampleTable_KeyAlpha_KeyBeta] ON [Example].[SampleTable] ([KeyAlpha], [KeyBeta]) WITH NORECOMPUTE",
+            "GO"
+        };
+
+        var xmlIndexLines = new List<string>
+        {
+            "CREATE XML INDEX [XML_SampleTable_DetailXml] ON [Example].[SampleTable] ([DetailXml]) USING XML INDEX [PXML_SampleTable_DetailXml] FOR PATH",
+            "GO"
+        };
+
+        var reordered = SqlServerScripter.ReorderTableKeyAndIndexStatements(
+            referenceLines,
+            Array.Empty<string>(),
+            nonConstraintIndexLines,
+            userCreatedStatisticLines,
+            xmlIndexLines);
+
+        Assert.Equal(new[]
+        {
+            "CREATE NONCLUSTERED INDEX [IX_SampleTable_KeyBeta] ON [Example].[SampleTable] ([KeyBeta]) ON [PRIMARY]",
+            "GO",
+            "CREATE STATISTICS [STAT_SampleTable_KeyAlpha_KeyBeta] ON [Example].[SampleTable] ([KeyAlpha], [KeyBeta]) WITH NORECOMPUTE",
+            "GO",
+            "CREATE XML INDEX [XML_SampleTable_DetailXml] ON [Example].[SampleTable] ([DetailXml]) USING XML INDEX [PXML_SampleTable_DetailXml] FOR PATH",
             "GO"
         }, reordered);
     }
@@ -275,5 +557,40 @@ public sealed class SqlServerScripterCompatibilityTests
         var clause = SqlServerScripter.BuildIndexOnClause("ExamplePartitionScheme", "PartitionKeyId");
 
         Assert.Equal(" ON [ExamplePartitionScheme] ([PartitionKeyId])", clause);
+    }
+
+    [Fact]
+    public void BuildStatisticsSamplingClause_UsesPersistedSamplePercent_WhenAvailable()
+    {
+        var clause = SqlServerScripter.BuildStatisticsSamplingClause(
+            rowCount: 200,
+            rowsSampled: 80,
+            persistedSamplePercent: 25d);
+
+        Assert.Equal("SAMPLE 25 PERCENT", clause);
+    }
+
+    [Fact]
+    public void BuildStatisticsSamplingClause_EmitsFullscan_WhenAllRowsWereSampled()
+    {
+        var clause = SqlServerScripter.BuildStatisticsSamplingClause(
+            rowCount: 200,
+            rowsSampled: 200,
+            persistedSamplePercent: null);
+
+        Assert.Equal("FULLSCAN", clause);
+    }
+
+    [Fact]
+    public void BuildStatisticsWithClause_EmitsStatisticsOptionsInDeterministicOrder()
+    {
+        var clause = SqlServerScripter.BuildStatisticsWithClause(
+            samplingClause: "SAMPLE 25 PERCENT",
+            persistSamplePercent: true,
+            noRecompute: true,
+            incremental: true,
+            autoDrop: false);
+
+        Assert.Equal(" WITH SAMPLE 25 PERCENT, PERSIST_SAMPLE_PERCENT = ON, NORECOMPUTE, INCREMENTAL=ON, AUTO_DROP = OFF", clause);
     }
 }

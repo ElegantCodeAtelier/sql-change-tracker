@@ -41,7 +41,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Discovery MUST ignore system objects by default.
 - Discovery SHOULD preserve compatibility with projects that include security and storage object groups.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
-- `Schema` discovery covers user-defined schemas and excludes `dbo`, `sys`, and `INFORMATION_SCHEMA`.
+- `Schema` discovery covers user-defined schemas, excludes `sys` and `INFORMATION_SCHEMA`, and includes built-in `dbo` only when it has explicit schema permissions or schema-level extended properties that are in scope for scripting.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
 - `Assembly` discovery covers user-defined assemblies from `sys.assemblies` and excludes SQL Server system assemblies (`is_user_defined = 0`).
 - `UserDefinedType` discovery covers both scalar alias types and table-valued types.
@@ -66,7 +66,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Assemblies
 - Views
 - Stored Procedures
-- Functions (`FN`, `TF`, `IF`)
+- Functions (`FN`, `TF`, `IF`, `FS`, `FT`)
 - Sequences
 - Schema
 - Role
@@ -228,12 +228,13 @@ After base table `CREATE` block and its `GO`, statements MUST be emitted in this
 2. CHECK constraints
 3. Key constraints (PRIMARY KEY / UNIQUE)
 4. Non-constraint indexes
-5. XML indexes
-6. Foreign keys
-7. Grants
-8. Extended properties
-9. Full-text indexes
-10. Lock escalation (only when not `TABLE`)
+5. User-created statistics
+6. XML indexes
+7. Foreign keys
+8. Grants
+9. Extended properties
+10. Full-text indexes
+11. Lock escalation (only when not `TABLE`)
 
 Each emitted statement MUST be followed by `GO`.
 
@@ -276,7 +277,33 @@ Each emitted statement MUST be followed by `GO`.
 - `ON [data_space]` MUST be emitted when available.
 - `ON [data_space] ([partition_column])` MUST be emitted when the index is partitioned and the partitioning column is available from catalog metadata.
 
-#### 8.1.8 XML Indexes
+#### 8.1.8 User-Created Statistics
+- User-created statistics MUST be sourced from `sys.stats` and `sys.stats_columns`.
+- Include only statistics where:
+  - `user_created = 1`,
+  - the statistic is not backed by an index (`sys.indexes.index_id <> sys.stats.stats_id` for the same object).
+- Statistics MUST be ordered by statistic name.
+- Statistic column lists MUST be ordered by `stats_column_id`.
+- Output MUST emit:
+  - `CREATE STATISTICS [name] ON [schema].[table] ([column_1], [column_2], ...)`
+  - optional `WHERE <filter_definition>` when the statistic is filtered
+  - optional `WITH ...`
+- Sampling metadata MUST be sourced from `sys.dm_db_stats_properties` when available.
+- Statistics `WITH` options MUST include:
+  - `FULLSCAN` when the effective sampled row count matches the table row count
+  - `SAMPLE <effective_percent> PERCENT` when the effective sampled row count is non-zero and less than the table row count
+  - `PERSIST_SAMPLE_PERCENT = ON` when `sys.dm_db_stats_properties.persisted_sample_percent > 0`
+  - `NORECOMPUTE` when `sys.stats.no_recompute = 1`
+  - `INCREMENTAL=ON` when `sys.stats.is_incremental = 1`
+- `AUTO_DROP = ON|OFF` MUST be emitted when the source server exposes `sys.stats.auto_drop`.
+- Effective sampling percentages MUST be emitted in invariant-culture decimal form with trailing zeros trimmed.
+- When multiple statistics `WITH` options are present, they MUST be emitted in this order:
+  - `WITH <FULLSCAN|SAMPLE <effective_percent> PERCENT>, PERSIST_SAMPLE_PERCENT = ON, NORECOMPUTE, INCREMENTAL=ON, AUTO_DROP = <ON|OFF>`
+- Statistics scripting MUST preserve the effective sampling state rather than the original `SAMPLE ... PERCENT` or `SAMPLE ... ROWS` construction text.
+- Statistics scripting MUST NOT emit `MAXDOP`, `STATS_STREAM`, `ROWCOUNT`, or `PAGECOUNT` options in v1.
+- Statistics MUST NOT be emitted as standalone top-level schema objects; they remain post-create table statements.
+
+#### 8.1.9 XML Indexes
 - XML indexes MUST be sourced from `sys.xml_indexes` together with column metadata.
 - XML indexes MUST be ordered by XML `index_id`.
 - Primary XML index format MUST be:
@@ -288,12 +315,12 @@ Each emitted statement MUST be followed by `GO`.
   - `USING XML INDEX [primary_xml_index]`
   - `FOR <PATH|PROPERTY|VALUE>`
 
-#### 8.1.9 Foreign Keys
+#### 8.1.10 Foreign Keys
 - Foreign keys MUST be ordered by foreign key name.
 - Column lists MUST follow `constraint_column_id`.
 - `ON DELETE` and `ON UPDATE` clauses MUST be emitted only when action is not `NO_ACTION`.
 
-#### 8.1.10 Table Extended Properties
+#### 8.1.11 Table Extended Properties
 - Table-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'TABLE', N'<table>', NULL, NULL`
 - Column-level extended properties MUST use:
@@ -311,7 +338,7 @@ Each emitted statement MUST be followed by `GO`.
   4. index-level (by index name, then property name),
   5. trigger-level (by trigger name, then property name).
 
-#### 8.1.11 Full-Text Indexes
+#### 8.1.12 Full-Text Indexes
 - Full-text indexes MUST be sourced from `sys.fulltext_indexes`, `sys.fulltext_index_columns`, `sys.fulltext_catalogs`, `sys.indexes`, and `sys.columns`.
 - Full-text index base statement MUST be:
   - `CREATE FULLTEXT INDEX ON [schema].[table] KEY INDEX [unique_key_index] ON [catalog]`
@@ -320,7 +347,7 @@ Each emitted statement MUST be followed by `GO`.
   - `[column] LANGUAGE <language_id>`
   - `[column] TYPE COLUMN [type_column] LANGUAGE <language_id>` when a type column is configured.
 
-#### 8.1.12 Lock Escalation
+#### 8.1.13 Lock Escalation
 - `ALTER TABLE [schema].[table] SET ( LOCK_ESCALATION = <value> )` MUST be emitted only when lock escalation is present and not `TABLE`.
 
 ### 8.2 Views
@@ -346,8 +373,13 @@ Each emitted statement MUST be followed by `GO`.
   2. index-level (by index name, then property name).
 
 ### 8.3 Stored Procedures
-- Stored procedures are scripted through programmable-object framing rules with object type `P` and level type `PROCEDURE`.
-- Definition text MUST come from `OBJECT_DEFINITION`.
+- Stored procedures are scripted through programmable-object framing rules with object types `P`, `PC` and level type `PROCEDURE`.
+- T-SQL stored procedure definition text for `P` MUST come from `OBJECT_DEFINITION`.
+- CLR stored procedure (`PC`) metadata MUST be sourced from `sys.assembly_modules`, `sys.assemblies`, and `sys.parameters`.
+- CLR stored procedure (`PC`) output MUST emit:
+  - `CREATE PROCEDURE [schema].[name] (<parameters>)`
+  - optional `WITH EXECUTE AS <CALLER|OWNER|'principal'>`
+  - `AS EXTERNAL NAME [assembly].[class].[method]`
 - Regex replacements from overrides MUST be applied before compatibility line-map reconciliation.
 - Compatibility definition line-map reconciliation MUST be applied when reference file exists.
 - When no compatible reference spacing is preserved, procedure emission MUST use the canonical programmable-object whitespace rules from Section 6.1.
@@ -361,8 +393,24 @@ Each emitted statement MUST be followed by `GO`.
   2. parameter-level (by parameter name, then property name).
 
 ### 8.4 Functions
-- Functions are scripted through programmable-object framing rules with object types `FN`, `TF`, `IF` and level type `FUNCTION`.
-- Definition text MUST come from `OBJECT_DEFINITION`.
+- Functions are scripted through programmable-object framing rules with object types `FN`, `TF`, `IF`, `FS`, `FT` and level type `FUNCTION`.
+- T-SQL function definition text for `FN`, `TF`, and `IF` MUST come from `OBJECT_DEFINITION`.
+- CLR function metadata for `FS` and `FT` MUST be sourced from `sys.assembly_modules`, `sys.assemblies`, and `sys.parameters`.
+- CLR scalar function (`FS`) output MUST emit:
+  - `CREATE FUNCTION [schema].[name] (<parameters>)`
+  - `RETURNS <return_type>`
+  - `WITH EXECUTE AS <CALLER|OWNER|'principal'>`
+  - `EXTERNAL NAME [assembly].[class].[method]`
+- CLR table-valued function (`FT`) return-column metadata MUST be sourced from `sys.columns`, `sys.types`, and type-schema metadata for the function object.
+- CLR table-valued function (`FT`) order metadata MUST be sourced from `sys.function_order_columns` when available.
+- CLR table-valued function (`FT`) output MUST emit:
+  - `CREATE FUNCTION [schema].[name] (<parameters>)`
+  - `RETURNS TABLE (`
+  - one return column per line in `column_id` order using `[name] <type>`
+  - `)`
+  - `WITH EXECUTE AS <CALLER|OWNER|'principal'>`
+  - optional `ORDER ([column_1] <ASC|DESC>, [column_2] <ASC|DESC>, ...)` ordered by `order_column_id`
+  - `EXTERNAL NAME [assembly].[class].[method]`
 - Regex replacements from overrides MUST be applied before final emission.
 - When no compatible reference spacing is preserved, function emission MUST use the canonical programmable-object whitespace rules from Section 6.1.
 - Grants and extended properties MUST follow module body.
@@ -399,13 +447,16 @@ Each emitted statement MUST be followed by `GO`.
 - Sequence extended properties MUST be emitted after the sequence `GO`, ordered by property name.
 
 ### 8.6 Schemas
-- Schema scripts MUST emit one `CREATE SCHEMA [name]` statement for each user-defined schema that is in scope.
-- `dbo`, `sys`, and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
-- When schema ownership metadata is present, `AUTHORIZATION [owner]` MUST be emitted on the following line.
-- Schema scripts MUST end with `GO`.
+- Schema scripts for user-defined schemas that are in scope MUST emit one `CREATE SCHEMA [name]` statement.
+- `sys` and `INFORMATION_SCHEMA` MUST NOT be emitted as schema object files.
+- Built-in `dbo` schema is in scope only when it has explicit schema permissions or schema-level extended properties.
+- Built-in `dbo` schema scripts MUST omit `CREATE SCHEMA` and `AUTHORIZATION`.
+- When schema ownership metadata is present for a user-defined schema, `AUTHORIZATION [owner]` MUST be emitted on the following line.
+- The user-defined base schema-create block MUST end with `GO`.
+- Schema permissions MUST use `ON SCHEMA::[name]` and MUST be emitted after the base schema `GO` when a base schema-create block is present; otherwise they begin the schema script.
 - Schema-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', NULL, NULL, NULL, NULL`
-- Schema extended properties MUST be emitted after the base schema `GO`, ordered by property name.
+- Schema extended properties MUST be emitted after schema permissions, ordered by property name.
 
 ### 8.7 Roles
 - User-defined roles MUST emit `CREATE ROLE [name]` and optional `AUTHORIZATION [owner]`, followed by `GO`.
@@ -728,11 +779,11 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
   - after the final definition line and before the trailing `GO`.
 - Reconciliation MAY align generated definition lines to uniquely matched reference-definition lines.
 - Reconciliation MAY preserve semantically equivalent built-in/system type-token spelling for table columns when metadata resolves to the same canonical type (for example `[sys].[sysname]` vs `[sysname]`, `[sys].[hierarchyid]` vs `[hierarchyid]`, `(max)` vs `(MAX)`).
-- Reconciliation MAY preserve semantically equivalent computed-column expression token spelling when metadata resolves to the same computed expression semantics (for example explicit default `CONVERT(..., (0))` versus the omitted default-style form).
+- Reconciliation MAY preserve semantically equivalent computed-column expression token spelling when metadata resolves to the same computed expression semantics (for example explicit default `CONVERT(..., (0))` versus the omitted default-style form, or redundant arithmetic grouping parentheses around a multiplicative subexpression).
 - Table reconciliation MAY preserve compatible reference formatting within the `CREATE TABLE` block, including the table close line and semantically equivalent column type-token spelling already allowed by this section.
 - Table reconciliation MAY reuse the full reference `CREATE TABLE` block only when the normalized generated block and normalized reference block are semantically identical in column order, column semantics, and storage clause semantics.
 - Table reconciliation MAY reuse compatible CHECK-constraint statement lines.
-- Table reconciliation MAY preserve compatible relative ordering of key-constraint, non-constraint-index, and XML-index statements within the post-create block segment between CHECK constraints and foreign keys.
+- Table reconciliation MAY preserve compatible relative ordering of key-constraint, non-constraint-index, user-created-statistic, and XML-index statements within the post-create block segment between CHECK constraints and foreign keys.
 - When a reference `CREATE TABLE` block is not semantically identical after normalization, reconciliation MUST keep the generated canonical `CREATE TABLE` block.
 - Reconciliation MUST NOT be used to change:
   - user-defined type qualification,
@@ -749,7 +800,21 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Script generation MUST emit canonical scripting output per this document and MUST NOT include diff/status-specific normalization.
 - `status` and `diff` normalization behaviors are external contracts defined in `specs/01-cli.md` and `specs/05-output-formats.md`.
 - Scripting and comparison normalization responsibilities MUST remain decoupled.
+- Whitespace-only lines MUST be normalized to empty lines during comparison so that blank separators differing only by spaces or tabs compare as compatible.
+- Comparison normalization MAY ignore redundant empty or otherwise no-op `GO` batches, including batches that contain only standalone semicolon lines.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
+- For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
+- For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside single-line or multi-line `INSERT ... VALUES (...)` statements as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
+- For `TableData`, comparison normalization MAY treat reordered `INSERT ... VALUES (...)` statements within the same contiguous data block as compatible when the normalized inserted-row set is otherwise identical.
+- For `Table`, comparison normalization MAY treat reordered post-create statement packages as compatible when the normalized package set after the base table `CREATE` block is otherwise identical. Table-scoped trigger packages MUST include the trigger body together with any immediately preceding programmable-object `SET` blocks.
+- For `Table`, comparison normalization MAY treat omitted `TEXTIMAGE_ON [name]` as compatible with an explicit clause only when DB metadata shows that the table `lob_data_space_id` resolves to the current default data space named `[name]`; otherwise omission remains a semantic difference.
+- For extended-property blocks, comparison normalization MAY treat reordered `EXEC sp_addextendedproperty ...` statements as compatible within the same contiguous extended-property block when the normalized property statement set is otherwise identical, MAY ignore equivalent spacing around commas and arguments in those statements, and MAY treat equivalent named-vs-positional argument forms with omitted trailing `NULL` levels as compatible.
+- For `Queue`, comparison normalization MUST treat equivalent single-line and multi-line queue option formatting as compatible, MAY treat explicit `ON [PRIMARY]` as equivalent to an omitted default primary filegroup, and MAY treat disabled activation containing only default owner execution context as equivalent to omitted activation.
+- For `Role`, comparison normalization MAY treat legacy `EXEC sp_addrolemember N'<role>', N'<member>'` statements as compatible with `ALTER ROLE [role] ADD MEMBER [member]` when the effective role-membership change is otherwise identical.
+- For `MessageType`, comparison normalization MAY treat legacy `VALIDATION = XML` as compatible with canonical `VALIDATION = WELL_FORMED_XML`, and MAY ignore equivalent spacing around the validation assignment.
+- For `Contract`, comparison normalization MAY treat equivalent single-line and multi-line body formatting as compatible and MAY compare message-usage item ordering as compatible when the emitted usage set is otherwise identical.
+- For `Service`, comparison normalization MAY treat equivalent single-line and multi-line contract-list formatting as compatible and MAY compare contract item ordering as compatible when the emitted contract set is otherwise identical.
+- For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy explicit `NULL` tokens on return-column lines as compatible with canonical return-column lines that omit nullability, including legacy cases where the final return-column line also carries the closing `)` token.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.
