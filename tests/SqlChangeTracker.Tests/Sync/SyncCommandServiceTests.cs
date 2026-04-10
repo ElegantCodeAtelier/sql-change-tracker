@@ -1616,6 +1616,31 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_UserDefinedType_SuppressesEquivalentLegacyTableValuedTypeFormattingDifferences()
+    {
+        var source =
+            "CREATE TYPE [Accounting].[RateWindow] AS TABLE\n" +
+            "(\n" +
+            "[EffectiveDate] [date] NOT NULL,\n" +
+            "[RateValue] [decimal] (15, 8) NOT NULL,\n" +
+            "[YearFraction] [decimal] (15, 12) NOT NULL\n" +
+            ")\n" +
+            "GO";
+        var target =
+            "CREATE TYPE Accounting.RateWindow AS TABLE\n" +
+            "(\n" +
+            "       [EffectiveDate] DATE NOT NULL,\n" +
+            "       RateValue DECIMAL(15,8) NOT NULL,\n" +
+            "       YearFraction Decimal(15,12) NOT NULL\n" +
+            ");\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("UserDefinedType", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_Table_PreservesPostCreatePackageContentDifferencesWhenOrderAlsoDiffers()
     {
         var source =

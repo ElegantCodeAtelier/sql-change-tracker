@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Treat equivalent `TableData` scripts as compatible during comparison when the normalized `INSERT` statements differ only by row ordering within the same contiguous data block.
 - Treat equivalent `Table` scripts as compatible during comparison when post-create statement packages differ only by ordering after the base `CREATE TABLE` block.
 - Treat equivalent legacy `Table` statement formatting as compatible during comparison when normalized table definitions, post-create table statements, and persisted option values are otherwise identical.
+- Treat equivalent legacy `UserDefinedType` `CREATE TYPE` formatting as compatible during comparison when the normalized type definition is otherwise identical.
 - Treat omitted `TEXTIMAGE_ON` on `Table` scripts as compatible during comparison only when DB metadata shows the table LOB data space matches the current default data space.
 - Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, or named-vs-positional argument forms within the same contiguous block.
 - Treat leading SSMS-generated banner comments on programmable objects as compatible during comparison.

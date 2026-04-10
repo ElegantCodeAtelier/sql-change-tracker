@@ -2110,6 +2110,10 @@ internal sealed class SyncCommandService : ISyncCommandService
                 compatibleOmittedTextImageOnDataSpaceName);
             joined = NormalizeTableScriptForComparison(joined);
         }
+        else if (string.Equals(objectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizeUserDefinedTypeScriptForComparison(joined);
+        }
 
         if (!joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
         {
@@ -2691,6 +2695,24 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         return NormalizeTableBlockForComparison(blocks[0]);
+    }
+
+    private static string NormalizeUserDefinedTypeScriptForComparison(string script)
+    {
+        var blocks = SplitGoDelimitedBlocks(script);
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            var firstLine = GetFirstMeaningfulLine(blocks[i]);
+            if (firstLine is null ||
+                !firstLine.StartsWith("CREATE TYPE", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            blocks[i] = [NormalizeLegacyTableStatementBlockForComparison(blocks[i])];
+        }
+
+        return string.Join("\n", blocks.SelectMany(block => block));
     }
 
     private static string NormalizeLegacyTableStatementBlockForComparison(IEnumerable<string> block)
