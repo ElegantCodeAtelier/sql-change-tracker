@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Treat legacy Service Broker message-type validation synonyms and equivalent contract/service body formatting and item ordering as compatible during comparison.
 - Treat equivalent `TableData` scripts as compatible during comparison when the normalized `INSERT` statements differ only by row ordering within the same contiguous data block.
 - Treat equivalent `Table` scripts as compatible during comparison when post-create statement packages differ only by ordering after the base `CREATE TABLE` block.
+- Treat omitted `TEXTIMAGE_ON` on `Table` scripts as compatible during comparison only when DB metadata shows the table LOB data space matches the current default data space.
 - Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, or named-vs-positional argument forms within the same contiguous block.
-- Treat redundant empty `GO` batches as compatible during comparison.
+- Treat redundant empty or otherwise no-op `GO` batches as compatible during comparison.
 - Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 - Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes, including inside multi-line `INSERT ... VALUES (...)` statements.

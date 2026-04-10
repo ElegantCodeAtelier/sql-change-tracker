@@ -63,6 +63,9 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex ExtendedPropertyStatementRegex = new(
         @"^\s*EXEC(?:UTE)?\s+(?:sys\.)?sp_addextendedproperty\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex CompatibleTextImageOnRegex = new(
+        @"^(?<prefix>\)\s*(?:ON\s+(?:\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s]+)(?:\s*\([^)]+\))?)?)\s+TEXTIMAGE_ON\s+(?<dataSpace>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s]+)(?<suffix>\s*)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly IReadOnlyList<SupportedSqlObjectType> ActiveObjectTypes = SupportedSqlObjectTypes.ActiveSync;
 
     private readonly SqlctConfigReader _configReader;
@@ -373,7 +376,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 continue;
             }
 
-            if (ScriptsEqualForComparison(dbObject.ObjectType, dbObject.Script, folderObject.Script))
+            if (ScriptsEqualForComparison(dbObject, folderObject))
             {
                 IncrementPullCounter(dbObject.ObjectType, ref schemaUnchanged, ref dataUnchanged);
                 continue;
@@ -745,6 +748,28 @@ internal sealed class SyncCommandService : ISyncCommandService
                 return;
             }
 
+            string? compatibleOmittedTextImageOnDataSpaceName = null;
+            if (string.Equals(dbObject.ObjectType, "Table", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    compatibleOmittedTextImageOnDataSpaceName =
+                        _introspector.GetTableCompatibleOmittedTextImageOnDataSpaceName(
+                            context.ConnectionOptions,
+                            dbObject.Schema,
+                            dbObject.Name);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(
+                        ref firstFailure,
+                        ToRuntimeFailure<ScanResult>(ex, "failed to read table comparison metadata."),
+                        null);
+                    loopState.Stop();
+                    return;
+                }
+            }
+
             var key = BuildObjectKey(dbObject.ObjectType, dbObject.Schema, dbObject.Name);
             // TryAdd is a no-op for duplicate keys; duplicates are not expected since each catalog query
             // targets distinct object types, and this matches the original ContainsKey guard behavior.
@@ -755,7 +780,8 @@ internal sealed class SyncCommandService : ISyncCommandService
                 dbObject.ObjectType,
                 script,
                 relativePath,
-                fullPath));
+                fullPath,
+                compatibleOmittedTextImageOnDataSpaceName));
         });
 
         if (firstFailure != null)
@@ -954,6 +980,28 @@ internal sealed class SyncCommandService : ISyncCommandService
                     return;
                 }
 
+                string? compatibleOmittedTextImageOnDataSpaceName = null;
+                if (string.Equals(dbObject.ObjectType, "Table", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        compatibleOmittedTextImageOnDataSpaceName =
+                            _introspector.GetTableCompatibleOmittedTextImageOnDataSpaceName(
+                                context.ConnectionOptions,
+                                dbObject.Schema,
+                                dbObject.Name);
+                    }
+                    catch (Exception ex)
+                    {
+                        Interlocked.CompareExchange(
+                            ref firstFailure,
+                            ToRuntimeFailure<ScanResult>(ex, "failed to read table comparison metadata."),
+                            null);
+                        loopState.Stop();
+                        return;
+                    }
+                }
+
                 var key = BuildObjectKey(dbObject.ObjectType, dbObject.Schema, dbObject.Name);
                 objects.TryAdd(key, new InternalObject(
                     key,
@@ -962,7 +1010,8 @@ internal sealed class SyncCommandService : ISyncCommandService
                     dbObject.ObjectType,
                     script,
                     relativePath,
-                    fullPath));
+                    fullPath,
+                    compatibleOmittedTextImageOnDataSpaceName));
             });
         }
 
@@ -1337,7 +1386,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                 continue;
             }
 
-            if (ScriptsEqualForComparison(sourceObject.ObjectType, sourceObject.Script, targetObject.Script))
+            if (ScriptsEqualForComparison(sourceObject, targetObject))
             {
                 continue;
             }
@@ -1371,7 +1420,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return new ChangeEntry(selected, null, null, "unchanged");
         }
 
-        if (ScriptsEqualForComparison(sourceObject.ObjectType, sourceObject.Script, targetObject.Script))
+        if (ScriptsEqualForComparison(sourceObject, targetObject))
         {
             return new ChangeEntry(sourceObject, sourceObject, targetObject, "unchanged");
         }
@@ -1400,16 +1449,49 @@ internal sealed class SyncCommandService : ISyncCommandService
             return string.Empty;
         }
 
-        return BuildUnifiedDiff(entry.Object.ObjectType, sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
+        return BuildUnifiedDiff(entry.SourceObject, entry.TargetObject, sourceLabel, targetLabel, contextLines);
     }
 
     internal static string BuildUnifiedDiff(string sourceLabel, string targetLabel, string sourceScript, string targetScript, int contextLines = 3)
         => BuildUnifiedDiff(null, sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
 
     internal static string BuildUnifiedDiff(string? objectType, string sourceLabel, string targetLabel, string sourceScript, string targetScript, int contextLines = 3)
+        => BuildUnifiedDiffCore(objectType, null, sourceLabel, targetLabel, sourceScript, targetScript, contextLines);
+
+    private static string BuildUnifiedDiff(
+        InternalObject? sourceObject,
+        InternalObject? targetObject,
+        string sourceLabel,
+        string targetLabel,
+        int contextLines = 3)
     {
-        var normalizedSource = NormalizeForComparison(sourceScript, objectType);
-        var normalizedTarget = NormalizeForComparison(targetScript, objectType);
+        var objectType = sourceObject?.ObjectType ?? targetObject?.ObjectType;
+        var sourceScript = sourceObject?.Script ?? string.Empty;
+        var targetScript = targetObject?.Script ?? string.Empty;
+        var compatibleOmittedTextImageOnDataSpaceName =
+            GetCompatibleOmittedTextImageOnDataSpaceName(sourceObject, targetObject);
+
+        return BuildUnifiedDiffCore(
+            objectType,
+            compatibleOmittedTextImageOnDataSpaceName,
+            sourceLabel,
+            targetLabel,
+            sourceScript,
+            targetScript,
+            contextLines);
+    }
+
+    private static string BuildUnifiedDiffCore(
+        string? objectType,
+        string? compatibleOmittedTextImageOnDataSpaceName,
+        string sourceLabel,
+        string targetLabel,
+        string sourceScript,
+        string targetScript,
+        int contextLines = 3)
+    {
+        var normalizedSource = NormalizeForComparison(sourceScript, objectType, compatibleOmittedTextImageOnDataSpaceName);
+        var normalizedTarget = NormalizeForComparison(targetScript, objectType, compatibleOmittedTextImageOnDataSpaceName);
         if (string.Equals(normalizedSource, normalizedTarget, StringComparison.Ordinal))
         {
             return string.Empty;
@@ -1880,8 +1962,42 @@ internal sealed class SyncCommandService : ISyncCommandService
         return results;
     }
 
+    private static bool ScriptsEqualForComparison(InternalObject left, InternalObject right)
+        => string.Equals(
+            NormalizeForComparison(
+                left.Script,
+                left.ObjectType,
+                GetCompatibleOmittedTextImageOnDataSpaceName(left, right)),
+            NormalizeForComparison(
+                right.Script,
+                right.ObjectType,
+                GetCompatibleOmittedTextImageOnDataSpaceName(left, right)),
+            StringComparison.Ordinal);
+
     private static bool ScriptsEqualForComparison(string? objectType, string left, string right)
         => string.Equals(NormalizeForComparison(left, objectType), NormalizeForComparison(right, objectType), StringComparison.Ordinal);
+
+    private static string? GetCompatibleOmittedTextImageOnDataSpaceName(InternalObject? left, InternalObject? right)
+    {
+        var objectType = left?.ObjectType ?? right?.ObjectType;
+        if (!string.Equals(objectType, "Table", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var leftValue = left?.CompatibleOmittedTextImageOnDataSpaceName;
+        var rightValue = right?.CompatibleOmittedTextImageOnDataSpaceName;
+        if (!string.IsNullOrWhiteSpace(leftValue) && !string.IsNullOrWhiteSpace(rightValue))
+        {
+            return string.Equals(leftValue, rightValue, StringComparison.OrdinalIgnoreCase)
+                ? leftValue
+                : null;
+        }
+
+        return !string.IsNullOrWhiteSpace(leftValue)
+            ? leftValue
+            : rightValue;
+    }
 
     private static IReadOnlyList<string> GetCandidateDbObjectTypes(ObjectSelector selector)
     {
@@ -1905,6 +2021,12 @@ internal sealed class SyncCommandService : ISyncCommandService
         => NormalizeForComparison(script, null);
 
     internal static string NormalizeForComparison(string script, string? objectType)
+        => NormalizeForComparison(script, objectType, null);
+
+    internal static string NormalizeForComparison(
+        string script,
+        string? objectType,
+        string? compatibleOmittedTextImageOnDataSpaceName)
     {
         var normalized = script
             .Replace("\r\n", "\n", StringComparison.Ordinal)
@@ -1968,6 +2090,9 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         if (string.Equals(objectType, "Table", StringComparison.OrdinalIgnoreCase))
         {
+            joined = NormalizeCompatibleOmittedTextImageOnForComparison(
+                joined,
+                compatibleOmittedTextImageOnDataSpaceName);
             joined = NormalizeTableScriptForComparison(joined);
         }
 
@@ -2014,7 +2139,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             }
 
             pendingBatchLines.Add(line);
-            if (line.Length > 0)
+            if (!IsIgnorableNoOpBatchLine(line))
             {
                 batchHasContent = true;
             }
@@ -2022,6 +2147,50 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         normalizedLines.AddRange(pendingBatchLines);
         return string.Join("\n", normalizedLines);
+    }
+
+    private static string NormalizeCompatibleOmittedTextImageOnForComparison(
+        string script,
+        string? compatibleOmittedTextImageOnDataSpaceName)
+    {
+        if (string.IsNullOrWhiteSpace(compatibleOmittedTextImageOnDataSpaceName))
+        {
+            return script;
+        }
+
+        var lines = script.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var match = CompatibleTextImageOnRegex.Match(lines[i]);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var dataSpaceName = UnquoteSqlIdentifier(match.Groups["dataSpace"].Value);
+            if (!string.Equals(
+                    dataSpaceName,
+                    compatibleOmittedTextImageOnDataSpaceName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            lines[i] = match.Groups["prefix"].Value + match.Groups["suffix"].Value;
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static bool IsIgnorableNoOpBatchLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return true;
+        }
+
+        var trimmed = line.Trim();
+        return trimmed.All(ch => ch == ';');
     }
 
     private static string NormalizeQueueScriptForComparison(string script)
@@ -3129,7 +3298,8 @@ internal sealed class SyncCommandService : ISyncCommandService
         string ObjectType,
         string Script,
         string RelativePath,
-        string FullPath)
+        string FullPath,
+        string? CompatibleOmittedTextImageOnDataSpaceName = null)
     {
         public string DisplayName => FormatDisplayName(Schema, Name);
 

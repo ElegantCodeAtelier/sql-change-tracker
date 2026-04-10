@@ -289,6 +289,41 @@ ORDER BY ps.name;", MapObjectType),
             .ToArray();
     }
 
+    public virtual string? GetTableCompatibleOmittedTextImageOnDataSpaceName(
+        SqlConnectionOptions options,
+        string schema,
+        string name)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT CASE
+           WHEN t.lob_data_space_id <> 0
+            AND default_ds.data_space_id IS NOT NULL
+            AND t.lob_data_space_id = default_ds.data_space_id
+           THEN lob_ds.name
+           ELSE NULL
+       END
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+LEFT JOIN sys.data_spaces lob_ds ON lob_ds.data_space_id = t.lob_data_space_id
+OUTER APPLY (
+    SELECT TOP (1) ds.data_space_id
+    FROM sys.data_spaces ds
+    WHERE ds.is_default = 1
+    ORDER BY ds.data_space_id
+) default_ds
+WHERE s.name = @schema
+  AND t.name = @name;
+""";
+        command.Parameters.AddWithValue("@schema", schema);
+        command.Parameters.AddWithValue("@name", name);
+
+        return command.ExecuteScalar() as string;
+    }
+
     internal static int ResolveParallelism(int configured)
         => configured > 0 ? configured : Environment.ProcessorCount;
 

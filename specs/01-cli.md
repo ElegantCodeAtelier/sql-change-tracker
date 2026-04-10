@@ -197,10 +197,11 @@ Behavior:
   - Suppress changes when scripts are identical after normalization.
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
-- Redundant empty `GO` batches compare as compatible.
+- Redundant empty or no-op `GO` batches compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
 - Equivalent `TableData` `INSERT` statement ordering within the same contiguous data block compares as compatible when the inserted row set is otherwise identical.
 - Equivalent `Table` post-create statement package ordering compares as compatible when the normalized package set after the base `CREATE TABLE` block is otherwise identical.
+- For `Table`, omitted `TEXTIMAGE_ON [name]` compares as compatible with an explicit clause only when DB metadata shows that the table LOB data space equals the current default data space represented by `[name]`.
 - Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical. Equivalent named-vs-positional `sp_addextendedproperty` argument forms, including omitted trailing `NULL` levels, compare as compatible.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
@@ -226,10 +227,11 @@ Behavior:
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
 - Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
-- Redundant empty `GO` batches compare as compatible.
+- Redundant empty or no-op `GO` batches compare as compatible.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
 - Equivalent `TableData` `INSERT` statement ordering within the same contiguous data block compares as compatible when the inserted row set is otherwise identical.
 - Equivalent `Table` post-create statement package ordering compares as compatible when the normalized package set after the base `CREATE TABLE` block is otherwise identical.
+- For `Table`, omitted `TEXTIMAGE_ON [name]` compares as compatible with an explicit clause only when DB metadata shows that the table LOB data space equals the current default data space represented by `[name]`.
 - Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical. Equivalent named-vs-positional `sp_addextendedproperty` argument forms, including omitted trailing `NULL` levels, compare as compatible.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.

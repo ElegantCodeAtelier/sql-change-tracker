@@ -1459,6 +1459,33 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesRedundantSemicolonOnlyGoBatchDifferences()
+    {
+        var source =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "ALTER TABLE [Accounting].[ExchangeRate] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [Accounting].[ExchangeRate]\n" +
+            "(\n" +
+            "[RateId] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            ";\n" +
+            "GO\n" +
+            "ALTER TABLE [Accounting].[ExchangeRate] SET (LOCK_ESCALATION = AUTO)\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_View_SuppressesEquivalentExtendedPropertyNamedArgumentDifferences()
     {
         var source =
@@ -1900,6 +1927,112 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void RunDiff_Table_SuppressesCompatibleOmittedTextImageOnDifference_WhenDbMetadataAllowsOmission()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(
+                projectDir,
+                Path.Combine("Tables", "dbo.DocumentStore.sql"),
+                "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY]\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                MatchingObjects = [new DbObjectInfo("dbo", "DocumentStore", "Table")]
+            };
+            introspector.CompatibleOmittedTextImageOnDataSpaceNames["dbo.DocumentStore"] = "PRIMARY";
+
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) =>
+                    "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]\r\nGO\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunDiff(projectDir, "db", "dbo.DocumentStore");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.Success, result.ExitCode);
+            Assert.Equal(string.Empty, result.Payload!.Diff);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Table_PreservesTextImageOnDifference_WhenDbMetadataDoesNotAllowOmission()
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(
+                projectDir,
+                Path.Combine("Tables", "dbo.DocumentStore.sql"),
+                "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY]\r\nGO\r\n");
+
+            var introspector = new TrackingIntrospector
+            {
+                AllObjects = [new DbObjectInfo("dbo", "DocumentStore", "Table")]
+            };
+
+            var scripter = new TrackingScripter
+            {
+                ScriptObjectHandler = (_, _, _) =>
+                    "CREATE TABLE [dbo].[DocumentStore]\r\n(\r\n[DocumentId] [int] NOT NULL,\r\n[Payload] [varchar] (max) NULL\r\n) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]\r\nGO\r\n"
+            };
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                introspector,
+                scripter,
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "db");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Equal(ExitCodes.DiffExists, result.ExitCode);
+            Assert.Equal(1, result.Payload!.Summary.Schema.Changed);
+            Assert.Single(result.Payload.Objects);
+            Assert.Equal("changed", result.Payload.Objects[0].Change);
+            Assert.Equal("dbo.DocumentStore", result.Payload.Objects[0].Name);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
+    }
+
+    [Fact]
     public void RunPull_WithFilterPattern_LimitsDbScriptingToMatchingObjects()
     {
         var tempDir = CreateTempDir();
@@ -2132,6 +2265,9 @@ public sealed class SyncCommandServiceTests
 
         public IReadOnlyList<DbObjectInfo> MatchingObjects { get; init; } = [];
 
+        public Dictionary<string, string?> CompatibleOmittedTextImageOnDataSpaceNames { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public override IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
         {
             ListObjectsCalled = true;
@@ -2153,6 +2289,14 @@ public sealed class SyncCommandServiceTests
             LastRequestedName = name;
             return MatchingObjects;
         }
+
+        public override string? GetTableCompatibleOmittedTextImageOnDataSpaceName(
+            SqlConnectionOptions options,
+            string schema,
+            string name)
+            => CompatibleOmittedTextImageOnDataSpaceNames.TryGetValue($"{schema}.{name}", out var value)
+                ? value
+                : null;
     }
 
     private sealed class TrackingScripter : SqlServerScripter
