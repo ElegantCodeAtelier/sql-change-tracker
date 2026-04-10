@@ -319,6 +319,38 @@ public sealed class SqlServerScripterTests
     }
 
     [Fact]
+    public void ScriptRoleAndUser_EmitDatabasePermissionsAndWithoutLogin_WhenPresent()
+    {
+        var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return;
+        }
+
+        var databaseName = $"SqlctPrincipalPerms_{Guid.NewGuid():N}";
+        try
+        {
+            CreatePrincipalPermissionsFixtureDatabase(server, databaseName);
+            var options = new SqlConnectionOptions(server, databaseName, "integrated", null, null, true);
+
+            var scripter = new SqlServerScripter();
+            var roleScript = scripter.ScriptObject(options, new DbObjectInfo(string.Empty, "AppViewer", "Role"));
+            var userScript = scripter.ScriptObject(options, new DbObjectInfo(string.Empty, "AppUser", "User"));
+
+            Assert.Contains("CREATE ROLE [AppViewer]", roleScript);
+            Assert.Contains("EXEC sp_addrolemember N'AppViewer', N'AppUser'", roleScript);
+            Assert.Contains("GRANT VIEW DATABASE STATE TO [AppViewer]", roleScript);
+
+            Assert.Contains("CREATE USER [AppUser] WITHOUT LOGIN WITH DEFAULT_SCHEMA=[AppSchema]", userScript);
+            Assert.Contains("GRANT VIEW DEFINITION TO [AppUser]", userScript);
+        }
+        finally
+        {
+            DropDatabase(server, databaseName);
+        }
+    }
+
+    [Fact]
     public void ScriptSchema_EmitsExtendedProperties_WhenSchemaWithExtendedPropertiesExists()
     {
         var options = GetAdventureWorksOptions();
@@ -470,6 +502,36 @@ public sealed class SqlServerScripterTests
 
         Assert.Contains($"CREATE TYPE [{userDefinedType.Schema}].[{userDefinedType.Name}] FROM", script);
         Assert.Contains("GO", script);
+    }
+
+    [Fact]
+    public void ScriptUserDefinedType_EmitsTypePermissions_WhenPresent()
+    {
+        var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
+        if (string.IsNullOrWhiteSpace(server))
+        {
+            return;
+        }
+
+        var databaseName = $"SqlctTypePerms_{Guid.NewGuid():N}";
+        try
+        {
+            CreateUserDefinedTypePermissionsFixtureDatabase(server, databaseName);
+            var options = new SqlConnectionOptions(server, databaseName, "integrated", null, null, true);
+
+            var scripter = new SqlServerScripter();
+            var scalarScript = scripter.ScriptObject(options, new DbObjectInfo("dbo", "SampleCodeType", "UserDefinedType", UserDefinedTypeKind.Scalar));
+            var tableScript = scripter.ScriptObject(options, new DbObjectInfo("dbo", "SampleCodeTableType", "UserDefinedType", UserDefinedTypeKind.Table));
+
+            Assert.Contains("GRANT EXECUTE ON TYPE::[dbo].[SampleCodeType] TO [AppConsumer]", scalarScript);
+            Assert.Contains("GRANT REFERENCES ON TYPE::[dbo].[SampleCodeType] TO [AppConsumer]", scalarScript);
+            Assert.Contains("GRANT EXECUTE ON TYPE::[dbo].[SampleCodeTableType] TO [AppConsumer]", tableScript);
+            Assert.Contains("GRANT REFERENCES ON TYPE::[dbo].[SampleCodeTableType] TO [AppConsumer]", tableScript);
+        }
+        finally
+        {
+            DropDatabase(server, databaseName);
+        }
     }
 
     [Fact]
@@ -1126,6 +1188,76 @@ INSERT INTO [dbo].[SampleTable] ([KeyAlpha], [KeyBeta], [KeyGamma], [StatusFlag]
         }
 
         return expectedStatisticsLine;
+    }
+
+    private static void CreateUserDefinedTypePermissionsFixtureDatabase(string server, string databaseName)
+    {
+        using var connection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, "master", "integrated", null, null, true));
+        connection.Open();
+
+        using (var createDatabase = connection.CreateCommand())
+        {
+            createDatabase.CommandText = $"CREATE DATABASE [{databaseName}];";
+            createDatabase.ExecuteNonQuery();
+        }
+
+        using var fixtureConnection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, databaseName, "integrated", null, null, true));
+        fixtureConnection.Open();
+
+        var setupStatements = new[]
+        {
+            "CREATE ROLE [AppConsumer];",
+            "CREATE TYPE [dbo].[SampleCodeType] FROM [nvarchar](20) NOT NULL;",
+            """
+CREATE TYPE [dbo].[SampleCodeTableType] AS TABLE (
+    [SequenceId] [int] NOT NULL,
+    [CodeValue] [nvarchar](20) NOT NULL
+);
+""",
+            "GRANT REFERENCES ON TYPE::[dbo].[SampleCodeType] TO [AppConsumer];",
+            "GRANT EXECUTE ON TYPE::[dbo].[SampleCodeType] TO [AppConsumer];",
+            "GRANT REFERENCES ON TYPE::[dbo].[SampleCodeTableType] TO [AppConsumer];",
+            "GRANT EXECUTE ON TYPE::[dbo].[SampleCodeTableType] TO [AppConsumer];"
+        };
+
+        foreach (var statement in setupStatements)
+        {
+            using var command = fixtureConnection.CreateCommand();
+            command.CommandText = statement;
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void CreatePrincipalPermissionsFixtureDatabase(string server, string databaseName)
+    {
+        using var connection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, "master", "integrated", null, null, true));
+        connection.Open();
+
+        using (var createDatabase = connection.CreateCommand())
+        {
+            createDatabase.CommandText = $"CREATE DATABASE [{databaseName}];";
+            createDatabase.ExecuteNonQuery();
+        }
+
+        using var fixtureConnection = SqlConnectionFactory.Create(new SqlConnectionOptions(server, databaseName, "integrated", null, null, true));
+        fixtureConnection.Open();
+
+        var setupStatements = new[]
+        {
+            "CREATE SCHEMA [AppSchema] AUTHORIZATION [dbo];",
+            "CREATE ROLE [AppViewer] AUTHORIZATION [dbo];",
+            "CREATE USER [AppUser] WITHOUT LOGIN WITH DEFAULT_SCHEMA=[AppSchema];",
+            "EXEC sp_addrolemember N'AppViewer', N'AppUser';",
+            "GRANT VIEW DATABASE STATE TO [AppViewer];",
+            "GRANT VIEW DEFINITION TO [AppUser];"
+        };
+
+        foreach (var statement in setupStatements)
+        {
+            using var command = fixtureConnection.CreateCommand();
+            command.CommandText = statement;
+            command.ExecuteNonQuery();
+        }
     }
 
     private static (string PrimaryKeyLine, string IndexLine) CreateIndexOptionsFixtureDatabase(string server, string databaseName)

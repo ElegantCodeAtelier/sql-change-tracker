@@ -1270,6 +1270,7 @@ WHERE dp.type = 'R' AND dp.name = @name";
         }
 
         lines.AddRange(ReadRoleMembershipStatements(connection, roleName));
+        lines.AddRange(ReadPrincipalDatabasePermissions(connection, roleName, referenceLines));
         if (lines.Count == 0)
         {
             throw new InvalidOperationException($"Role has no scriptable definition: [{roleName}].");
@@ -1325,6 +1326,7 @@ WHERE dp.name = @name";
 
             lines.Add($"CREATE USER [{userName}] FOR CERTIFICATE [{certificateName}]");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1339,6 +1341,7 @@ WHERE dp.name = @name";
 
             lines.Add($"CREATE USER [{userName}] FOR ASYMMETRIC KEY [{asymmetricKeyName}]");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1348,6 +1351,7 @@ WHERE dp.name = @name";
         {
             lines.Add($"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1358,6 +1362,7 @@ WHERE dp.name = @name";
         {
             lines.Add($"CREATE USER [{userName}] FROM EXTERNAL PROVIDER{defaultSchemaClause}");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1368,9 +1373,19 @@ WHERE dp.name = @name";
             throw new InvalidOperationException($"Contained database users with password metadata are not supported: [{userName}].");
         }
 
-        var effectiveLoginName = string.IsNullOrWhiteSpace(loginName) ? userName : loginName;
-        lines.Add($"CREATE USER [{userName}] FOR LOGIN [{effectiveLoginName}]{defaultSchemaClause}");
+        if (string.IsNullOrWhiteSpace(loginName))
+        {
+            lines.Add($"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}");
+            lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
+            AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+            AppendTrailingBlankLines(lines, referenceLines);
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        lines.Add($"CREATE USER [{userName}] FOR LOGIN [{loginName}]{defaultSchemaClause}");
         lines.Add("GO");
+        lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
@@ -1588,7 +1603,7 @@ WHERE s.name = @schema AND syn.name = @name;";
         var kind = obj.UserDefinedTypeKind ?? ResolveUserDefinedTypeKind(connection, obj);
         if (kind == UserDefinedTypeKind.Table)
         {
-            return ScriptTableType(connection, obj);
+            return ScriptTableType(connection, obj, referenceLines);
         }
 
         using var command = connection.CreateCommand();
@@ -1628,6 +1643,7 @@ WHERE t.is_user_defined = 1 AND t.is_table_type = 0 AND s.name = @schema AND t.n
             "GO"
         };
 
+        lines.AddRange(ReadUserDefinedTypePermissions(connection, schemaName, typeName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadUserDefinedTypeExtendedProperties(connection, schemaName, typeName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
@@ -1657,7 +1673,7 @@ WHERE t.is_user_defined = 1
             : UserDefinedTypeKind.Scalar;
     }
 
-    private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -1699,6 +1715,7 @@ WHERE s.name = @schema AND tt.name = @name;";
 
         lines.Add(")");
         lines.Add("GO");
+        lines.AddRange(ReadUserDefinedTypePermissions(connection, obj.Schema, obj.Name, referenceLines));
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -4540,6 +4557,23 @@ ORDER BY pr.name, dp.permission_name;",
             $"SCHEMA::{QuoteIdentifier(schemaName)}",
             referenceLines);
 
+    private static IEnumerable<string> ReadPrincipalDatabasePermissions(
+        SqlConnection connection,
+        string principalName,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+WHERE dp.class_desc = 'DATABASE'
+  AND pr.name = @name
+ORDER BY dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", principalName),
+            string.Empty,
+            referenceLines);
+
     private static IEnumerable<string> ExecutePermissionQuery(
         SqlConnection connection,
         string commandText,
@@ -4596,11 +4630,15 @@ ORDER BY pr.name, dp.permission_name;",
         string targetClause,
         string principal)
     {
+        var onTarget = string.IsNullOrWhiteSpace(targetClause)
+            ? string.Empty
+            : $" ON {targetClause}";
+
         return normalizedState switch
         {
-            "GRANT_WITH_GRANT_OPTION" => $"GRANT {permission} ON {targetClause} TO [{principal}] WITH GRANT OPTION",
-            "DENY" => $"DENY {permission} ON {targetClause} TO [{principal}]",
-            _ => $"GRANT {permission} ON {targetClause} TO [{principal}]"
+            "GRANT_WITH_GRANT_OPTION" => $"GRANT {permission}{onTarget} TO [{principal}] WITH GRANT OPTION",
+            "DENY" => $"DENY {permission}{onTarget} TO [{principal}]",
+            _ => $"GRANT {permission}{onTarget} TO [{principal}]"
         };
     }
 
@@ -5473,6 +5511,32 @@ ORDER BY pr.name, dp.permission_name;",
                 command.Parameters.AddWithValue("@name", name);
             },
             $"XML SCHEMA COLLECTION::{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadUserDefinedTypePermissions(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.types t ON t.user_type_id = dp.major_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE dp.class_desc = 'TYPE'
+  AND s.name = @schema
+  AND t.name = @name
+  AND t.is_user_defined = 1
+ORDER BY pr.name, dp.permission_name;",
+            command =>
+            {
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+            },
+            $"TYPE::{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}",
             referenceLines);
 
     private static IEnumerable<string> ReadXmlSchemaCollectionExtendedProperties(

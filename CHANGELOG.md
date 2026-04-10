@@ -15,16 +15,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Treat equivalent role-membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` as compatible during comparison.
 - Treat legacy Service Broker message-type validation synonyms and equivalent contract/service body formatting and item ordering as compatible during comparison.
 - Treat equivalent `TableData` scripts as compatible during comparison when the normalized `INSERT` statements differ only by row ordering within the same contiguous data block.
+- Treat equivalent `TableData` scripts as compatible during comparison when single-row `INSERT` column lists and corresponding value tuples are reordered consistently.
 - Treat equivalent `Table` scripts as compatible during comparison when post-create statement packages differ only by ordering after the base `CREATE TABLE` block.
 - Treat equivalent legacy `Table` statement formatting as compatible during comparison when normalized table definitions, post-create table statements, and persisted option values are otherwise identical.
 - Treat equivalent legacy `UserDefinedType` `CREATE TYPE` formatting as compatible during comparison when the normalized type definition is otherwise identical.
 - Treat omitted `TEXTIMAGE_ON` on `Table` scripts as compatible during comparison only when DB metadata shows the table LOB data space matches the current default data space.
 - Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, or named-vs-positional argument forms within the same contiguous block.
+- Treat equivalent extended-property blocks as compatible during comparison when the normalized `sp_addextendedproperty` statements differ only by ordering, argument spacing, named-vs-positional forms, or top-level `N'...'` string literal prefixes.
 - Treat leading SSMS-generated banner comments on programmable objects as compatible during comparison.
 - Treat redundant empty or otherwise no-op `GO` batches as compatible during comparison.
+- Treat an omitted terminal `GO` after the final batch as compatible during comparison with an explicit final `GO`.
 - Keep `diff` output readable by rendering compatible `Table` and `UserDefinedType` changes from readable script text instead of opaque comparison-normalized text.
+- Keep normal `diff` output readable for non-table objects such as users and roles by rendering permission changes from readable script text instead of lowercase comparison-normalized tokens.
 - Keep readable `diff` output for `Table` and table-valued `UserDefinedType` bodies at per-entry granularity instead of collapsing the entire body into one changed line.
 - Align readable `Table` and table-valued `UserDefinedType` diffs by individual body entries so a single changed column or inline constraint does not mark the entire body as changed.
+- Exclude SSMS database-diagram support stored procedures from discovery and scripting even when SQL Server does not mark them as system-shipped.
+- Script `TYPE::` permissions for scalar and table-valued `UserDefinedType` objects.
+- Script database-level permissions granted directly to `Role` and `User` principals, and emit `CREATE USER ... WITHOUT LOGIN` when no server-login metadata is available.
+- Treat equivalent contiguous permission statement ordering as compatible during comparison.
+- Treat legacy standalone table-level inline `PRIMARY KEY` and `UNIQUE` constraints as compatible during comparison with canonical post-create key-constraint statements.
+- Treat legacy CLR table-valued function return-column collation clauses as compatible during comparison when SQL Server ignores them in the effective return shape.
 - Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 - Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes, including inside multi-line `INSERT ... VALUES (...)` statements.

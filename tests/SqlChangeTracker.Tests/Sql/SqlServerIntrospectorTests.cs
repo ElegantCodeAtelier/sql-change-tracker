@@ -26,6 +26,33 @@ public sealed class SqlServerIntrospectorTests
         Assert.Equal(configured, resolved);
     }
 
+    [Theory]
+    [InlineData("sp_alterdiagram", true)]
+    [InlineData("sp_creatediagram", true)]
+    [InlineData("sp_dropdiagram", true)]
+    [InlineData("sp_helpdiagramdefinition", true)]
+    [InlineData("sp_helpdiagrams", true)]
+    [InlineData("sp_renamediagram", true)]
+    [InlineData("sp_upgraddiagrams", true)]
+    [InlineData("sp_CustomImport", false)]
+    [InlineData("usp_ProcessBatch", false)]
+    public void IsExcludedStoredProcedureName_RecognizesOnlyDatabaseDiagramSupportProcedures(string name, bool expected)
+    {
+        var actual = SqlServerIntrospector.IsExcludedStoredProcedureName(name);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("sp_helpdiagrams", false)]
+    [InlineData("usp_ProcessBatch", true)]
+    public void ShouldIncludeObject_FiltersOnlyExcludedDatabaseDiagramStoredProcedures(string name, bool expected)
+    {
+        var actual = SqlServerIntrospector.ShouldIncludeObject(new DbObjectInfo("dbo", name, "StoredProcedure"));
+
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void ListObjects_ReturnsResults_WhenConfigured()
     {

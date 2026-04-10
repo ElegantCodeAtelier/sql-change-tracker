@@ -999,8 +999,67 @@ public sealed class SyncCommandServiceTests
 
         var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
 
-        Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER [ReadOnlyUser]", diff);
+        Assert.Contains("EXEC sp_addrolemember N'db_datareader', N'ReadOnlyUser'", diff);
         Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER [ReportUser]", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_UserDefinedType_SuppressesEquivalentPermissionOrderDifferences()
+    {
+        var source =
+            "CREATE TYPE [dbo].[SampleType] AS TABLE\n" +
+            "(\n" +
+            "    [ItemId] [smallint] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "GRANT EXECUTE ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO\n" +
+            "GRANT REFERENCES ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO";
+        var target =
+            "CREATE TYPE [dbo].[SampleType] AS TABLE\n" +
+            "(\n" +
+            "    [ItemId] [smallint] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "GRANT REFERENCES ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO\n" +
+            "GRANT EXECUTE ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("UserDefinedType", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_UserDefinedType_PreservesPermissionDifferencesWhenOrderAlsoDiffers()
+    {
+        var source =
+            "CREATE TYPE [dbo].[SampleType] AS TABLE\n" +
+            "(\n" +
+            "    [ItemId] [smallint] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "GRANT EXECUTE ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO\n" +
+            "GRANT REFERENCES ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO";
+        var target =
+            "CREATE TYPE [dbo].[SampleType] AS TABLE\n" +
+            "(\n" +
+            "    [ItemId] [smallint] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "GRANT REFERENCES ON TYPE:: [dbo].[SampleType] TO [AppRole]\n" +
+            "GO\n" +
+            "GRANT EXECUTE ON TYPE:: [dbo].[SampleType] TO [OtherRole]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("UserDefinedType", "db", "folder", source, target);
+
+        Assert.Contains("GRANT EXECUTE ON TYPE:: [dbo].[SampleType] TO [AppRole]", diff);
+        Assert.Contains("GRANT EXECUTE ON TYPE:: [dbo].[SampleType] TO [OtherRole]", diff);
     }
 
     [Fact]
@@ -1109,7 +1168,7 @@ public sealed class SyncCommandServiceTests
 
         var diff = SyncCommandService.BuildUnifiedDiff("Service", "db", "folder", source, target);
 
-        Assert.Contains("ON QUEUE [dbo].[AppTargetQueue]([//App/Contract])", diff);
+        Assert.Contains("ON QUEUE [dbo].[AppTargetQueue] ([//App/Contract])", diff);
     }
 
     [Fact]
@@ -1213,6 +1272,41 @@ public sealed class SyncCommandServiceTests
         Assert.Contains("EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[RandomVector]", diff);
         Assert.Contains("EXTERNAL NAME [AppClrLegacy].[App.Database.TabularFunctions].[RandomVector]", diff);
         Assert.DoesNotContain("[RndValue] [int] NULL)", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Function_SuppressesClrTableValuedFunctionCollationAndNullDifferences()
+    {
+        var source =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[DecodeToken] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[TextCode] [nvarchar] (100),\n" +
+            "[SequenceId] [int]\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[DecodeToken]\n" +
+            "GO";
+        var target =
+            "SET QUOTED_IDENTIFIER OFF\n" +
+            "GO\n" +
+            "SET ANSI_NULLS OFF\n" +
+            "GO\n" +
+            "CREATE FUNCTION [dbo].[DecodeToken] (@input [nvarchar] (MAX))\n" +
+            "RETURNS TABLE (\n" +
+            "[TextCode] [nvarchar] (100) COLLATE Polish_CI_AS NULL,\n" +
+            "[SequenceId] [int]\n" +
+            ")\n" +
+            "WITH EXECUTE AS CALLER\n" +
+            "EXTERNAL NAME [AppClr].[App.Database.TabularFunctions].[DecodeToken]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Function", "db", "folder", source, target);
+
+        Assert.Empty(diff);
     }
 
     [Fact]
@@ -1341,6 +1435,37 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void NormalizeForComparison_TableData_NormalizesEquivalentInsertColumnOrderDifferences()
+    {
+        var canonical = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[SampleConfig] ([ConfigCode], [TaskCode], [DisplayName], [IsEnabled]) VALUES ('A01', 'TaskAlpha', 'Alpha', 1);",
+            SyncCommandService.TableDataObjectType);
+        var reordered = SyncCommandService.NormalizeForComparison(
+            "INSERT INTO [dbo].[SampleConfig] ([ConfigCode], [DisplayName], [IsEnabled], [TaskCode]) VALUES ('A01', 'Alpha', 1, 'TaskAlpha')",
+            SyncCommandService.TableDataObjectType);
+
+        Assert.Equal(canonical, reordered);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_SuppressesEquivalentInsertColumnOrderDifferences()
+    {
+        var source =
+            "INSERT INTO [dbo].[SampleConfig] ([ConfigCode], [TaskCode], [DisplayName], [IsEnabled]) VALUES ('A01', 'TaskAlpha', 'Alpha', 1);";
+        var target =
+            "INSERT INTO [dbo].[SampleConfig] ([ConfigCode], [DisplayName], [IsEnabled], [TaskCode]) VALUES ('A01', 'Alpha', 1, 'TaskAlpha')";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_TableData_PreservesValueDifferencesWhenInsertOrderAlsoDiffers()
     {
         var source =
@@ -1359,6 +1484,25 @@ public sealed class SyncCommandServiceTests
 
         Assert.Contains("VALUES (1, 'A')", diff);
         Assert.Contains("VALUES (1, 'Z')", diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_TableData_PreservesValueDifferencesWhenInsertColumnOrderAlsoDiffers()
+    {
+        var source =
+            "INSERT INTO [dbo].[SampleConfig] ([ConfigCode], [TaskCode], [DisplayName], [IsEnabled]) VALUES ('A01', 'TaskAlpha', 'Alpha', 1);";
+        var target =
+            "INSERT INTO [dbo].[SampleConfig] ([ConfigCode], [DisplayName], [IsEnabled], [TaskCode]) VALUES ('A01', 'Alpha', 1, 'TaskBeta')";
+
+        var diff = SyncCommandService.BuildUnifiedDiff(
+            SyncCommandService.TableDataObjectType,
+            "db",
+            "folder",
+            source,
+            target);
+
+        Assert.Contains("'TaskAlpha'", diff);
+        Assert.Contains("'TaskBeta'", diff);
     }
 
     [Fact]
@@ -1395,6 +1539,35 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentExtendedPropertyOrderAndUnicodePrefixDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Primary detail', 'SCHEMA', 'dbo', 'TABLE', 'SessionLog', 'COLUMN', 'DetailAlpha'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', N'Secondary detail', 'SCHEMA', 'dbo', 'TABLE', 'SessionLog', 'COLUMN', 'DetailBeta'\n" +
+            "GO";
+        var target =
+            "CREATE TABLE [dbo].[SessionLog]\n" +
+            "(\n" +
+            "[SessionLogID] [int] NOT NULL\n" +
+            ")\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', 'Secondary detail', 'SCHEMA', 'dbo', 'TABLE', 'SessionLog', 'COLUMN', 'DetailBeta'\n" +
+            "GO\n" +
+            "EXEC sp_addextendedproperty 'MS_Description', 'Primary detail', 'SCHEMA', 'dbo', 'TABLE', 'SessionLog', 'COLUMN', 'DetailAlpha'\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_Table_PreservesExtendedPropertyValueDifferencesWhenOrderAlsoDiffers()
     {
         var source =
@@ -1420,8 +1593,8 @@ public sealed class SyncCommandServiceTests
 
         var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
 
-        Assert.Contains("N'System details'", diff);
-        Assert.Contains("N'Updated system details'", diff);
+        Assert.Contains("'System details'", diff);
+        Assert.Contains("'Updated system details'", diff);
     }
 
     [Fact]
@@ -1641,6 +1814,57 @@ public sealed class SyncCommandServiceTests
     }
 
     [Fact]
+    public void BuildUnifiedDiff_Table_SuppressesEquivalentInlineKeyConstraintAndPostCreateKeyConstraintDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[MigrationLog]\n" +
+            "(\n" +
+            "    [MigrationName] [varchar] (255) NOT NULL,\n" +
+            "    [ExecutedAt] [datetime] NOT NULL\n" +
+            ") ON [PRIMARY]\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[MigrationLog] ADD CONSTRAINT [PK_MigrationLog] PRIMARY KEY CLUSTERED ([MigrationName]) ON [PRIMARY]\n" +
+            "GO";
+        var target =
+            "CREATE TABLE dbo.MigrationLog(\n" +
+            "    MigrationName VARCHAR(255) NOT NULL,\n" +
+            "    ExecutedAt DATETIME NOT NULL,\n" +
+            "    CONSTRAINT [PK_MigrationLog] PRIMARY KEY CLUSTERED ( MigrationName ) ON PRIMARY\n" +
+            ") ON PRIMARY\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Empty(diff);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Table_PreservesInlineKeyConstraintSemanticDifferences()
+    {
+        var source =
+            "CREATE TABLE [dbo].[MigrationLog]\n" +
+            "(\n" +
+            "    [MigrationName] [varchar] (255) NOT NULL,\n" +
+            "    [ExecutedAt] [datetime] NOT NULL\n" +
+            ") ON [PRIMARY]\n" +
+            "GO\n" +
+            "ALTER TABLE [dbo].[MigrationLog] ADD CONSTRAINT [PK_MigrationLog] PRIMARY KEY CLUSTERED ([MigrationName]) ON [PRIMARY]\n" +
+            "GO";
+        var target =
+            "CREATE TABLE dbo.MigrationLog(\n" +
+            "    MigrationName VARCHAR(255) NOT NULL,\n" +
+            "    ExecutedAt DATETIME NOT NULL,\n" +
+            "    CONSTRAINT [PK_MigrationLog] PRIMARY KEY CLUSTERED ( ExecutedAt ) ON PRIMARY\n" +
+            ") ON PRIMARY\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
+
+        Assert.Contains("PRIMARY KEY CLUSTERED ([MigrationName])", diff);
+        Assert.Contains("PRIMARY KEY CLUSTERED ( ExecutedAt )", diff);
+    }
+
+    [Fact]
     public void BuildUnifiedDiff_Table_PreservesPostCreatePackageContentDifferencesWhenOrderAlsoDiffers()
     {
         var source =
@@ -1695,7 +1919,7 @@ public sealed class SyncCommandServiceTests
             ") ON [PRIMARY]\n" +
             "GO";
         var target =
-            "create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,8) null,) on primary;\n" +
+            "create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,9) null,) on primary;\n" +
             "GO";
 
         var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target);
@@ -1703,8 +1927,8 @@ public sealed class SyncCommandServiceTests
         Assert.Contains(" CREATE TABLE [lab].[SampleMeasure]", diff);
         Assert.Contains("     [BatchId] [int] NOT NULL,", diff);
         Assert.Contains("-    [MeasureValue] [decimal] (15, 8) NULL", diff);
-        Assert.Contains("+    measurevalue decimal(15,8) null", diff, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,8) null) on primary", diff, StringComparison.Ordinal);
+        Assert.Contains("+    measurevalue decimal(15,9) null", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,9) null) on primary", diff, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1751,15 +1975,51 @@ public sealed class SyncCommandServiceTests
             ")\n" +
             "GO";
         var target =
-            "create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,8) null,) on primary;\n" +
+            "create table lab.samplemeasure(batchid int not null,measurevalue decimal(15,9) null,) on primary;\n" +
             "GO";
 
         var diff = SyncCommandService.BuildUnifiedDiff("Table", "db", "folder", source, target, normalizedDiff: true);
 
         Assert.Contains("create table lab.samplemeasure", diff, StringComparison.Ordinal);
         Assert.Contains("measurevalue decimal(15,8) null", diff, StringComparison.Ordinal);
-        Assert.Contains("measurevalue decimal(15,8) null,)", diff, StringComparison.Ordinal);
+        Assert.Contains("measurevalue decimal(15,9) null", diff, StringComparison.Ordinal);
         Assert.DoesNotContain("[lab].[SampleMeasure]", diff, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_User_PreservesReadablePermissionText_ByDefault()
+    {
+        var source =
+            "CREATE USER [AppReader] FOR LOGIN [AppReader]\n" +
+            "GO\n" +
+            "GRANT CONNECT TO [AppReader]\n" +
+            "GO";
+        var target =
+            "CREATE USER [AppReader] FOR LOGIN [AppReader]\n" +
+            "GO";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("User", "db", "folder", source, target);
+
+        Assert.Contains("GRANT CONNECT TO [AppReader]", diff, StringComparison.Ordinal);
+        Assert.DoesNotContain("grant connect to appreader", diff, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildUnifiedDiff_Role_SuppressesMissingTerminalGoAfterFinalStatement()
+    {
+        var source =
+            "CREATE ROLE [AppViewer]\n" +
+            "GO\n" +
+            "GRANT VIEW DATABASE STATE TO [AppViewer]\n" +
+            "GO";
+        var target =
+            "CREATE ROLE [AppViewer]\n" +
+            "GO\n" +
+            "GRANT VIEW DATABASE STATE TO [AppViewer]";
+
+        var diff = SyncCommandService.BuildUnifiedDiff("Role", "db", "folder", source, target);
+
+        Assert.Empty(diff);
     }
 
     [Fact]

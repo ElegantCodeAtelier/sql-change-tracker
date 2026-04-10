@@ -54,11 +54,20 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex ClrTableValuedFunctionReturnColumnNullWithCloseParenRegex = new(
         @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*\)\s*)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex ClrTableValuedFunctionReturnColumnCollationRegex = new(
+        @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+COLLATE\s+(?:\[[^\]]+\]|""(?:""""|[^""])+""|[A-Za-z0-9_]+)(?<suffix>\s+(?:NULL)?\s*,?\s*\)?\s*)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex RoleMembershipLegacySyntaxRegex = new(
         @"^\s*EXEC(?:UTE)?\s+sp_addrolemember\s+N'(?<role>(?:''|[^'])*)'\s*,\s*N'(?<member>(?:''|[^'])*)'\s*;?\s*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex RoleMembershipAlterRoleSyntaxRegex = new(
         @"^\s*ALTER\s+ROLE\s+(?<role>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s;]+)\s+ADD\s+MEMBER\s+(?<member>\[[^\]]+(?:\]\])*\]|""(?:""""|[^""])+""|[^\s;]+)\s*;?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex PermissionStatementRegex = new(
+        @"^\s*(GRANT|DENY)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex InlineCreateTableKeyConstraintRegex = new(
+        @"^\s*(?:CONSTRAINT\b.+?\b)?(?:PRIMARY\s+KEY|UNIQUE)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex ExtendedPropertyStatementRegex = new(
         @"^\s*EXEC(?:UTE)?\s+(?:sys\.)?sp_addextendedproperty\b",
@@ -1640,8 +1649,9 @@ internal sealed class SyncCommandService : ISyncCommandService
         var keyLines = keyScript.Length == 0
             ? Array.Empty<string>()
             : keyScript.Split('\n');
+        keyLines = TrimOptionalTerminalGoLineArray(keyLines);
 
-        if (normalizedDiff || !NeedsReadableDiffDisplayNormalization(objectType))
+        if (normalizedDiff)
         {
             return keyLines.Select(line => new ComparableLine(line, line)).ToArray();
         }
@@ -1659,6 +1669,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         var displayLines = displayScript.Length == 0
             ? Array.Empty<string>()
             : displayScript.Split('\n');
+        displayLines = TrimOptionalTerminalGoLineArray(displayLines);
 
         if (keyLines.Length != displayLines.Length)
         {
@@ -1732,6 +1743,11 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         var joined = string.Join("\n", lines);
         joined = NormalizeEmptyGoBatchesForComparison(joined);
+        if (joined.Contains("GRANT ", StringComparison.OrdinalIgnoreCase) ||
+            joined.Contains("DENY ", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizePermissionBlocksForDiffDisplay(joined);
+        }
 
         if (joined.Contains("sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
         {
@@ -1794,15 +1810,30 @@ internal sealed class SyncCommandService : ISyncCommandService
                 NormalizeTableBlockForDiffDisplay(block)));
         }
 
-        if (!TryBuildComparableLinesForTableLikeBlock(blocks[createTableIndex], out var createTableComparableLines))
+        IReadOnlyList<string> extractedInlineConstraintPackages = Array.Empty<string>();
+        IReadOnlyList<ComparableLine> createTableComparableLines;
+        if (TryPrepareCreateTableBlockForComparison(
+                blocks[createTableIndex],
+                out var createTableParts,
+                out extractedInlineConstraintPackages))
+        {
+            createTableComparableLines = BuildComparableLinesForParsedTableLikeParts(createTableParts);
+        }
+        else if (!TryBuildComparableLinesForTableLikeBlock(blocks[createTableIndex], out var fallbackCreateTableComparableLines))
         {
             return null;
+        }
+        else
+        {
+            createTableComparableLines = fallbackCreateTableComparableLines;
         }
 
         comparableLines.AddRange(createTableComparableLines);
 
-        var postCreatePackages = BuildTablePostCreatePackages(blocks, createTableIndex + 1);
-        foreach (var package in postCreatePackages.OrderBy(NormalizeTablePostCreatePackageForComparison, StringComparer.Ordinal))
+        var postCreatePackages = BuildTablePostCreatePackages(blocks, createTableIndex + 1)
+            .Concat(extractedInlineConstraintPackages)
+            .OrderBy(NormalizeTablePostCreatePackageForComparison, StringComparer.Ordinal);
+        foreach (var package in postCreatePackages)
         {
             comparableLines.Add(BuildComparableLineForStructuredBlock(
                 NormalizeTablePostCreatePackageForComparison(package),
@@ -1847,8 +1878,9 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         var comparableLines = new List<ComparableLine>();
-        foreach (var block in blocks)
+        for (var i = 0; i < blocks.Count; i++)
         {
+            var block = blocks[i];
             var firstLine = GetFirstMeaningfulLine(block);
             if (!string.IsNullOrEmpty(firstLine) &&
                 firstLine.StartsWith("CREATE TYPE", StringComparison.OrdinalIgnoreCase))
@@ -1859,6 +1891,33 @@ internal sealed class SyncCommandService : ISyncCommandService
                 }
 
                 comparableLines.AddRange(createTypeComparableLines);
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(firstLine) && IsPermissionStatementLine(firstLine))
+            {
+                var permissionPackages = new List<string>();
+                while (i < blocks.Count)
+                {
+                    var currentFirstLine = GetFirstMeaningfulLine(blocks[i]);
+                    if (string.IsNullOrEmpty(currentFirstLine) || !IsPermissionStatementLine(currentFirstLine))
+                    {
+                        break;
+                    }
+
+                    permissionPackages.Add(JoinBlockLines(blocks[i]));
+                    i++;
+                }
+
+                foreach (var permissionPackage in permissionPackages
+                             .OrderBy(package => NormalizeForComparison(package, "UserDefinedType"), StringComparer.Ordinal))
+                {
+                    comparableLines.Add(BuildComparableLineForStructuredBlock(
+                        NormalizeForComparison(permissionPackage, "UserDefinedType"),
+                        NormalizeForDiffDisplay(permissionPackage, "UserDefinedType", null)));
+                }
+
+                i--;
                 continue;
             }
 
@@ -1899,28 +1958,8 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static ComparableLine BuildComparableLineForStructuredBlock(string key, string display)
         => new(key, display);
 
-    private static bool TryBuildComparableLinesForTableLikeBlock(
-        IEnumerable<string> block,
-        out IReadOnlyList<ComparableLine> comparableLines)
+    private static IReadOnlyList<ComparableLine> BuildComparableLinesForParsedTableLikeParts(TableLikeStatementParts parts)
     {
-        var statement = string.Join(
-            " ",
-            block.Where(line => !string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
-                 .Select(line => line.Trim())
-                 .Where(line => line.Length > 0));
-
-        if (statement.Length == 0)
-        {
-            comparableLines = [new ComparableLine("GO", "GO")];
-            return true;
-        }
-
-        if (!TryParseTableLikeStatementForDiffDisplay(statement, out var parts))
-        {
-            comparableLines = Array.Empty<ComparableLine>();
-            return false;
-        }
-
         var lines = new List<ComparableLine>(parts.Items.Count + 4)
         {
             new ComparableLine(
@@ -1947,8 +1986,96 @@ internal sealed class SyncCommandService : ISyncCommandService
             closeDisplay));
         lines.Add(new ComparableLine("GO", "GO"));
 
-        comparableLines = lines;
+        return lines;
+    }
+
+    private static bool TryBuildComparableLinesForTableLikeBlock(
+        IEnumerable<string> block,
+        out IReadOnlyList<ComparableLine> comparableLines)
+    {
+        var statement = string.Join(
+            " ",
+            block.Where(line => !string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                 .Select(line => line.Trim())
+                 .Where(line => line.Length > 0));
+
+        if (statement.Length == 0)
+        {
+            comparableLines = [new ComparableLine("GO", "GO")];
+            return true;
+        }
+
+        if (!TryParseTableLikeStatementForDiffDisplay(statement, out var parts))
+        {
+            comparableLines = Array.Empty<ComparableLine>();
+            return false;
+        }
+
+        comparableLines = BuildComparableLinesForParsedTableLikeParts(parts);
         return true;
+    }
+
+    private static bool TryPrepareCreateTableBlockForComparison(
+        IEnumerable<string> block,
+        out TableLikeStatementParts createTableParts,
+        out IReadOnlyList<string> extractedInlineConstraintPackages)
+    {
+        var statement = string.Join(
+            " ",
+            block.Where(line => !string.Equals(line.Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                 .Select(line => line.Trim())
+                 .Where(line => line.Length > 0));
+
+        if (statement.Length == 0 ||
+            !TryParseTableLikeStatementForDiffDisplay(statement, out var parts) ||
+            !parts.Prefix.StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            createTableParts = null!;
+            extractedInlineConstraintPackages = Array.Empty<string>();
+            return false;
+        }
+
+        var createTableTarget = parts.Prefix["CREATE TABLE".Length..].Trim();
+        if (createTableTarget.Length == 0)
+        {
+            createTableParts = null!;
+            extractedInlineConstraintPackages = Array.Empty<string>();
+            return false;
+        }
+
+        var remainingItemTexts = new List<string>(parts.Items.Count);
+        var extractedPackages = new List<string>();
+        foreach (var item in parts.Items)
+        {
+            if (IsInlineCreateTableKeyConstraintItem(item.Text))
+            {
+                extractedPackages.Add($"ALTER TABLE {createTableTarget} ADD {item.Text}\nGO");
+                continue;
+            }
+
+            remainingItemTexts.Add(item.Text);
+        }
+
+        createTableParts = RebuildTableLikeStatementParts(parts.Prefix, remainingItemTexts, parts.Suffix);
+        extractedInlineConstraintPackages = extractedPackages;
+        return true;
+    }
+
+    private static bool IsInlineCreateTableKeyConstraintItem(string text)
+        => InlineCreateTableKeyConstraintRegex.IsMatch(text);
+
+    private static TableLikeStatementParts RebuildTableLikeStatementParts(
+        string prefix,
+        IReadOnlyList<string> itemTexts,
+        string suffix)
+    {
+        var items = new List<TableLikeBodyItem>(itemTexts.Count);
+        for (var i = 0; i < itemTexts.Count; i++)
+        {
+            items.Add(new TableLikeBodyItem(itemTexts[i], i < itemTexts.Count - 1));
+        }
+
+        return new TableLikeStatementParts(prefix, items, suffix);
     }
 
     private static bool TryBuildGroupedComparableLines(
@@ -2011,12 +2138,26 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     private static bool ComparableLinesEqual(ComparableLine[] source, ComparableLine[] target)
     {
-        if (source.Length != target.Length)
+        var sourceLength = source.Length;
+        while (sourceLength > 0 &&
+               string.Equals(source[sourceLength - 1].Key, "GO", StringComparison.OrdinalIgnoreCase))
+        {
+            sourceLength--;
+        }
+
+        var targetLength = target.Length;
+        while (targetLength > 0 &&
+               string.Equals(target[targetLength - 1].Key, "GO", StringComparison.OrdinalIgnoreCase))
+        {
+            targetLength--;
+        }
+
+        if (sourceLength != targetLength)
         {
             return false;
         }
 
-        for (var i = 0; i < source.Length; i++)
+        for (var i = 0; i < sourceLength; i++)
         {
             if (!string.Equals(source[i].Key, target[i].Key, StringComparison.Ordinal))
             {
@@ -2530,32 +2671,34 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         if (string.Equals(objectType, "Queue", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeQueueScriptForComparison(joined);
+            joined = NormalizeQueueScriptForComparison(joined);
         }
-
-        if (string.Equals(objectType, "Role", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(objectType, "Role", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeRoleScriptForComparison(joined);
+            joined = NormalizeRoleScriptForComparison(joined);
         }
-
-        if (string.Equals(objectType, "MessageType", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(objectType, "MessageType", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeServiceBrokerScriptForComparison(joined, NormalizeMessageTypeBaseBlockForComparison);
+            joined = NormalizeServiceBrokerScriptForComparison(joined, NormalizeMessageTypeBaseBlockForComparison);
         }
-
-        if (string.Equals(objectType, "Contract", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(objectType, "Contract", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeServiceBrokerScriptForComparison(joined, NormalizeContractBaseBlockForComparison);
+            joined = NormalizeServiceBrokerScriptForComparison(joined, NormalizeContractBaseBlockForComparison);
         }
-
-        if (string.Equals(objectType, "Service", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(objectType, "Service", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeServiceBrokerScriptForComparison(joined, NormalizeServiceBaseBlockForComparison);
+            joined = NormalizeServiceBrokerScriptForComparison(joined, NormalizeServiceBaseBlockForComparison);
         }
 
         if (string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase))
         {
             joined = NormalizeClrTableValuedFunctionScriptForComparison(joined);
+        }
+
+        if (joined.Contains("GRANT ", StringComparison.OrdinalIgnoreCase) ||
+            joined.Contains("DENY ", StringComparison.OrdinalIgnoreCase))
+        {
+            joined = NormalizePermissionBlocksForComparison(joined);
         }
 
         if (joined.Contains("sp_addextendedproperty", StringComparison.OrdinalIgnoreCase))
@@ -2574,6 +2717,8 @@ internal sealed class SyncCommandService : ISyncCommandService
         {
             joined = NormalizeUserDefinedTypeScriptForComparison(joined);
         }
+
+        joined = RemoveOptionalTerminalGoForComparison(joined);
 
         if (!joined.Contains("INSERT ", StringComparison.OrdinalIgnoreCase))
         {
@@ -2686,9 +2831,16 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static string[] RemoveEmptyLinesForComparison(string[] lines)
         => lines.Where(line => line.Length > 0).ToArray();
 
-    private static bool NeedsReadableDiffDisplayNormalization(string? objectType)
-        => string.Equals(objectType, "Table", StringComparison.OrdinalIgnoreCase)
-           || string.Equals(objectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase);
+    private static string[] TrimOptionalTerminalGoLineArray(string[] lines)
+    {
+        if (lines.Length == 0 ||
+            !string.Equals(lines[^1].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+        {
+            return lines;
+        }
+
+        return lines[..^1];
+    }
 
     private static string NormalizeForDiffDisplay(
         string script,
@@ -2734,15 +2886,15 @@ internal sealed class SyncCommandService : ISyncCommandService
             joined = NormalizeCompatibleOmittedTextImageOnForComparison(
                 joined,
                 compatibleOmittedTextImageOnDataSpaceName);
-            return NormalizeTableScriptForDiffDisplay(joined);
+            return RemoveOptionalTerminalGoForComparison(NormalizeTableScriptForDiffDisplay(joined));
         }
 
         if (string.Equals(objectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeUserDefinedTypeScriptForDiffDisplay(joined);
+            return RemoveOptionalTerminalGoForComparison(NormalizeUserDefinedTypeScriptForDiffDisplay(joined));
         }
 
-        return joined;
+        return RemoveOptionalTerminalGoForComparison(joined);
     }
 
     private static string NormalizeQueueScriptForComparison(string script)
@@ -2938,7 +3090,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         var outputLines = new List<string>(inputLines.Length);
         for (var i = 0; i < inputLines.Length; i++)
         {
-            var line = inputLines[i];
+            var line = NormalizeClrTableValuedFunctionReturnColumnCollationForComparison(inputLines[i]);
             var splitMatch = ClrTableValuedFunctionReturnColumnNullWithCloseParenRegex.Match(line);
             if (splitMatch.Success)
             {
@@ -2954,6 +3106,14 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         return string.Join("\n", outputLines);
+    }
+
+    private static string NormalizeClrTableValuedFunctionReturnColumnCollationForComparison(string line)
+    {
+        var match = ClrTableValuedFunctionReturnColumnCollationRegex.Match(line);
+        return match.Success
+            ? match.Groups["prefix"].Value + match.Groups["suffix"].Value
+            : line;
     }
 
     // Checks whether a line begins with "INSERT " (ignoring leading whitespace) without
@@ -3034,25 +3194,28 @@ internal sealed class SyncCommandService : ISyncCommandService
         return string.Join("\n", normalizedSegments);
     }
 
-    private static string NormalizeExtendedPropertyBlocksForComparison(string script)
+    private static string NormalizePermissionBlocksForComparison(string script)
     {
         var lines = script.Split('\n');
         var normalizedLines = new List<string>(lines.Length);
 
         for (var i = 0; i < lines.Length; i++)
         {
-            if (IsExtendedPropertyStatementLine(lines[i]) &&
-                i + 1 < lines.Length &&
-                string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+            if (IsPermissionStatementLine(lines[i]) &&
+                (i + 1 == lines.Length ||
+                 string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)))
             {
                 var statements = new List<string>();
                 while (i < lines.Length &&
-                       IsExtendedPropertyStatementLine(lines[i]) &&
-                       i + 1 < lines.Length &&
-                       string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+                       IsPermissionStatementLine(lines[i]) &&
+                       (i + 1 == lines.Length ||
+                        string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)))
                 {
-                    statements.Add(NormalizeExtendedPropertyStatementForComparison(lines[i]));
-                    i += 2;
+                    statements.Add(NormalizePermissionStatementForComparison(lines[i]));
+                    i += i + 1 < lines.Length &&
+                         string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)
+                        ? 2
+                        : 1;
                 }
 
                 foreach (var statement in statements.OrderBy(item => item, StringComparer.Ordinal))
@@ -3071,6 +3234,92 @@ internal sealed class SyncCommandService : ISyncCommandService
         return string.Join("\n", normalizedLines);
     }
 
+    private static string NormalizePermissionBlocksForDiffDisplay(string script)
+    {
+        var lines = script.Split('\n');
+        var normalizedLines = new List<string>(lines.Length);
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (IsPermissionStatementLine(lines[i]) &&
+                (i + 1 == lines.Length ||
+                 string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)))
+            {
+                var statements = new List<(string Key, string Display)>();
+                while (i < lines.Length &&
+                       IsPermissionStatementLine(lines[i]) &&
+                       (i + 1 == lines.Length ||
+                        string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)))
+                {
+                    statements.Add((NormalizePermissionStatementForComparison(lines[i]), lines[i].Trim()));
+                    i += i + 1 < lines.Length &&
+                         string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)
+                        ? 2
+                        : 1;
+                }
+
+                foreach (var statement in statements.OrderBy(item => item.Key, StringComparer.Ordinal))
+                {
+                    normalizedLines.Add(statement.Display);
+                    normalizedLines.Add("GO");
+                }
+
+                i--;
+                continue;
+            }
+
+            normalizedLines.Add(lines[i]);
+        }
+
+        return string.Join("\n", normalizedLines);
+    }
+
+    private static string NormalizeExtendedPropertyBlocksForComparison(string script)
+    {
+        var lines = script.Split('\n');
+        var normalizedLines = new List<string>(lines.Length);
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (IsExtendedPropertyStatementLine(lines[i]) &&
+                (i + 1 == lines.Length ||
+                 string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)))
+            {
+                var statements = new List<string>();
+                while (i < lines.Length &&
+                       IsExtendedPropertyStatementLine(lines[i]) &&
+                       (i + 1 == lines.Length ||
+                        string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)))
+                {
+                    statements.Add(NormalizeExtendedPropertyStatementForComparison(lines[i]));
+                    i += i + 1 < lines.Length &&
+                         string.Equals(lines[i + 1].Trim(), "GO", StringComparison.OrdinalIgnoreCase)
+                        ? 2
+                        : 1;
+                }
+
+                foreach (var statement in statements.OrderBy(item => item, StringComparer.Ordinal))
+                {
+                    normalizedLines.Add(statement);
+                    normalizedLines.Add("GO");
+                }
+
+                i--;
+                continue;
+            }
+
+            normalizedLines.Add(lines[i]);
+        }
+
+        return string.Join("\n", normalizedLines);
+    }
+
+    private static bool IsPermissionStatementLine(string line)
+        => PermissionStatementRegex.IsMatch(line);
+
+    private static string NormalizePermissionStatementForComparison(string statement)
+        => NormalizeSqlStatementTokensForComparison(statement);
+
     private static string NormalizeTableScriptForComparison(string script)
     {
         var blocks = SplitGoDelimitedBlocks(script);
@@ -3087,9 +3336,27 @@ internal sealed class SyncCommandService : ISyncCommandService
 
         var normalizedBlocks = new List<string>(blocks.Count);
         normalizedBlocks.AddRange(blocks.Take(createTableIndex).Select(NormalizeTableBlockForComparison));
-        normalizedBlocks.Add(NormalizeTableBlockForComparison(blocks[createTableIndex]));
+        IReadOnlyList<string> extractedInlineConstraintPackages = Array.Empty<string>();
+        if (TryPrepareCreateTableBlockForComparison(
+                blocks[createTableIndex],
+                out var createTableParts,
+                out extractedInlineConstraintPackages))
+        {
+            var createTableStatement = createTableParts.Prefix + " (" + string.Join(", ", createTableParts.Items.Select(item => item.Text)) + ")";
+            if (!string.IsNullOrWhiteSpace(createTableParts.Suffix))
+            {
+                createTableStatement += " " + createTableParts.Suffix;
+            }
 
-        var postCreatePackages = BuildTablePostCreatePackages(blocks, createTableIndex + 1);
+            normalizedBlocks.Add(NormalizeLegacyTableStatementTextForComparison(createTableStatement) + "\nGO");
+        }
+        else
+        {
+            normalizedBlocks.Add(NormalizeTableBlockForComparison(blocks[createTableIndex]));
+        }
+
+        var postCreatePackages = BuildTablePostCreatePackages(blocks, createTableIndex + 1)
+            .Concat(extractedInlineConstraintPackages);
         foreach (var package in postCreatePackages
                      .Select(NormalizeTablePostCreatePackageForComparison)
                      .OrderBy(NormalizeTablePostCreatePackageKey, StringComparer.Ordinal))
@@ -4010,8 +4277,7 @@ internal sealed class SyncCommandService : ISyncCommandService
             return "NULL";
         }
 
-        if (!string.Equals(parameterName, "value", StringComparison.OrdinalIgnoreCase) &&
-            trimmed.Length >= 3 &&
+        if (trimmed.Length >= 3 &&
             (trimmed[0] == 'N' || trimmed[0] == 'n') &&
             trimmed[1] == '\'' &&
             trimmed[^1] == '\'')
@@ -4032,6 +4298,23 @@ internal sealed class SyncCommandService : ISyncCommandService
 
     private static string StripTrailingSemicolon(string line)
         => line.EndsWith(';') ? line[..^1] : line;
+
+    private static string RemoveOptionalTerminalGoForComparison(string script)
+    {
+        if (script.Length == 0)
+        {
+            return script;
+        }
+
+        var lines = script.Split('\n').ToList();
+        if (lines.Count > 0 &&
+            string.Equals(lines[^1].Trim(), "GO", StringComparison.OrdinalIgnoreCase))
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        return string.Join("\n", lines);
+    }
 
     private static (int StatementEndExclusive, int ConsumedEndExclusive)? TryFindInsertValuesStatementRange(
         string script,
@@ -4139,6 +4422,94 @@ internal sealed class SyncCommandService : ISyncCommandService
     }
 
     private static string NormalizeLegacyTableDataInsertStatement(string line)
+    {
+        if (TryNormalizeLegacyTableDataInsertColumnOrder(line, out var reordered))
+        {
+            line = reordered;
+        }
+
+        return StripTopLevelInsertUnicodePrefixes(line);
+    }
+
+    private static bool TryNormalizeLegacyTableDataInsertColumnOrder(string statement, out string normalized)
+    {
+        normalized = statement;
+
+        var valuesKeywordIndex = statement.IndexOf("VALUES", StringComparison.OrdinalIgnoreCase);
+        if (valuesKeywordIndex < 0)
+        {
+            return false;
+        }
+
+        var columnListOpenParenIndex = statement.IndexOf('(');
+        if (columnListOpenParenIndex < 0 || columnListOpenParenIndex > valuesKeywordIndex)
+        {
+            return false;
+        }
+
+        var columnListCloseParenIndex = FindMatchingCloseParenthesis(statement, columnListOpenParenIndex);
+        if (columnListCloseParenIndex < 0 || columnListCloseParenIndex > valuesKeywordIndex)
+        {
+            return false;
+        }
+
+        var valuesOpenParenIndex = statement.IndexOf('(', valuesKeywordIndex);
+        if (valuesOpenParenIndex < 0)
+        {
+            return false;
+        }
+
+        var valuesCloseParenIndex = FindMatchingCloseParenthesis(statement, valuesOpenParenIndex);
+        if (valuesCloseParenIndex < 0)
+        {
+            return false;
+        }
+
+        var columns = SplitTopLevelSqlList(statement[(columnListOpenParenIndex + 1)..columnListCloseParenIndex])
+            .Select(item => item.Trim())
+            .ToArray();
+        var values = SplitTopLevelSqlList(statement[(valuesOpenParenIndex + 1)..valuesCloseParenIndex])
+            .Select(item => item.Trim())
+            .ToArray();
+
+        if (columns.Length == 0 || columns.Length != values.Length)
+        {
+            return false;
+        }
+
+        var mappings = new List<(string Key, string Column, string Value)>(columns.Length);
+        for (var i = 0; i < columns.Length; i++)
+        {
+            if (columns[i].Length == 0)
+            {
+                return false;
+            }
+
+            mappings.Add((
+                NormalizeSqlStatementTokensForComparison(columns[i]),
+                columns[i],
+                values[i]));
+        }
+
+        mappings.Sort((left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+
+        var prefix = statement[..columnListOpenParenIndex].TrimEnd();
+        var between = statement[(columnListCloseParenIndex + 1)..valuesOpenParenIndex].Trim();
+        var suffix = statement[(valuesCloseParenIndex + 1)..].Trim();
+
+        normalized =
+            $"{prefix} ({string.Join(", ", mappings.Select(mapping => mapping.Column))}) " +
+            $"{between} ({string.Join(", ", mappings.Select(mapping => mapping.Value))})";
+
+        if (suffix.Length > 0)
+        {
+            normalized += " " + suffix;
+        }
+
+        return true;
+    }
+
+    private static string StripTopLevelInsertUnicodePrefixes(string line)
     {
         var valuesKeywordIndex = line.IndexOf("VALUES", StringComparison.OrdinalIgnoreCase);
         if (valuesKeywordIndex < 0)

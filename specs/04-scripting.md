@@ -42,6 +42,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Discovery SHOULD preserve compatibility with projects that include security and storage object groups.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
 - `Schema` discovery covers user-defined schemas, excludes `sys` and `INFORMATION_SCHEMA`, and includes built-in `dbo` only when it has explicit schema permissions or schema-level extended properties that are in scope for scripting.
+- `StoredProcedure` discovery excludes SSMS database-diagram support procedures: `sp_alterdiagram`, `sp_creatediagram`, `sp_dropdiagram`, `sp_helpdiagramdefinition`, `sp_helpdiagrams`, `sp_renamediagram`, and `sp_upgraddiagrams`.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
 - `Assembly` discovery covers user-defined assemblies from `sys.assemblies` and excludes SQL Server system assemblies (`is_user_defined = 0`).
 - `UserDefinedType` discovery covers both scalar alias types and table-valued types.
@@ -477,9 +478,10 @@ Each emitted statement MUST be followed by `GO`.
 - Role membership statements MUST use:
   - `EXEC sp_addrolemember N'<role>', N'<member>'`
 - System-principal memberships for `dbo`, `guest`, `INFORMATION_SCHEMA`, and `sys` MUST NOT be emitted.
+- Role database-level permissions MUST be emitted after any role-membership statements and MUST use database-permission syntax without an `ON` clause (for example `GRANT VIEW DATABASE STATE TO [role]`).
 - Role-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'USER', N'<role>', NULL, NULL, NULL, NULL`
-- Role extended properties MUST be emitted after the base role DDL and any role-membership statements, ordered by property name.
+- Role extended properties MUST be emitted after the base role DDL, any role-membership statements, and any role database-level permissions, ordered by property name.
 
 ### 8.8 Users
 - User scripts MUST emit one `CREATE USER` statement and end with `GO`.
@@ -490,10 +492,12 @@ Each emitted statement MUST be followed by `GO`.
   - `FOR CERTIFICATE [certificate]`
   - `FOR ASYMMETRIC KEY [key]`
 - `WITH DEFAULT_SCHEMA=[schema]` MUST be emitted only when a non-empty, non-`dbo` default schema applies to the emitted user shape.
+- When server-login metadata is unavailable for an otherwise login-mapped user shape, the scripting engine MUST emit `WITHOUT LOGIN` rather than inventing a fallback `FOR LOGIN [user_name]` reference.
+- User database-level permissions MUST be emitted after the base user `GO` and MUST use database-permission syntax without an `ON` clause (for example `GRANT VIEW DEFINITION TO [user]`).
 - Contained database users that require `WITH PASSWORD` remain unsupported in the current scripting engine and MUST fail explicitly rather than emit lossy output.
 - User-level extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'USER', N'<user>', NULL, NULL, NULL, NULL`
-- User extended properties MUST be emitted after the base user `GO`, ordered by property name.
+- User extended properties MUST be emitted after the base user `GO` and any user database-level permissions, ordered by property name.
 
 ### 8.9 Synonyms
 - Synonym scripts MUST emit:
@@ -509,9 +513,10 @@ Each emitted statement MUST be followed by `GO`.
   - `CREATE TYPE [schema].[name] FROM <base_type> <NULL|NOT NULL>`
   - `GO`
 - Base-type formatting MUST reuse the general type-formatting rules from Section 6.5.
+- Scalar alias user-defined type permissions MUST use `ON TYPE::[schema].[name]`.
 - User-defined-type extended properties MUST use:
   - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'TYPE', N'<type>', NULL, NULL`
-- User-defined-type extended properties MUST be emitted after the type `GO`, ordered by property name.
+- Scalar alias user-defined type extended properties MUST be emitted after grants, ordered by property name.
 
 ### 8.11 UserDefinedType (Table-Valued)
 - Table-valued user-defined type metadata MUST be sourced from `sys.table_types` together with the table-like metadata attached to `type_table_object_id`.
@@ -529,7 +534,8 @@ Each emitted statement MUST be followed by `GO`.
 - Inline entries inside the table-valued user-defined type body MUST be comma-separated.
 - Table-valued user-defined type key-constraint formatting MUST reuse the applicable constraint rules from Section 8.1.6, except the constraints remain inside the `AS TABLE (...)` body rather than being emitted after `GO`.
 - Table-valued user-defined types are still exposed as `UserDefinedType` in CLI output and selectors.
-- Table-valued user-defined type scripting MUST NOT emit storage clauses, non-constraint indexes, XML indexes, foreign keys, triggers, full-text indexes, permissions, or extended properties.
+- Table-valued user-defined type permissions MUST use `ON TYPE::[schema].[name]`.
+- Table-valued user-defined type scripting MUST NOT emit storage clauses, non-constraint indexes, XML indexes, foreign keys, triggers, full-text indexes, or extended properties.
 
 ### 8.12 XmlSchemaCollection
 - XML schema collection metadata MUST be sourced from `sys.xml_schema_collections`, schema metadata, and `XML_SCHEMA_NAMESPACE`.
@@ -816,15 +822,18 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - For `Table` and table-valued `UserDefinedType` statements, readable diff rendering SHOULD retain structural body boundaries so body entries can diff at per-entry granularity when the compatibility-preserving representation exposes them.
 - Empty lines MUST be ignored during comparison, and whitespace-only lines MUST be normalized to empty lines first so that blank separators differing only by spaces or tabs compare as compatible.
 - Comparison normalization MAY ignore redundant empty or otherwise no-op `GO` batches, including batches that contain only standalone semicolon lines.
+- Comparison normalization MAY treat an omitted terminal `GO` after the final batch as compatible with an explicit final `GO`.
 - Trailing semicolons on `INSERT` statement lines MUST be stripped by comparison normalization so that scripts emitted with and without statement terminators compare as compatible.
 - For `TableData`, trailing semicolons on `SET IDENTITY_INSERT` lines MUST also be stripped by comparison normalization.
 - For `TableData`, comparison normalization MUST treat legacy top-level `N'...'` string literals inside single-line or multi-line `INSERT ... VALUES (...)` statements as compatible with canonical `'...'` literals; canonical script generation remains governed by Section 8.26.
-- For `TableData`, comparison normalization MAY treat reordered `INSERT ... VALUES (...)` statements within the same contiguous data block as compatible when the normalized inserted-row set is otherwise identical.
+- For `TableData`, comparison normalization MAY treat single-row `INSERT ... VALUES (...)` statements as compatible when the target column list and corresponding value tuple are reordered consistently, and MAY treat reordered `INSERT ... VALUES (...)` statements within the same contiguous data block as compatible when the normalized inserted-row set is otherwise identical.
 - For `Table`, comparison normalization MAY treat reordered post-create statement packages as compatible when the normalized package set after the base table `CREATE` block is otherwise identical. Table-scoped trigger packages MUST include the trigger body together with any immediately preceding programmable-object `SET` blocks.
 - For `Table`, comparison normalization MAY treat equivalent legacy formatting for `CREATE TABLE`, `ALTER TABLE`, and `CREATE ... INDEX` statement blocks as compatible when normalized identifiers, type tokens, default expressions, semicolons, and persisted option values are otherwise identical.
+- For `Table`, comparison normalization MAY treat legacy standalone table-level `PRIMARY KEY` and `UNIQUE` constraints written inline as top-level `CREATE TABLE (...)` body entries as compatible with canonical post-create key-constraint statements when the normalized constraint semantics are otherwise identical.
 - For `UserDefinedType`, comparison normalization MAY treat equivalent legacy `CREATE TYPE` statement formatting as compatible when normalized identifiers, type tokens, default expressions, semicolons, and inline table-valued type bodies are otherwise identical.
+- Comparison normalization MAY treat reordered contiguous `GRANT` and `DENY` statement blocks as compatible when the normalized permission statement set is otherwise identical.
 - For `Table`, comparison normalization MAY treat omitted `TEXTIMAGE_ON [name]` as compatible with an explicit clause only when DB metadata shows that the table `lob_data_space_id` resolves to the current default data space named `[name]`; otherwise omission remains a semantic difference.
-- For extended-property blocks, comparison normalization MAY treat reordered `EXEC sp_addextendedproperty ...` statements as compatible within the same contiguous extended-property block when the normalized property statement set is otherwise identical, MAY ignore equivalent spacing around commas and arguments in those statements, and MAY treat equivalent named-vs-positional argument forms with omitted trailing `NULL` levels as compatible.
+- For extended-property blocks, comparison normalization MAY treat reordered `EXEC sp_addextendedproperty ...` statements as compatible within the same contiguous extended-property block when the normalized property statement set is otherwise identical, MAY ignore equivalent spacing around commas and arguments in those statements, and MAY treat equivalent named-vs-positional argument forms with omitted trailing `NULL` levels and top-level Unicode-literal prefixes on string arguments as compatible.
 - For programmable `StoredProcedure`, `View`, `Function`, and `Trigger` scripts, comparison normalization MAY ignore leading SSMS-generated `/*** Object: ... Script Date: ... ***/` banner comments.
 - For `Queue`, comparison normalization MUST treat equivalent single-line and multi-line queue option formatting as compatible, MAY treat explicit `ON [PRIMARY]` as equivalent to an omitted default primary filegroup, and MAY treat disabled activation containing only default owner execution context as equivalent to omitted activation.
 - For `Role`, comparison normalization MAY treat legacy `EXEC sp_addrolemember N'<role>', N'<member>'` statements as compatible with `ALTER ROLE [role] ADD MEMBER [member]` when the effective role-membership change is otherwise identical.
@@ -832,6 +841,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - For `Contract`, comparison normalization MAY treat equivalent single-line and multi-line body formatting as compatible and MAY compare message-usage item ordering as compatible when the emitted usage set is otherwise identical.
 - For `Service`, comparison normalization MAY treat equivalent single-line and multi-line contract-list formatting as compatible and MAY compare contract item ordering as compatible when the emitted contract set is otherwise identical.
 - For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy explicit `NULL` tokens on return-column lines as compatible with canonical return-column lines that omit nullability, including legacy cases where the final return-column line also carries the closing `)` token.
+- For CLR table-valued `Function` scripts, comparison normalization MAY treat legacy `COLLATE <name>` clauses on return-column lines as compatible when SQL Server ignores that collation metadata for the effective return shape.
 
 ## 11. Error and Unsupported Behavior
 - Missing SQL object metadata for requested object MUST fail with an error.

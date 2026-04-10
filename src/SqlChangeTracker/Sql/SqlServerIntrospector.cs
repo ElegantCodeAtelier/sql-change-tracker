@@ -6,6 +6,17 @@ namespace SqlChangeTracker.Sql;
 
 internal class SqlServerIntrospector
 {
+    private static readonly HashSet<string> ExcludedStoredProcedureNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sp_alterdiagram",
+        "sp_creatediagram",
+        "sp_dropdiagram",
+        "sp_helpdiagramdefinition",
+        "sp_helpdiagrams",
+        "sp_renamediagram",
+        "sp_upgraddiagrams"
+    };
+
     public virtual IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
     {
         var dop = ResolveParallelism(maxParallelism);
@@ -251,7 +262,9 @@ ORDER BY ps.name;", MapObjectType),
             }
         });
 
-        return bag.ToList();
+        return bag
+            .Where(ShouldIncludeObject)
+            .ToList();
     }
 
     public virtual IReadOnlyList<DbObjectInfo> ListMatchingObjects(
@@ -283,6 +296,7 @@ ORDER BY ps.name;", MapObjectType),
         });
 
         return bag
+            .Where(ShouldIncludeObject)
             .OrderBy(item => item.Schema, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(item => item.ObjectType, StringComparer.OrdinalIgnoreCase)
@@ -392,7 +406,13 @@ WHERE s.name = @schema
                 schema = "dbo";
             }
 
-            yield return new DbObjectInfo(schema, name, objectType, userDefinedTypeKind);
+            var item = new DbObjectInfo(schema, name, objectType, userDefinedTypeKind);
+            if (!ShouldIncludeObject(item))
+            {
+                continue;
+            }
+
+            yield return item;
         }
     }
 
@@ -761,9 +781,22 @@ ORDER BY sp.name;
                 && reader.FieldCount > 2
                 ? MapUserDefinedTypeKind(reader.GetString(2))
                 : null;
-            yield return new DbObjectInfo(matchedSchema, matchedName, objectType, userDefinedTypeKind);
+            var item = new DbObjectInfo(matchedSchema, matchedName, objectType, userDefinedTypeKind);
+            if (!ShouldIncludeObject(item))
+            {
+                continue;
+            }
+
+            yield return item;
         }
     }
+
+    internal static bool ShouldIncludeObject(DbObjectInfo item)
+        => !string.Equals(item.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase)
+           || !IsExcludedStoredProcedureName(item.Name);
+
+    internal static bool IsExcludedStoredProcedureName(string name)
+        => ExcludedStoredProcedureNames.Contains(name);
 
     private static bool ObjectExists(SqlConnection connection, string objectName)
     {
