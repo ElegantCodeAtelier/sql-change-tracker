@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 
 ### Added
+- `sqlct init` now scans the target project directory for existing `Data/*.sql` files, extracts table names from the file names, and proposes a `trackedTables` list: in interactive mode the user is prompted to confirm before the tables are written to config; in non-interactive mode (with `--project-dir`) the tables are added automatically.
 - `sqlct init` now prompts interactively for connection details (server, database, auth, credentials, trust-server-certificate) when run without flags in a new project directory (#36).
 - Connection flags (`--server`, `--database`, `--auth`, `--user`, `--password`, `--trust-server-certificate`) for non-interactive/scripted `init` use (#36).
 - `--skip-connection-test` flag for `sqlct init` to bypass the connection test step (#36).
