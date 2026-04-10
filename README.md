@@ -65,6 +65,7 @@ When `data.trackedTables` is configured, `status`, `diff`, and `pull` also proce
 ## Selective data scripting
 Tracked-table data scripting is configuration-driven.
 
+- `sqlct init` scans the project directory for existing `Data/*.sql` files and proposes their table names as initial `trackedTables`; in interactive mode you are prompted to confirm, in non-interactive mode (`--project-dir`) they are added automatically.
 - `sqlct data track` matches user tables in the current database against a positional pattern (`schema.*`, `*.name`, `schema.name`), `--object <pattern>`, or `--filter <regex>`, and asks for confirmation before updating `data.trackedTables`. Exactly one selector must be provided.
 - `sqlct data untrack` previews tracked matches (same selector forms) and asks for confirmation before removing them.
 - `sqlct data list` shows the currently tracked tables from config.
