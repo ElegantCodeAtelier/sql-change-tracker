@@ -17,6 +17,16 @@ internal class SqlServerIntrospector
         "sp_upgraddiagrams"
     };
 
+    private static readonly HashSet<string> ExcludedFunctionNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "fn_diagramobjects"
+    };
+
+    private static readonly HashSet<string> ExcludedTableNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sysdiagrams"
+    };
+
     public virtual IReadOnlyList<DbObjectInfo> ListObjects(SqlConnectionOptions options, int maxParallelism = 0)
     {
         var dop = ResolveParallelism(maxParallelism);
@@ -34,7 +44,7 @@ ORDER BY a.name;", MapObjectType),
 SELECT s.name AS schema_name, o.name AS object_name, o.type
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
-WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','PC','FN','TF','IF','FS','FT')
+WHERE o.is_ms_shipped = 0 AND o.type IN ('U','V','P','PC','FN','TF','IF','FS','FT','AF')
 ORDER BY s.name, o.name;", MapObjectType),
 
             () => RunQuery(options, @"
@@ -496,6 +506,21 @@ ORDER BY s.name, o.name;
                 command.Parameters.AddWithValue("@name", name);
                 break;
 
+            case "Aggregate":
+                command.CommandText = """
+SELECT s.name AS schema_name, o.name AS object_name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'AF'
+  AND s.name = @schema
+  AND o.name = @name
+ORDER BY s.name, o.name;
+""";
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+                break;
+
             case "Sequence":
                 command.CommandText = """
 SELECT s.name AS schema_name, seq.name AS object_name
@@ -792,11 +817,33 @@ ORDER BY sp.name;
     }
 
     internal static bool ShouldIncludeObject(DbObjectInfo item)
-        => !string.Equals(item.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase)
-           || !IsExcludedStoredProcedureName(item.Name);
+    {
+        if (string.Equals(item.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase))
+        {
+            return !IsExcludedStoredProcedureName(item.Name);
+        }
+
+        if (string.Equals(item.ObjectType, "Function", StringComparison.OrdinalIgnoreCase))
+        {
+            return !IsExcludedFunctionName(item.Name);
+        }
+
+        if (string.Equals(item.ObjectType, "Table", StringComparison.OrdinalIgnoreCase))
+        {
+            return !IsExcludedTableName(item.Name);
+        }
+
+        return true;
+    }
 
     internal static bool IsExcludedStoredProcedureName(string name)
         => ExcludedStoredProcedureNames.Contains(name);
+
+    internal static bool IsExcludedFunctionName(string name)
+        => ExcludedFunctionNames.Contains(name);
+
+    internal static bool IsExcludedTableName(string name)
+        => ExcludedTableNames.Contains(name);
 
     private static bool ObjectExists(SqlConnection connection, string objectName)
     {
@@ -817,6 +864,7 @@ ORDER BY sp.name;
             "V" => "View",
             "P" or "PC" => "StoredProcedure",
             "FN" or "TF" or "IF" or "FS" or "FT" => "Function",
+            "AF" => "Aggregate",
             "SQ" => "Sequence",
             "SC" => "Schema",
             "SY" => "Synonym",

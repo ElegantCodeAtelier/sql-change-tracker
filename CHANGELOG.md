@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Keep readable `diff` output for `Table` and table-valued `UserDefinedType` bodies at per-entry granularity instead of collapsing the entire body into one changed line.
 - Align readable `Table` and table-valued `UserDefinedType` diffs by individual body entries so a single changed column or inline constraint does not mark the entire body as changed.
 - Exclude SSMS database-diagram support stored procedures from discovery and scripting even when SQL Server does not mark them as system-shipped.
+- Exclude SSMS database-diagram support table and function objects from discovery and scripting even when SQL Server does not mark them as system-shipped.
 - Script `TYPE::` permissions for scalar and table-valued `UserDefinedType` objects.
 - Script database-level permissions granted directly to `Role` and `User` principals, and emit `CREATE USER ... WITHOUT LOGIN` when no server-login metadata is available.
 - Treat equivalent contiguous permission statement ordering as compatible during comparison.
@@ -50,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Discover and script SQL CLR scalar functions as `Function` objects.
 - Discover and script SQL CLR table-valued functions as `Function` objects.
 - Discover and script SQL CLR stored procedures as `StoredProcedure` objects.
+- Discover and script SQL CLR aggregates as `Aggregate` objects in `Functions/`.
 - Discover and script built-in `dbo` as a `Schema` object when it has explicit schema permissions or schema-level extended properties, without emitting `CREATE SCHEMA`.
 - `sqlct init` now prompts interactively for connection details (server, database, auth, credentials, trust-server-certificate) when run without flags in a new project directory (#36).
 - Connection flags (`--server`, `--database`, `--auth`, `--user`, `--password`, `--trust-server-certificate`) for non-interactive/scripted `init` use (#36).

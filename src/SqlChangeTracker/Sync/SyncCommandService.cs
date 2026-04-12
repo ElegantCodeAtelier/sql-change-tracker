@@ -47,6 +47,12 @@ internal sealed class SyncCommandService : ISyncCommandService
     private static readonly Regex TableUserDefinedTypeScriptRegex = new(
         @"\bCREATE\s+TYPE\b.*\bAS\s+TABLE\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex FunctionScriptRegex = new(
+        @"\bCREATE(?:\s+OR\s+ALTER)?\s+FUNCTION\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex AggregateScriptRegex = new(
+        @"\bCREATE(?:\s+OR\s+ALTER)?\s+AGGREGATE\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex SqlIdentifierRegex = new(
         """\G\s*(?<identifier>\[(?:[^\]]|\]\])+\]|"(?:""|[^"])+"|[^\s(]+)""",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -75,7 +81,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         @"^\s*EXEC(?:UTE)?\s+(?:sys\.)?sp_addextendedproperty\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex SsmsObjectHeaderCommentRegex = new(
-        @"^\s*/\*{5,}\s*Object:\s+(?:StoredProcedure|Procedure|View|Function|Trigger)\b.*Script Date:.*\*+/\s*$",
+        @"^\s*/\*{5,}\s*Object:\s+(?:StoredProcedure|Procedure|View|Function|Aggregate|Trigger)\b.*Script Date:.*\*+/\s*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex AssemblyHeaderCommentRegex = new(
         @"^\s*--\s*Assembly\b.*$",
@@ -577,6 +583,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         var objects = new Dictionary<string, InternalObject>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<CommandWarning>();
         var scannedSqlFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var processedSchemaFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in ActiveObjectTypes)
         {
@@ -606,6 +613,10 @@ internal sealed class SyncCommandService : ISyncCommandService
             {
                 var normalizedFilePath = Path.GetFullPath(file);
                 scannedSqlFiles.Add(normalizedFilePath);
+                if (!processedSchemaFiles.Add(normalizedFilePath))
+                {
+                    continue;
+                }
 
                 var fileName = Path.GetFileNameWithoutExtension(file);
                 if (!TryParseObjectFileName(fileName, entry.IsSchemaLess, out var schema, out var name))
@@ -628,7 +639,18 @@ internal sealed class SyncCommandService : ISyncCommandService
                         ExitCodes.ExecutionFailure);
                 }
 
-                if (string.Equals(objectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase)
+                var resolvedObjectType = objectType;
+                if ((string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(objectType, "Aggregate", StringComparison.OrdinalIgnoreCase)) &&
+                    !TryClassifyFunctionFolderScript(script, out resolvedObjectType))
+                {
+                    warnings.Add(new CommandWarning(
+                        "invalid_function_script",
+                        $"skipped '{Path.Combine(folder, Path.GetFileName(file))}' because it is not a recognized function or aggregate script."));
+                    continue;
+                }
+
+                if (string.Equals(resolvedObjectType, "UserDefinedType", StringComparison.OrdinalIgnoreCase)
                     && !TryClassifyUserDefinedTypeScript(script, out _))
                 {
                     warnings.Add(new CommandWarning(
@@ -643,13 +665,13 @@ internal sealed class SyncCommandService : ISyncCommandService
                     name = scriptName;
                 }
 
-                var key = BuildObjectKey(objectType, schema, name);
+                var key = BuildObjectKey(resolvedObjectType, schema, name);
                 if (objects.ContainsKey(key))
                 {
                     var displayName = FormatDisplayName(schema, name);
                     warnings.Add(new CommandWarning(
                         "duplicate_script",
-                        $"skipped duplicate folder object '{displayName}' of type '{objectType}'."));
+                        $"skipped duplicate folder object '{displayName}' of type '{resolvedObjectType}'."));
                     continue;
                 }
 
@@ -658,7 +680,7 @@ internal sealed class SyncCommandService : ISyncCommandService
                     key,
                     schema,
                     name,
-                    objectType,
+                    resolvedObjectType,
                     script,
                     relativePath,
                     normalizedFilePath);
@@ -2396,6 +2418,21 @@ internal sealed class SyncCommandService : ISyncCommandService
         }
 
         kind = matchesTable ? UserDefinedTypeKind.Table : UserDefinedTypeKind.Scalar;
+        return true;
+    }
+
+    internal static bool TryClassifyFunctionFolderScript(string script, out string objectType)
+    {
+        var matchesFunction = FunctionScriptRegex.IsMatch(script);
+        var matchesAggregate = AggregateScriptRegex.IsMatch(script);
+
+        if (matchesFunction == matchesAggregate)
+        {
+            objectType = string.Empty;
+            return false;
+        }
+
+        objectType = matchesAggregate ? "Aggregate" : "Function";
         return true;
     }
 
@@ -4171,6 +4208,7 @@ internal sealed class SyncCommandService : ISyncCommandService
         => string.Equals(objectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase)
            || string.Equals(objectType, "View", StringComparison.OrdinalIgnoreCase)
            || string.Equals(objectType, "Function", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(objectType, "Aggregate", StringComparison.OrdinalIgnoreCase)
            || string.Equals(objectType, "Trigger", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsAssemblyObjectTypeForHeaderCommentCompatibility(string? objectType)

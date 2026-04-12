@@ -459,7 +459,7 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(string.Empty, result.Payload!.Diff);
             Assert.False(introspector.ListObjectsCalled);
             Assert.True(introspector.ListMatchingObjectsCalled);
-            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View", "XmlSchemaCollection" };
+            var expectedCandidateTypes = new[] { "Aggregate", "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View", "XmlSchemaCollection" };
             Assert.Equal(
                 expectedCandidateTypes,
                 introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));
@@ -767,6 +767,64 @@ public sealed class SyncCommandServiceTests
         var success = SyncCommandService.TryClassifyUserDefinedTypeScript(script, out _);
 
         Assert.Equal(expected, success);
+    }
+
+    [Theory]
+    [InlineData("CREATE FUNCTION [dbo].[RowSelector] () RETURNS [int] AS BEGIN RETURN 1 END", true, "Function")]
+    [InlineData("CREATE AGGREGATE [dbo].[RowAccumulator] (@Value [int]) RETURNS [int] EXTERNAL NAME [AppClr].[App.RowAccumulator]", true, "Aggregate")]
+    [InlineData("CREATE VIEW [dbo].[BrokenScript] AS SELECT 1 AS Value", false, "")]
+    public void TryClassifyFunctionFolderScript_DetectsSupportedShapes(string script, bool expected, string expectedType)
+    {
+        var success = SyncCommandService.TryClassifyFunctionFolderScript(script, out var objectType);
+
+        Assert.Equal(expected, success);
+        Assert.Equal(expectedType, objectType);
+    }
+
+    [Theory]
+    [InlineData(
+        "dbo.RowSelector.sql",
+        "CREATE FUNCTION [dbo].[RowSelector] ()\r\nRETURNS [int]\r\nAS\r\nBEGIN\r\n    RETURN 1\r\nEND\r\nGO",
+        "Function")]
+    [InlineData(
+        "dbo.RowAccumulator.sql",
+        "SET QUOTED_IDENTIFIER OFF\r\nGO\r\nSET ANSI_NULLS OFF\r\nGO\r\nCREATE AGGREGATE [dbo].[RowAccumulator] (@Value [int])\r\nRETURNS [int]\r\nEXTERNAL NAME [AppClr].[App.RowAccumulator]\r\nGO",
+        "Aggregate")]
+    public void RunStatus_RecognizesFunctionFolderEntriesByScriptShape(string fileName, string script, string expectedType)
+    {
+        var tempDir = CreateTempDir();
+
+        try
+        {
+            var projectDir = Path.Combine(tempDir, "project");
+            var seed = new BaselineProjectSeeder().Seed(projectDir);
+            Assert.True(seed.Success);
+
+            var config = SqlctConfigWriter.CreateDefault();
+            config.Database.Server = "localhost";
+            config.Database.Name = "TestDb";
+            var write = new SqlctConfigWriter().Write(SqlctConfigWriter.GetDefaultPath(projectDir), config, overwriteExisting: true);
+            Assert.True(write.Success);
+
+            CreateFile(projectDir, Path.Combine("Functions", fileName), script);
+
+            var service = new SyncCommandService(
+                new SqlctConfigReader(),
+                new TrackingIntrospector { AllObjects = [] },
+                new TrackingScripter(),
+                new SchemaFolderMapper(SupportedSqlObjectTypes.DefaultFolderMap, dataWriteAllFilesInOneDirectory: true));
+
+            var result = service.RunStatus(projectDir, "folder");
+
+            Assert.True(result.Success, result.Error?.Detail ?? result.Error?.Message);
+            Assert.Single(result.Payload!.Objects);
+            Assert.Equal(expectedType, result.Payload.Objects[0].Type);
+            Assert.Empty(result.Payload.Warnings);
+        }
+        finally
+        {
+            CleanupTempDir(tempDir);
+        }
     }
 
     [Theory]
@@ -2324,7 +2382,7 @@ public sealed class SyncCommandServiceTests
             Assert.Equal(ExitCodes.Success, result.ExitCode);
             Assert.False(introspector.ListObjectsCalled);
             Assert.True(introspector.ListMatchingObjectsCalled);
-            var expectedCandidateTypes = new[] { "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View", "XmlSchemaCollection" };
+            var expectedCandidateTypes = new[] { "Aggregate", "Function", "Queue", "Sequence", "StoredProcedure", "Synonym", "Table", "UserDefinedType", "View", "XmlSchemaCollection" };
             Assert.Equal(
                 expectedCandidateTypes,
                 introspector.LastRequestedObjectTypes.OrderBy(item => item, StringComparer.OrdinalIgnoreCase));

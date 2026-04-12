@@ -682,6 +682,29 @@ public sealed class SqlServerScripterTests
         Assert.Contains("AS EXTERNAL NAME", script);
     }
 
+    [Fact]
+    public void ScriptAggregate_EmitsClrAggregateDefinition_WhenPresent()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var objInfo = FindFirstClrAggregate(options);
+        if (objInfo == null)
+        {
+            return;
+        }
+
+        var scripter = new SqlServerScripter();
+        var script = scripter.ScriptObject(options, objInfo);
+
+        Assert.Contains("CREATE AGGREGATE", script);
+        Assert.Contains("RETURNS ", script);
+        Assert.Contains("EXTERNAL NAME", script);
+    }
+
     private static SqlConnectionOptions? GetOptions()
     {
         var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
@@ -1095,6 +1118,30 @@ ORDER BY s.name, o.name;
         }
 
         return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "StoredProcedure");
+    }
+
+    private static DbObjectInfo? FindFirstClrAggregate(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT TOP 1 s.name, o.name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'AF'
+ORDER BY s.name, o.name;
+""";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new DbObjectInfo(reader.GetString(0), reader.GetString(1), "Aggregate");
     }
 
     private static string CreateModuleReferenceWithObjectLevelExtendedProperty(string levelType)

@@ -19,7 +19,7 @@ internal class SqlServerScripter
         @"^\s*\[[^\]]+\]\s+AS\s+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ModuleDeclarationLineRegex = new(
-        @"^(?<indent>\s*)(?<prefix>CREATE(?:\s+OR\s+ALTER)?\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
+        @"^(?<indent>\s*)(?<prefix>CREATE(?:\s+OR\s+ALTER)?\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER|AGGREGATE)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ClrTableValuedFunctionReturnColumnNullRegex = new(
         @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*,?\s*)$",
@@ -53,6 +53,10 @@ internal class SqlServerScripter
         string AssemblyMethod,
         int? ExecuteAsPrincipalId,
         string ExecuteAsPrincipalName);
+
+    private sealed record ClrAggregateMetadata(
+        string AssemblyName,
+        string AssemblyClass);
 
     private sealed record ClrFunctionParameter(
         int ParameterId,
@@ -134,6 +138,7 @@ internal class SqlServerScripter
             "StoredProcedure" => ScriptModule(connection, obj, true, referenceLines),
             "View" => ScriptView(connection, obj, referenceLines),
             "Function" => ScriptModule(connection, obj, true, referenceLines),
+            "Aggregate" => ScriptModule(connection, obj, true, referenceLines),
             "Sequence" => ScriptSequence(connection, obj, referenceLines),
             "Schema" => ScriptSchema(connection, obj, referenceLines),
             "Role" => ScriptRole(connection, obj, referenceLines),
@@ -613,12 +618,17 @@ WHERE s.name = @schema AND o.name = @name";
         var isClrStoredProcedure = string.Equals(objectType, "PC", StringComparison.OrdinalIgnoreCase);
         var isClrScalarFunction = string.Equals(objectType, "FS", StringComparison.OrdinalIgnoreCase);
         var isClrTableValuedFunction = string.Equals(objectType, "FT", StringComparison.OrdinalIgnoreCase);
-        var isClrModule = isClrStoredProcedure || isClrScalarFunction || isClrTableValuedFunction;
+        var isClrAggregate = string.Equals(objectType, "AF", StringComparison.OrdinalIgnoreCase);
+        var isClrModule = isClrStoredProcedure || isClrScalarFunction || isClrTableValuedFunction || isClrAggregate;
         ansiNulls = ReadModuleSetOption(reader, moduleColumn: 3, propertyColumn: 5, defaultValue: !isClrModule);
         quotedIdentifier = ReadModuleSetOption(reader, moduleColumn: 4, propertyColumn: 6, defaultValue: !isClrModule);
         reader.Close();
 
-        if (isClrStoredProcedure && string.IsNullOrWhiteSpace(definitionText))
+        if (isClrAggregate)
+        {
+            definitionText = BuildClrAggregateDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
+        else if (isClrStoredProcedure && string.IsNullOrWhiteSpace(definitionText))
         {
             definitionText = BuildClrStoredProcedureDefinition(connection, objectId, obj.Schema, obj.Name);
         }
@@ -701,6 +711,28 @@ WHERE am.object_id = @object_id;";
             reader.GetString(2),
             reader.IsDBNull(3) ? (int?)null : Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture),
             reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
+    }
+
+    private static ClrAggregateMetadata ReadClrAggregateMetadata(SqlConnection connection, int objectId, string schema, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT a.name AS assembly_name,
+       am.assembly_class
+FROM sys.assembly_modules am
+JOIN sys.assemblies a ON a.assembly_id = am.assembly_id
+WHERE am.object_id = @object_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvalidOperationException($"CLR aggregate metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        return new ClrAggregateMetadata(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? name : reader.GetString(1));
     }
 
     private static string BuildClrScalarFunctionDefinition(
@@ -895,6 +927,50 @@ WHERE am.object_id = @object_id;";
 
         lines.Add($"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}.{QuoteIdentifier(metadata.AssemblyMethod)}");
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string BuildClrAggregateDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrAggregateMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId);
+        var inputParameters = parameters
+            .Where(parameter => parameter.ParameterId > 0)
+            .OrderBy(parameter => parameter.ParameterId)
+            .ToArray();
+        if (inputParameters.Length == 0)
+        {
+            throw new InvalidOperationException($"CLR aggregate input parameter metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var returnParameter = parameters.FirstOrDefault(parameter => parameter.ParameterId == 0);
+        if (returnParameter == null)
+        {
+            throw new InvalidOperationException($"CLR aggregate return type metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var argumentList = string.Join(
+            ", ",
+            inputParameters.Select(parameter =>
+                $"{parameter.Name} {FormatTypeName(parameter.TypeName, parameter.TypeSchema, parameter.IsUserDefined, parameter.MaxLength, parameter.Precision, parameter.Scale)}"));
+        var returnType = FormatTypeName(
+            returnParameter.TypeName,
+            returnParameter.TypeSchema,
+            returnParameter.IsUserDefined,
+            returnParameter.MaxLength,
+            returnParameter.Precision,
+            returnParameter.Scale);
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"CREATE AGGREGATE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({argumentList})",
+                $"RETURNS {returnType}",
+                $"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}"
+            ]);
     }
 
     private static IReadOnlyList<ClrFunctionParameter> ReadClrFunctionParameters(SqlConnection connection, int objectId)
@@ -4944,7 +5020,8 @@ ORDER BY i.name, ep.name;";
         }
 
         if (string.Equals(obj.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(obj.ObjectType, "Function", StringComparison.OrdinalIgnoreCase))
+            string.Equals(obj.ObjectType, "Function", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(obj.ObjectType, "Aggregate", StringComparison.OrdinalIgnoreCase))
         {
             command.CommandText = @"
 SELECT ep.name AS prop_name, ep.value AS prop_value, p.name AS param_name
@@ -5331,6 +5408,7 @@ ORDER BY fic.column_id;";
             "View" => "VIEW",
             "StoredProcedure" => "PROCEDURE",
             "Function" => "FUNCTION",
+            "Aggregate" => "AGGREGATE",
             "Trigger" => "TRIGGER",
             _ => null
         };

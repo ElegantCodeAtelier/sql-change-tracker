@@ -32,6 +32,7 @@ Current runtime scope for `status`, `diff`, and `pull` covers:
 - `View`
 - `StoredProcedure`
 - `Function`
+- `Aggregate`
 - `Sequence`
 - `Schema`
 - `Role`
@@ -61,6 +62,8 @@ Role and user scripting includes database-level permissions granted directly to 
 Table scripting also includes standalone user-created table statistics (`CREATE STATISTICS`) as post-create table statements. Current statistics option coverage includes effective sampling (`FULLSCAN` or `SAMPLE <n> PERCENT`), `PERSIST_SAMPLE_PERCENT = ON`, `NORECOMPUTE`, `INCREMENTAL=ON`, and `AUTO_DROP = ON|OFF` when the source server exposes the required metadata. `MAXDOP`, `STATS_STREAM`, `ROWCOUNT`, and `PAGECOUNT` remain deferred.
 
 Function scripting covers T-SQL scalar/table functions and SQL CLR scalar/table-valued functions (`sys.objects.type = 'FS'` and `FT`), including `EXTERNAL NAME` assembly bindings.
+
+Aggregate scripting covers SQL CLR aggregates (`sys.objects.type = 'AF'`), including `CREATE AGGREGATE ... RETURNS ... EXTERNAL NAME` bindings.
 
 When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 

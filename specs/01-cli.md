@@ -36,7 +36,7 @@ Use git-style verbs: short, task-oriented commands with clear intent.
 - pull
 
 ## v1 Scope
-- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Aggregate`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - `status`, `diff`, and `pull` process the active schema object types.
 - When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 - `UserDefinedType` covers scalar alias types and table-valued types.
@@ -216,7 +216,7 @@ Behavior:
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
 - Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
-- Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Trigger`) compare as compatible.
+- Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Aggregate`, `Trigger`) compare as compatible.
 - For `Assembly`, comparison ignores leading legacy `--Assembly ...` banner comments and treats wrapped/case-varied `0x...` payloads, spacing-only `PERMISSION_SET` formatting, and `ADD FILE ... AS [name]` versus `AS 'name'` as compatible when the effective assembly definition is otherwise identical.
 - When `data.trackedTables` is configured, `status` also reports data-script differences for tracked tables.
 - Status output MUST report schema and data summaries separately.
@@ -255,7 +255,7 @@ Behavior:
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
 - Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
-- Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Trigger`) compare as compatible.
+- Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Aggregate`, `Trigger`) compare as compatible.
 - For `Assembly`, comparison ignores leading legacy `--Assembly ...` banner comments and treats wrapped/case-varied `0x...` payloads, spacing-only `PERMISSION_SET` formatting, and `ADD FILE ... AS [name]` versus `AS 'name'` as compatible when the effective assembly definition is otherwise identical.
 - Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
 - `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.

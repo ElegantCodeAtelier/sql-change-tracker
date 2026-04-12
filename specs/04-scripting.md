@@ -43,8 +43,11 @@ This specification defines normative scripting rules for `sqlct`.
 - Database-scoped objects with no explicit schema MUST be mapped consistently with schema-folder rules.
 - `Schema` discovery covers user-defined schemas, excludes `sys` and `INFORMATION_SCHEMA`, and includes built-in `dbo` only when it has explicit schema permissions or schema-level extended properties that are in scope for scripting.
 - `StoredProcedure` discovery excludes SSMS database-diagram support procedures: `sp_alterdiagram`, `sp_creatediagram`, `sp_dropdiagram`, `sp_helpdiagramdefinition`, `sp_helpdiagrams`, `sp_renamediagram`, and `sp_upgraddiagrams`.
+- `Function` discovery excludes the SSMS database-diagram support function `fn_diagramobjects`.
+- `Table` discovery excludes the SSMS database-diagram support table `sysdiagrams`.
 - `Role` discovery covers user-defined roles and fixed roles that have non-system members tracked in role membership metadata.
 - `Assembly` discovery covers user-defined assemblies from `sys.assemblies` and excludes SQL Server system assemblies (`is_user_defined = 0`).
+- `Aggregate` discovery covers CLR aggregates (`sys.objects.type = 'AF'`).
 - `UserDefinedType` discovery covers both scalar alias types and table-valued types.
 - `XmlSchemaCollection` discovery covers user-defined XML schema collections and excludes collections in `sys` and `INFORMATION_SCHEMA`.
 - `MessageType` and `Contract` discovery covers user-defined Service Broker objects and excludes SQL Server-owned broker artifacts named `DEFAULT` and broker/notification artifacts whose names start with `http://schemas.microsoft.com/SQL/`.
@@ -68,6 +71,7 @@ This specification defines normative scripting rules for `sqlct`.
 - Views
 - Stored Procedures
 - Functions (`FN`, `TF`, `IF`, `FS`, `FT`)
+- Aggregates (`AF`)
 - Sequences
 - Schema
 - Role
@@ -106,7 +110,7 @@ The following types are defined in this specification family and not fully imple
 
 ### 6.1 Statement Framing
 - Batch separators for schema-object scripts MUST be emitted as `GO` on its own line.
-- Programmable objects (views, procedures, functions, and table-scoped DML triggers) MUST include:
+- Programmable objects (views, procedures, functions, aggregates, and table-scoped DML triggers) MUST include:
   - `SET QUOTED_IDENTIFIER <ON|OFF>` + `GO`
   - `SET ANSI_NULLS <ON|OFF>` + `GO`
 - Programmable-object body MUST be followed by `GO`.
@@ -115,7 +119,7 @@ The following types are defined in this specification family and not fully imple
 - Canonical programmable-object whitespace MUST be:
   - no blank line between the final header `GO` and the first definition line,
   - no blank line between the final definition line and the trailing `GO`.
-- The canonical programmable-object whitespace rule applies to views, stored procedures, functions, and table-scoped DML triggers unless compatibility reconciliation explicitly preserves reference spacing (see Section 9).
+- The canonical programmable-object whitespace rule applies to views, stored procedures, functions, aggregates, and table-scoped DML triggers unless compatibility reconciliation explicitly preserves reference spacing (see Section 9).
 
 ### 6.2 Statement Ordering
 - Statement ordering MUST be deterministic.
@@ -436,6 +440,26 @@ Each emitted statement MUST be followed by `GO`.
   1. function-level (by property name),
   2. parameter-level (by parameter name, then property name).
 - Function scripting SHOULD support compatibility definition line-map reconciliation using the same algorithm as stored procedures.
+
+### 8.4A Aggregates
+- CLR aggregates are scripted through programmable-object framing rules with object type `AF` and level type `AGGREGATE`.
+- CLR aggregate metadata MUST be sourced from `sys.assembly_modules`, `sys.assemblies`, and `sys.parameters`.
+- CLR aggregate output MUST emit:
+  - `CREATE AGGREGATE [schema].[name] (<parameters>)`
+  - `RETURNS <return_type>`
+  - `EXTERNAL NAME [assembly].[class]`
+- Aggregate input parameters MUST be ordered by `parameter_id`.
+- Aggregate return-type metadata MUST come from the aggregate parameter row with `parameter_id = 0`; missing return-type metadata MUST fail explicitly.
+- Regex replacements from overrides MUST be applied before final emission.
+- When no compatible reference spacing is preserved, aggregate emission MUST use the canonical programmable-object whitespace rules from Section 6.1.
+- Grants and extended properties MUST follow the aggregate body.
+- Aggregate-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'AGGREGATE', N'<aggregate>', NULL, NULL`
+- Aggregate parameter-level extended properties MUST use:
+  - `EXEC sp_addextendedproperty ..., 'SCHEMA', N'<schema>', 'AGGREGATE', N'<aggregate>', 'PARAMETER', N'@<parameter>'`
+- Aggregate extended properties MUST be emitted in this order:
+  1. aggregate-level (by property name),
+  2. parameter-level (by parameter name, then property name).
 
 ### 8.5 Sequences
 - Sequence metadata MUST be sourced from `sys.sequences` joined with schema and type metadata.
@@ -835,7 +859,7 @@ When compatibility reference files are available, `sqlct` MAY apply reconciliati
 - Comparison normalization MAY treat reordered contiguous `GRANT` and `DENY` statement blocks as compatible when the normalized permission statement set is otherwise identical.
 - For `Table`, comparison normalization MAY treat omitted `TEXTIMAGE_ON [name]` as compatible with an explicit clause only when DB metadata shows that the table `lob_data_space_id` resolves to the current default data space named `[name]`; otherwise omission remains a semantic difference.
 - For extended-property blocks, comparison normalization MAY treat reordered `EXEC sp_addextendedproperty ...` statements as compatible within the same contiguous extended-property block when the normalized property statement set is otherwise identical, MAY ignore equivalent spacing around commas and arguments in those statements, and MAY treat equivalent named-vs-positional argument forms with omitted trailing `NULL` levels and top-level Unicode-literal prefixes on string arguments as compatible.
-- For programmable `StoredProcedure`, `View`, `Function`, and `Trigger` scripts, comparison normalization MAY ignore leading SSMS-generated `/*** Object: ... Script Date: ... ***/` banner comments.
+- For programmable `StoredProcedure`, `View`, `Function`, `Aggregate`, and `Trigger` scripts, comparison normalization MAY ignore leading SSMS-generated `/*** Object: ... Script Date: ... ***/` banner comments.
 - For `Queue`, comparison normalization MUST treat equivalent single-line and multi-line queue option formatting as compatible, MAY treat explicit `ON [PRIMARY]` as equivalent to an omitted default primary filegroup, and MAY treat disabled activation containing only default owner execution context as equivalent to omitted activation.
 - For `Role`, comparison normalization MAY treat legacy `EXEC sp_addrolemember N'<role>', N'<member>'` statements as compatible with `ALTER ROLE [role] ADD MEMBER [member]` when the effective role-membership change is otherwise identical.
 - For `MessageType`, comparison normalization MAY treat legacy `VALIDATION = XML` as compatible with canonical `VALIDATION = WELL_FORMED_XML`, and MAY ignore equivalent spacing around the validation assignment.
