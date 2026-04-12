@@ -114,6 +114,56 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void RewriteModuleDeclarationLine_ReplacesStaleStoredProcedureNameWithCurrentObjectName()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE PROCEDURE [Accounting].[LegacyProcedure] @BatchId int",
+            "AS",
+            "SELECT @BatchId"
+        });
+
+        var rewritten = SqlServerScripter.RewriteModuleDeclarationLine(
+            definition,
+            "Accounting",
+            "CurrentProcedure__1_12_3_0");
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, new[]
+            {
+                "CREATE PROCEDURE [Accounting].[CurrentProcedure__1_12_3_0] @BatchId int",
+                "AS",
+                "SELECT @BatchId"
+            }),
+            rewritten);
+    }
+
+    [Fact]
+    public void RewriteModuleDeclarationLine_PreservesCreateOrAlterPrefix_WhenReplacingCurrentName()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE OR ALTER VIEW [Reporting].[LegacyView]",
+            "AS",
+            "SELECT 1"
+        });
+
+        var rewritten = SqlServerScripter.RewriteModuleDeclarationLine(
+            definition,
+            "Reporting",
+            "CurrentView");
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, new[]
+            {
+                "CREATE OR ALTER VIEW [Reporting].[CurrentView]",
+                "AS",
+                "SELECT 1"
+            }),
+            rewritten);
+    }
+
+    [Fact]
     public void ApplyDefinitionFormatting_PreservesCompatibleClrFunctionReferenceDefinition()
     {
         var definition = string.Join(Environment.NewLine, new[]

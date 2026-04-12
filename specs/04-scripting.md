@@ -110,6 +110,7 @@ The following types are defined in this specification family and not fully imple
   - `SET QUOTED_IDENTIFIER <ON|OFF>` + `GO`
   - `SET ANSI_NULLS <ON|OFF>` + `GO`
 - Programmable-object body MUST be followed by `GO`.
+- Programmable-object declaration lines MUST reflect the current metadata schema/name even when the stored module text is stale after an object rename.
 - Object-level permissions and extended properties MUST be emitted after object DDL body.
 - Canonical programmable-object whitespace MUST be:
   - no blank line between the final header `GO` and the first definition line,

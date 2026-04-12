@@ -19,7 +19,7 @@ internal class SqlServerScripter
         @"^\s*\[[^\]]+\]\s+AS\s+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ModuleDeclarationLineRegex = new(
-        @"^(?<prefix>CREATE\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
+        @"^(?<indent>\s*)(?<prefix>CREATE(?:\s+OR\s+ALTER)?\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ClrTableValuedFunctionReturnColumnNullRegex = new(
         @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*,?\s*)$",
@@ -631,6 +631,8 @@ WHERE s.name = @schema AND o.name = @name";
             definitionText = BuildClrTableValuedFunctionDefinition(connection, objectId, obj.Schema, obj.Name);
         }
 
+        definitionText = RewriteModuleDeclarationLine(definitionText, obj.Schema, obj.Name);
+
         var (lines, hasGoAfterDefinition) = BuildProgrammableObjectLines(
             definitionText,
             ansiNulls,
@@ -1038,6 +1040,8 @@ WHERE s.name = @schema AND o.name = @name";
         var ansiNulls = reader.IsDBNull(1) || reader.GetBoolean(1);
         var quotedIdentifier = reader.IsDBNull(2) || reader.GetBoolean(2);
         reader.Close();
+
+        definitionText = RewriteModuleDeclarationLine(definitionText, obj.Schema, obj.Name);
 
         var (lines, hasGoAfterDefinition) = BuildProgrammableObjectLines(
             definitionText,
@@ -3885,7 +3889,7 @@ WHERE p.object_id = OBJECT_ID(@full) AND p.index_id IN (0,1);";
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT t.name, m.definition, m.uses_ansi_nulls, m.uses_quoted_identifier
+SELECT OBJECT_SCHEMA_NAME(t.object_id), t.name, m.definition, m.uses_ansi_nulls, m.uses_quoted_identifier
 FROM sys.triggers t
 JOIN sys.sql_modules m ON m.object_id = t.object_id
 WHERE t.parent_class_desc = 'OBJECT_OR_COLUMN'
@@ -3898,10 +3902,12 @@ ORDER BY t.name;";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            var triggerName = reader.GetString(0);
-            var definitionText = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-            var ansiNulls = reader.IsDBNull(2) || reader.GetBoolean(2);
-            var quotedIdentifier = reader.IsDBNull(3) || reader.GetBoolean(3);
+            var triggerSchema = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+            var triggerName = reader.GetString(1);
+            var definitionText = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            var ansiNulls = reader.IsDBNull(3) || reader.GetBoolean(3);
+            var quotedIdentifier = reader.IsDBNull(4) || reader.GetBoolean(4);
+            definitionText = RewriteModuleDeclarationLine(definitionText, triggerSchema, triggerName);
             var triggerReferenceLines = TryGetReferenceTriggerBlock(referenceLines, triggerName);
             var (triggerLines, _) = BuildProgrammableObjectLines(
                 definitionText,
@@ -6447,6 +6453,33 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             {
                 lines[i] = refLine;
             }
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    internal static string RewriteModuleDeclarationLine(string definition, string schema, string name)
+    {
+        if (string.IsNullOrWhiteSpace(definition))
+        {
+            return definition;
+        }
+
+        var lines = definition.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var match = ModuleDeclarationLineRegex.Match(lines[i]);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            lines[i] =
+                match.Groups["indent"].Value +
+                match.Groups["prefix"].Value +
+                $"{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}" +
+                match.Groups["suffix"].Value;
+            break;
         }
 
         return string.Join(Environment.NewLine, lines);

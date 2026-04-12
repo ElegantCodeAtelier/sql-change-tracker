@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Treat legacy CLR table-valued function return-column collation clauses as compatible during comparison when SQL Server ignores them in the effective return shape.
 - Treat legacy explicit `NULL` tokens on CLR table-valued function return columns as compatible during comparison and preserve them during compatibility reconciliation when the rest of the definition matches.
 - Treat equivalent legacy `Assembly` scripts as compatible during comparison when they differ only by banner comments, wrapped or case-varied hex payload formatting, `PERMISSION_SET` spacing, or quoted versus bracketed `ADD FILE` names.
+- Rewrite programmable-object declaration lines to the current metadata name when SQL Server stores stale module text after an object rename.
+- Fix table-trigger scripting after the declaration rewrite change by resolving trigger schema without referencing a non-existent `sys.triggers.schema_id` column.
 - Trailing semicolon differences on `INSERT` statement lines in data scripts are now suppressed during comparison normalization; scripts emitted with and without statement terminators compare as compatible (#47).
 - Legacy `TableData` scripts now compare as compatible when they differ from canonical output only by `SET IDENTITY_INSERT` semicolons or top-level `N'...'` string literal prefixes, including inside multi-line `INSERT ... VALUES (...)` statements.
 - Empty separator lines are now ignored during `status` and `diff`, and whitespace-only separator lines compare as compatible after normalization.
