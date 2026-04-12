@@ -36,7 +36,7 @@ Use git-style verbs: short, task-oriented commands with clear intent.
 - pull
 
 ## v1 Scope
-- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- Active schema object types: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Aggregate`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - `status`, `diff`, and `pull` process the active schema object types.
 - When `data.trackedTables` is configured, `status`, `diff`, and `pull` also process `TableData` artifacts for those explicit tracked tables.
 - `UserDefinedType` covers scalar alias types and table-valued types.
@@ -201,16 +201,23 @@ Behavior:
   - Changed: normalized script content differs.
   - Suppress changes when scripts are identical after normalization.
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
-- Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
+- Empty lines are ignored during comparison, and whitespace-only lines are normalized to empty lines first so blank separators differing only by spaces or tabs compare as compatible.
 - Redundant empty or no-op `GO` batches compare as compatible.
+- An omitted terminal `GO` after the final batch compares as compatible with an explicit final `GO`.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
-- Equivalent `TableData` `INSERT` statement ordering within the same contiguous data block compares as compatible when the inserted row set is otherwise identical.
+- Equivalent `TableData` single-row `INSERT` statements compare as compatible when column lists and corresponding value tuples are reordered consistently, and contiguous `INSERT` statement ordering within the same data block compares as compatible when the normalized inserted-row set is otherwise identical.
 - Equivalent `Table` post-create statement package ordering compares as compatible when the normalized package set after the base `CREATE TABLE` block is otherwise identical.
+- Equivalent legacy `Table` statement formatting for `CREATE TABLE`, `ALTER TABLE`, and `CREATE ... INDEX` statements compares as compatible when normalized identifiers, type tokens, default expressions, semicolons, and persisted option values are otherwise identical.
+- Equivalent legacy standalone table-level `PRIMARY KEY` and `UNIQUE` constraints written inline inside `CREATE TABLE (...)` compare as compatible with canonical post-create key-constraint statements when the normalized constraint semantics are otherwise identical.
+- Equivalent legacy `UserDefinedType` `CREATE TYPE` statement formatting compares as compatible when normalized identifiers, type tokens, default expressions, semicolons, and inline table-valued type bodies are otherwise identical.
+- Equivalent contiguous permission statement ordering compares as compatible when the normalized permission statement set is otherwise identical.
 - For `Table`, omitted `TEXTIMAGE_ON [name]` compares as compatible with an explicit clause only when DB metadata shows that the table LOB data space equals the current default data space represented by `[name]`.
-- Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical. Equivalent named-vs-positional `sp_addextendedproperty` argument forms, including omitted trailing `NULL` levels, compare as compatible.
+- Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical. Equivalent named-vs-positional `sp_addextendedproperty` argument forms, including omitted trailing `NULL` levels and top-level Unicode-literal prefixes on string arguments, compare as compatible.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
 - Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
+- Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Aggregate`, `Trigger`) compare as compatible.
+- For `Assembly`, comparison ignores leading legacy `--Assembly ...` banner comments and treats wrapped/case-varied `0x...` payloads, spacing-only `PERMISSION_SET` formatting, and `ADD FILE ... AS [name]` versus `AS 'name'` as compatible when the effective assembly definition is otherwise identical.
 - When `data.trackedTables` is configured, `status` also reports data-script differences for tracked tables.
 - Status output MUST report schema and data summaries separately.
 - Exit codes:
@@ -221,7 +228,7 @@ Behavior:
 ### diff
 Show textual diffs.
 `
-sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>]
+sqlct diff [--project-dir <path>] [--target <db|folder>] [--object <selector>] [--filter <pattern>...] [--context <N>] [--normalized-diff]
 `
 Behavior:
 - Compare object script from DB vs folder.
@@ -231,18 +238,28 @@ Behavior:
 - Changed objects use DB-vs-folder unified diff.
 - Added/deleted objects use empty-side vs script-side unified diff.
 - Normalization includes line-ending/trailing-newline stability plus explicitly listed compatibility rules for deterministic comparison.
-- Whitespace-only lines are normalized to empty lines during comparison so blank separators with spaces or tabs compare as compatible.
+- Displayed diff hunks SHOULD preserve readable script text where possible and MUST NOT fall back to opaque comparison-normalized formatting when a readable compatibility-preserving representation is available.
+- For `Table` and table-valued `UserDefinedType` scripts, readable diff rendering SHOULD preserve structural body boundaries so column and inline-constraint changes remain pinpointed within the body instead of collapsing the entire statement into one changed line.
+- Empty lines are ignored during comparison, and whitespace-only lines are normalized to empty lines first so blank separators differing only by spaces or tabs compare as compatible.
 - Redundant empty or no-op `GO` batches compare as compatible.
+- An omitted terminal `GO` after the final batch compares as compatible with an explicit final `GO`.
 - Trailing semicolons on `INSERT` statement lines are stripped during normalization; scripts emitted with and without statement terminators compare as compatible.
-- Equivalent `TableData` `INSERT` statement ordering within the same contiguous data block compares as compatible when the inserted row set is otherwise identical.
+- Equivalent `TableData` single-row `INSERT` statements compare as compatible when column lists and corresponding value tuples are reordered consistently, and contiguous `INSERT` statement ordering within the same data block compares as compatible when the normalized inserted-row set is otherwise identical.
 - Equivalent `Table` post-create statement package ordering compares as compatible when the normalized package set after the base `CREATE TABLE` block is otherwise identical.
+- Equivalent legacy `Table` statement formatting for `CREATE TABLE`, `ALTER TABLE`, and `CREATE ... INDEX` statements compares as compatible when normalized identifiers, type tokens, default expressions, semicolons, and persisted option values are otherwise identical.
+- Equivalent legacy standalone table-level `PRIMARY KEY` and `UNIQUE` constraints written inline inside `CREATE TABLE (...)` compare as compatible with canonical post-create key-constraint statements when the normalized constraint semantics are otherwise identical.
+- Equivalent legacy `UserDefinedType` `CREATE TYPE` statement formatting compares as compatible when normalized identifiers, type tokens, default expressions, semicolons, and inline table-valued type bodies are otherwise identical.
+- Equivalent contiguous permission statement ordering compares as compatible when the normalized permission statement set is otherwise identical.
 - For `Table`, omitted `TEXTIMAGE_ON [name]` compares as compatible with an explicit clause only when DB metadata shows that the table LOB data space equals the current default data space represented by `[name]`.
-- Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical. Equivalent named-vs-positional `sp_addextendedproperty` argument forms, including omitted trailing `NULL` levels, compare as compatible.
+- Equivalent extended-property statement ordering within the same contiguous extended-property block compares as compatible when the normalized property statement set is otherwise identical. Equivalent named-vs-positional `sp_addextendedproperty` argument forms, including omitted trailing `NULL` levels and top-level Unicode-literal prefixes on string arguments, compare as compatible.
 - Equivalent `Queue` option spacing, line wrapping, explicit default `ON [PRIMARY]`, and disabled default activation compare as compatible.
 - Equivalent `Role` membership statements written as `EXEC sp_addrolemember ...` or `ALTER ROLE ... ADD MEMBER ...` compare as compatible.
 - Equivalent `MessageType` validation synonyms/spacing and equivalent `Contract` and `Service` body formatting and item ordering compare as compatible.
+- Leading SSMS-generated object banner comments on programmable objects (`StoredProcedure`, `View`, `Function`, `Aggregate`, `Trigger`) compare as compatible.
+- For `Assembly`, comparison ignores leading legacy `--Assembly ...` banner comments and treats wrapped/case-varied `0x...` payloads, spacing-only `PERMISSION_SET` formatting, and `ADD FILE ... AS [name]` versus `AS 'name'` as compatible when the effective assembly definition is otherwise identical.
 - Diff output uses a chunked format: only changed lines and their surrounding context are shown, not the entire file.
 - `--context <N>` controls the number of unchanged context lines shown before and after each changed segment (default: 3). Negative values are treated as 0.
+- `--normalized-diff` switches diff rendering to the exact comparison-normalized text used for compatibility evaluation. It is intended for debugging and is off by default.
 - When two change segments are close enough that their context regions overlap, they are merged into a single hunk.
 - Each hunk is prefixed with a `@@ -l,s +l,s @@` header indicating the source and target line ranges.
 - When `data.trackedTables` is configured, `diff` also supports data-script diffs for tracked tables.

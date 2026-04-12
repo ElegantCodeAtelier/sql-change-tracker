@@ -60,6 +60,7 @@ public sealed class SchemaFolderMapperTests
 
     [Theory]
     [InlineData("Synonym", "Synonyms", "Reporting", "CurrentSales")]
+    [InlineData("Aggregate", "Functions", "dbo", "RowAccumulator")]
     [InlineData("UserDefinedType", "Types\\User-defined Data Types", "dbo", "PhoneNumber")]
     [InlineData("XmlSchemaCollection", "Types\\XML Schema Collections", "dbo", "PayloadSchema")]
     [InlineData("Queue", "Service Broker\\Queues", "dbo", "Log_InitiatorQueue")]
@@ -127,6 +128,7 @@ public sealed class SchemaFolderMapperTests
             new FolderMapEntry("View", "Views"),
             new FolderMapEntry("StoredProcedure", "Stored Procedures"),
             new FolderMapEntry("Function", "Functions"),
+            new FolderMapEntry("Aggregate", "Functions"),
             new FolderMapEntry("Sequence", "Sequences"),
             new FolderMapEntry("Schema", @"Security\Schemas"),
             new FolderMapEntry("Role", @"Security\Roles"),

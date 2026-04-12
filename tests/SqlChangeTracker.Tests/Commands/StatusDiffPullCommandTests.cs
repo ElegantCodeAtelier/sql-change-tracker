@@ -295,7 +295,7 @@ public sealed class StatusDiffPullCommandTests
                     string.Empty,
                     []),
                 ExitCodes.Success),
-            OnRunDiff = (_, _, _, patterns, _) => capturedPatterns = patterns
+            OnRunDiff = (_, _, _, patterns, _, _) => capturedPatterns = patterns
         };
 
         var command = new DiffCommand { SyncService = stub };
@@ -324,7 +324,7 @@ public sealed class StatusDiffPullCommandTests
                     string.Empty,
                     []),
                 ExitCodes.Success),
-            OnRunDiff = (_, _, _, _, ctx) => capturedContextLines = ctx
+            OnRunDiff = (_, _, _, _, ctx, _) => capturedContextLines = ctx
         };
 
         var command = new DiffCommand { SyncService = stub };
@@ -350,7 +350,7 @@ public sealed class StatusDiffPullCommandTests
                     string.Empty,
                     []),
                 ExitCodes.Success),
-            OnRunDiff = (_, _, _, _, ctx) => capturedContextLines = ctx
+            OnRunDiff = (_, _, _, _, ctx, _) => capturedContextLines = ctx
         };
 
         var command = new DiffCommand { SyncService = stub };
@@ -359,6 +359,32 @@ public sealed class StatusDiffPullCommandTests
 
         Assert.Equal(ExitCodes.Success, exitCode);
         Assert.Equal(3, capturedContextLines);
+    }
+
+    [Fact]
+    public void DiffCommand_WithNormalizedDiffFlag_PassesValueToService()
+    {
+        var capturedNormalizedDiff = false;
+        var stub = new StubSyncCommandService
+        {
+            DiffResult = CommandExecutionResult<DiffResult>.Ok(
+                new DiffResult(
+                    "diff",
+                    ".\\schema",
+                    "db",
+                    null,
+                    string.Empty,
+                    []),
+                ExitCodes.Success),
+            OnRunDiff = (_, _, _, _, _, normalized) => capturedNormalizedDiff = normalized
+        };
+
+        var command = new DiffCommand { SyncService = stub };
+        var settings = new DiffCommandSettings { ShowNormalizedDiff = true };
+        var exitCode = command.Execute(CreateContext("diff"), settings, default);
+
+        Assert.Equal(ExitCodes.Success, exitCode);
+        Assert.True(capturedNormalizedDiff);
     }
 
     [Fact]
@@ -540,16 +566,16 @@ public sealed class StatusDiffPullCommandTests
         public CommandExecutionResult<PullResult> PullResult { get; set; } =
             CommandExecutionResult<PullResult>.Failure(new ErrorInfo(ErrorCodes.ExecutionFailed, "pull not configured"), ExitCodes.ExecutionFailure);
 
-        public Action<string?, string?, string?, string[]?, int>? OnRunDiff { get; set; }
+        public Action<string?, string?, string?, string[]?, int, bool>? OnRunDiff { get; set; }
 
         public Action<string?, string?, string[]?, Action<string>?>? OnRunPull { get; set; }
 
         public CommandExecutionResult<StatusResult> RunStatus(string? projectDir, string? target, Action<string>? progress = null)
             => StatusResult;
 
-        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, int contextLines = 3, Action<string>? progress = null)
+        public CommandExecutionResult<DiffResult> RunDiff(string? projectDir, string? target, string? objectSelector, string[]? filterPatterns = null, int contextLines = 3, bool normalizedDiff = false, Action<string>? progress = null)
         {
-            OnRunDiff?.Invoke(projectDir, target, objectSelector, filterPatterns, contextLines);
+            OnRunDiff?.Invoke(projectDir, target, objectSelector, filterPatterns, contextLines, normalizedDiff);
             return DiffResult;
         }
 

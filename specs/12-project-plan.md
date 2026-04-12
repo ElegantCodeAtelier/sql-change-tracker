@@ -8,7 +8,7 @@ This plan reflects the current repository state and defines execution order to r
 ## Current State Summary
 - CLI entrypoint exists with commands: `init`, `config`, `status`, `diff`, `pull`.
 - `init`, `config`, `status`, `diff`, and `pull` are implemented.
-- `status`, `diff`, and `pull` are active for: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
+- `status`, `diff`, and `pull` are active for: `Assembly`, `Table`, `View`, `StoredProcedure`, `Function`, `Aggregate`, `Sequence`, `Schema`, `Role`, `User`, `Synonym`, `UserDefinedType`, `XmlSchemaCollection`, `PartitionFunction`, `PartitionScheme`, `MessageType`, `Contract`, `Queue`, `Service`, `Route`, `EventNotification`, `ServiceBinding`, `FullTextCatalog`, `FullTextStoplist`, `SearchPropertyList`.
 - Additional defined-but-inactive object types remain tracked in `specs/04-scripting.md` Section 5.2.
 - Config runtime contract is simplified to:
   - `database` (existing fields)

@@ -26,6 +26,58 @@ public sealed class SqlServerIntrospectorTests
         Assert.Equal(configured, resolved);
     }
 
+    [Theory]
+    [InlineData("sp_alterdiagram", true)]
+    [InlineData("sp_creatediagram", true)]
+    [InlineData("sp_dropdiagram", true)]
+    [InlineData("sp_helpdiagramdefinition", true)]
+    [InlineData("sp_helpdiagrams", true)]
+    [InlineData("sp_renamediagram", true)]
+    [InlineData("sp_upgraddiagrams", true)]
+    [InlineData("sp_CustomImport", false)]
+    [InlineData("usp_ProcessBatch", false)]
+    public void IsExcludedStoredProcedureName_RecognizesOnlyDatabaseDiagramSupportProcedures(string name, bool expected)
+    {
+        var actual = SqlServerIntrospector.IsExcludedStoredProcedureName(name);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("fn_diagramobjects", true)]
+    [InlineData("fn_CustomReport", false)]
+    public void IsExcludedFunctionName_RecognizesOnlyDatabaseDiagramSupportFunctions(string name, bool expected)
+    {
+        var actual = SqlServerIntrospector.IsExcludedFunctionName(name);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("sysdiagrams", true)]
+    [InlineData("CustomerLedger", false)]
+    public void IsExcludedTableName_RecognizesOnlyDatabaseDiagramSupportTables(string name, bool expected)
+    {
+        var actual = SqlServerIntrospector.IsExcludedTableName(name);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("StoredProcedure", "sp_helpdiagrams", false)]
+    [InlineData("StoredProcedure", "usp_ProcessBatch", true)]
+    [InlineData("Function", "fn_diagramobjects", false)]
+    [InlineData("Function", "fn_CustomReport", true)]
+    [InlineData("Table", "sysdiagrams", false)]
+    [InlineData("Table", "CustomerLedger", true)]
+    [InlineData("View", "sysdiagrams", true)]
+    public void ShouldIncludeObject_FiltersOnlyExcludedDatabaseDiagramSupportObjects(string objectType, string name, bool expected)
+    {
+        var actual = SqlServerIntrospector.ShouldIncludeObject(new DbObjectInfo("dbo", name, objectType));
+
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void ListObjects_ReturnsResults_WhenConfigured()
     {
@@ -128,6 +180,31 @@ public sealed class SqlServerIntrospectorTests
                     string.Equals(item.Name, expected.Value.Name, StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ListObjects_IncludesClrAggregates_WhenPresent()
+    {
+        var options = GetOptions();
+        if (options == null)
+        {
+            return;
+        }
+
+        var expected = FindFirstClrAggregate(options);
+        if (expected == null)
+        {
+            return;
+        }
+
+        var introspector = new SqlServerIntrospector();
+        var results = introspector.ListObjects(options);
+
+        Assert.Contains(
+            results,
+            item => string.Equals(item.ObjectType, "Aggregate", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Schema, expected.Value.Schema, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.Name, expected.Value.Name, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static SqlConnectionOptions? GetOptions()
     {
         var server = Environment.GetEnvironmentVariable("SQLCT_TEST_SERVER");
@@ -182,6 +259,30 @@ FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 WHERE o.is_ms_shipped = 0
   AND o.type = 'PC'
+ORDER BY s.name, o.name;
+""";
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return (reader.GetString(0), reader.GetString(1));
+    }
+
+    private static (string Schema, string Name)? FindFirstClrAggregate(SqlConnectionOptions options)
+    {
+        using var connection = SqlConnectionFactory.Create(options);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+SELECT TOP 1 s.name, o.name
+FROM sys.objects o
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type = 'AF'
 ORDER BY s.name, o.name;
 """;
 

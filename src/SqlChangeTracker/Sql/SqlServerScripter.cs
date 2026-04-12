@@ -19,7 +19,7 @@ internal class SqlServerScripter
         @"^\s*\[[^\]]+\]\s+AS\s+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ModuleDeclarationLineRegex = new(
-        @"^(?<prefix>CREATE\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
+        @"^(?<indent>\s*)(?<prefix>CREATE(?:\s+OR\s+ALTER)?\s+(?:PROC(?:EDURE)?|FUNCTION|VIEW|TRIGGER|AGGREGATE)\s+)(?<name>(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+(?:\]\])*\]|[A-Za-z_][\w@#$]*))*)(?<suffix>.*)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex ClrTableValuedFunctionReturnColumnNullRegex = new(
         @"^(?<prefix>\s*(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)\s+(?:(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*)(?:\.(?:\[[^\]]+\]|[A-Za-z_][\w@#$]*))?)(?:\s*\([^)]*\))?)\s+NULL(?<suffix>\s*,?\s*)$",
@@ -53,6 +53,10 @@ internal class SqlServerScripter
         string AssemblyMethod,
         int? ExecuteAsPrincipalId,
         string ExecuteAsPrincipalName);
+
+    private sealed record ClrAggregateMetadata(
+        string AssemblyName,
+        string AssemblyClass);
 
     private sealed record ClrFunctionParameter(
         int ParameterId,
@@ -88,10 +92,15 @@ internal class SqlServerScripter
         string? PartitionColumn,
         string? LobDataSpace);
 
-    private readonly record struct IndexScriptingOptions(
+    internal readonly record struct IndexScriptingOptions(
         string Compression,
         string? PartitionColumn,
-        bool StatisticsIncremental);
+        bool StatisticsIncremental,
+        bool PadIndex,
+        byte FillFactor,
+        bool IgnoreDupKey,
+        bool AllowRowLocks,
+        bool AllowPageLocks);
 
     private readonly record struct StatisticsScriptingOptions(
         string? SamplingClause,
@@ -129,6 +138,7 @@ internal class SqlServerScripter
             "StoredProcedure" => ScriptModule(connection, obj, true, referenceLines),
             "View" => ScriptView(connection, obj, referenceLines),
             "Function" => ScriptModule(connection, obj, true, referenceLines),
+            "Aggregate" => ScriptModule(connection, obj, true, referenceLines),
             "Sequence" => ScriptSequence(connection, obj, referenceLines),
             "Schema" => ScriptSchema(connection, obj, referenceLines),
             "Role" => ScriptRole(connection, obj, referenceLines),
@@ -608,12 +618,17 @@ WHERE s.name = @schema AND o.name = @name";
         var isClrStoredProcedure = string.Equals(objectType, "PC", StringComparison.OrdinalIgnoreCase);
         var isClrScalarFunction = string.Equals(objectType, "FS", StringComparison.OrdinalIgnoreCase);
         var isClrTableValuedFunction = string.Equals(objectType, "FT", StringComparison.OrdinalIgnoreCase);
-        var isClrModule = isClrStoredProcedure || isClrScalarFunction || isClrTableValuedFunction;
+        var isClrAggregate = string.Equals(objectType, "AF", StringComparison.OrdinalIgnoreCase);
+        var isClrModule = isClrStoredProcedure || isClrScalarFunction || isClrTableValuedFunction || isClrAggregate;
         ansiNulls = ReadModuleSetOption(reader, moduleColumn: 3, propertyColumn: 5, defaultValue: !isClrModule);
         quotedIdentifier = ReadModuleSetOption(reader, moduleColumn: 4, propertyColumn: 6, defaultValue: !isClrModule);
         reader.Close();
 
-        if (isClrStoredProcedure && string.IsNullOrWhiteSpace(definitionText))
+        if (isClrAggregate)
+        {
+            definitionText = BuildClrAggregateDefinition(connection, objectId, obj.Schema, obj.Name);
+        }
+        else if (isClrStoredProcedure && string.IsNullOrWhiteSpace(definitionText))
         {
             definitionText = BuildClrStoredProcedureDefinition(connection, objectId, obj.Schema, obj.Name);
         }
@@ -625,6 +640,8 @@ WHERE s.name = @schema AND o.name = @name";
         {
             definitionText = BuildClrTableValuedFunctionDefinition(connection, objectId, obj.Schema, obj.Name);
         }
+
+        definitionText = RewriteModuleDeclarationLine(definitionText, obj.Schema, obj.Name);
 
         var (lines, hasGoAfterDefinition) = BuildProgrammableObjectLines(
             definitionText,
@@ -694,6 +711,28 @@ WHERE am.object_id = @object_id;";
             reader.GetString(2),
             reader.IsDBNull(3) ? (int?)null : Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture),
             reader.IsDBNull(4) ? string.Empty : reader.GetString(4));
+    }
+
+    private static ClrAggregateMetadata ReadClrAggregateMetadata(SqlConnection connection, int objectId, string schema, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT a.name AS assembly_name,
+       am.assembly_class
+FROM sys.assembly_modules am
+JOIN sys.assemblies a ON a.assembly_id = am.assembly_id
+WHERE am.object_id = @object_id;";
+        command.Parameters.AddWithValue("@object_id", objectId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvalidOperationException($"CLR aggregate metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        return new ClrAggregateMetadata(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? name : reader.GetString(1));
     }
 
     private static string BuildClrScalarFunctionDefinition(
@@ -890,6 +929,50 @@ WHERE am.object_id = @object_id;";
         return string.Join(Environment.NewLine, lines);
     }
 
+    private static string BuildClrAggregateDefinition(
+        SqlConnection connection,
+        int objectId,
+        string schema,
+        string name)
+    {
+        var metadata = ReadClrAggregateMetadata(connection, objectId, schema, name);
+        var parameters = ReadClrFunctionParameters(connection, objectId);
+        var inputParameters = parameters
+            .Where(parameter => parameter.ParameterId > 0)
+            .OrderBy(parameter => parameter.ParameterId)
+            .ToArray();
+        if (inputParameters.Length == 0)
+        {
+            throw new InvalidOperationException($"CLR aggregate input parameter metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var returnParameter = parameters.FirstOrDefault(parameter => parameter.ParameterId == 0);
+        if (returnParameter == null)
+        {
+            throw new InvalidOperationException($"CLR aggregate return type metadata not found: {QuoteIdentifier(schema)}.{QuoteIdentifier(name)}.");
+        }
+
+        var argumentList = string.Join(
+            ", ",
+            inputParameters.Select(parameter =>
+                $"{parameter.Name} {FormatTypeName(parameter.TypeName, parameter.TypeSchema, parameter.IsUserDefined, parameter.MaxLength, parameter.Precision, parameter.Scale)}"));
+        var returnType = FormatTypeName(
+            returnParameter.TypeName,
+            returnParameter.TypeSchema,
+            returnParameter.IsUserDefined,
+            returnParameter.MaxLength,
+            returnParameter.Precision,
+            returnParameter.Scale);
+
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"CREATE AGGREGATE {QuoteIdentifier(schema)}.{QuoteIdentifier(name)} ({argumentList})",
+                $"RETURNS {returnType}",
+                $"EXTERNAL NAME {QuoteIdentifier(metadata.AssemblyName)}.{QuoteIdentifier(metadata.AssemblyClass)}"
+            ]);
+    }
+
     private static IReadOnlyList<ClrFunctionParameter> ReadClrFunctionParameters(SqlConnection connection, int objectId)
     {
         var parameters = new List<ClrFunctionParameter>();
@@ -1033,6 +1116,8 @@ WHERE s.name = @schema AND o.name = @name";
         var ansiNulls = reader.IsDBNull(1) || reader.GetBoolean(1);
         var quotedIdentifier = reader.IsDBNull(2) || reader.GetBoolean(2);
         reader.Close();
+
+        definitionText = RewriteModuleDeclarationLine(definitionText, obj.Schema, obj.Name);
 
         var (lines, hasGoAfterDefinition) = BuildProgrammableObjectLines(
             definitionText,
@@ -1265,6 +1350,7 @@ WHERE dp.type = 'R' AND dp.name = @name";
         }
 
         lines.AddRange(ReadRoleMembershipStatements(connection, roleName));
+        lines.AddRange(ReadPrincipalDatabasePermissions(connection, roleName, referenceLines));
         if (lines.Count == 0)
         {
             throw new InvalidOperationException($"Role has no scriptable definition: [{roleName}].");
@@ -1320,6 +1406,7 @@ WHERE dp.name = @name";
 
             lines.Add($"CREATE USER [{userName}] FOR CERTIFICATE [{certificateName}]");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1334,6 +1421,7 @@ WHERE dp.name = @name";
 
             lines.Add($"CREATE USER [{userName}] FOR ASYMMETRIC KEY [{asymmetricKeyName}]");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1343,6 +1431,7 @@ WHERE dp.name = @name";
         {
             lines.Add($"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1353,6 +1442,7 @@ WHERE dp.name = @name";
         {
             lines.Add($"CREATE USER [{userName}] FROM EXTERNAL PROVIDER{defaultSchemaClause}");
             lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
             AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
             AppendTrailingBlankLines(lines, referenceLines);
             return string.Join(Environment.NewLine, lines);
@@ -1363,9 +1453,19 @@ WHERE dp.name = @name";
             throw new InvalidOperationException($"Contained database users with password metadata are not supported: [{userName}].");
         }
 
-        var effectiveLoginName = string.IsNullOrWhiteSpace(loginName) ? userName : loginName;
-        lines.Add($"CREATE USER [{userName}] FOR LOGIN [{effectiveLoginName}]{defaultSchemaClause}");
+        if (string.IsNullOrWhiteSpace(loginName))
+        {
+            lines.Add($"CREATE USER [{userName}] WITHOUT LOGIN{defaultSchemaClause}");
+            lines.Add("GO");
+            lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
+            AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
+            AppendTrailingBlankLines(lines, referenceLines);
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        lines.Add($"CREATE USER [{userName}] FOR LOGIN [{loginName}]{defaultSchemaClause}");
         lines.Add("GO");
+        lines.AddRange(ReadPrincipalDatabasePermissions(connection, userName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadPrincipalExtendedProperties(connection, userName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
@@ -1583,7 +1683,7 @@ WHERE s.name = @schema AND syn.name = @name;";
         var kind = obj.UserDefinedTypeKind ?? ResolveUserDefinedTypeKind(connection, obj);
         if (kind == UserDefinedTypeKind.Table)
         {
-            return ScriptTableType(connection, obj);
+            return ScriptTableType(connection, obj, referenceLines);
         }
 
         using var command = connection.CreateCommand();
@@ -1623,6 +1723,7 @@ WHERE t.is_user_defined = 1 AND t.is_table_type = 0 AND s.name = @schema AND t.n
             "GO"
         };
 
+        lines.AddRange(ReadUserDefinedTypePermissions(connection, schemaName, typeName, referenceLines));
         AppendExtendedPropertyLines(lines, ReadUserDefinedTypeExtendedProperties(connection, schemaName, typeName, referenceLines), referenceLines);
         AppendTrailingBlankLines(lines, referenceLines);
         return string.Join(Environment.NewLine, lines);
@@ -1652,7 +1753,7 @@ WHERE t.is_user_defined = 1
             : UserDefinedTypeKind.Scalar;
     }
 
-    private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj)
+    private static string ScriptTableType(SqlConnection connection, DbObjectInfo obj, string[]? referenceLines)
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
@@ -1694,6 +1795,7 @@ WHERE s.name = @schema AND tt.name = @name;";
 
         lines.Add(")");
         lines.Add("GO");
+        lines.AddRange(ReadUserDefinedTypePermissions(connection, obj.Schema, obj.Name, referenceLines));
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -2792,22 +2894,58 @@ WHERE name = @name;";
     }
 
     internal static string BuildIndexWithClause(string compression, bool statisticsIncremental)
+        => BuildIndexWithClause(new IndexScriptingOptions(
+            compression,
+            null,
+            statisticsIncremental,
+            PadIndex: false,
+            FillFactor: 0,
+            IgnoreDupKey: false,
+            AllowRowLocks: true,
+            AllowPageLocks: true));
+
+    internal static string BuildIndexWithClause(IndexScriptingOptions options)
     {
-        var options = new List<string>();
-        if (statisticsIncremental)
+        var clauseOptions = new List<string>();
+        if (options.PadIndex)
         {
-            options.Add("STATISTICS_INCREMENTAL=ON");
+            clauseOptions.Add("PAD_INDEX = ON");
         }
 
-        if (!string.IsNullOrWhiteSpace(compression) &&
-            !string.Equals(compression, "NONE", StringComparison.OrdinalIgnoreCase))
+        if (options.FillFactor > 0)
         {
-            options.Add($"DATA_COMPRESSION = {compression}");
+            clauseOptions.Add($"FILLFACTOR = {options.FillFactor}");
         }
 
-        return options.Count == 0
+        if (options.IgnoreDupKey)
+        {
+            clauseOptions.Add("IGNORE_DUP_KEY = ON");
+        }
+
+        if (options.StatisticsIncremental)
+        {
+            clauseOptions.Add("STATISTICS_INCREMENTAL=ON");
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.Compression) &&
+            !string.Equals(options.Compression, "NONE", StringComparison.OrdinalIgnoreCase))
+        {
+            clauseOptions.Add($"DATA_COMPRESSION = {options.Compression}");
+        }
+
+        if (!options.AllowRowLocks)
+        {
+            clauseOptions.Add("ALLOW_ROW_LOCKS = OFF");
+        }
+
+        if (!options.AllowPageLocks)
+        {
+            clauseOptions.Add("ALLOW_PAGE_LOCKS = OFF");
+        }
+
+        return clauseOptions.Count == 0
             ? string.Empty
-            : $" WITH ({string.Join(", ", options)})";
+            : $" WITH ({string.Join(", ", clauseOptions)})";
     }
 
     internal static string BuildStatisticsWithClause(
@@ -3827,7 +3965,7 @@ WHERE p.object_id = OBJECT_ID(@full) AND p.index_id IN (0,1);";
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT t.name, m.definition, m.uses_ansi_nulls, m.uses_quoted_identifier
+SELECT OBJECT_SCHEMA_NAME(t.object_id), t.name, m.definition, m.uses_ansi_nulls, m.uses_quoted_identifier
 FROM sys.triggers t
 JOIN sys.sql_modules m ON m.object_id = t.object_id
 WHERE t.parent_class_desc = 'OBJECT_OR_COLUMN'
@@ -3840,10 +3978,12 @@ ORDER BY t.name;";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            var triggerName = reader.GetString(0);
-            var definitionText = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-            var ansiNulls = reader.IsDBNull(2) || reader.GetBoolean(2);
-            var quotedIdentifier = reader.IsDBNull(3) || reader.GetBoolean(3);
+            var triggerSchema = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+            var triggerName = reader.GetString(1);
+            var definitionText = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            var ansiNulls = reader.IsDBNull(3) || reader.GetBoolean(3);
+            var quotedIdentifier = reader.IsDBNull(4) || reader.GetBoolean(4);
+            definitionText = RewriteModuleDeclarationLine(definitionText, triggerSchema, triggerName);
             var triggerReferenceLines = TryGetReferenceTriggerBlock(referenceLines, triggerName);
             var (triggerLines, _) = BuildProgrammableObjectLines(
                 definitionText,
@@ -3951,7 +4091,7 @@ ORDER BY i.index_id, kc.name;";
                 ? "CLUSTERED"
                 : "NONCLUSTERED";
             var indexOptions = ReadIndexScriptingOptions(connection, objectId, indexId);
-            var withClause = BuildIndexWithClause(indexOptions.Compression, indexOptions.StatisticsIncremental);
+            var withClause = BuildIndexWithClause(indexOptions);
             var onClause = BuildIndexOnClause(dataSpace, indexOptions.PartitionColumn);
 
             if (keyLineMap != null && keyLineMap.TryGetValue(name, out var line))
@@ -4069,7 +4209,7 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
                 var columnstoreType = index.TypeDesc.StartsWith("CLUSTERED", StringComparison.OrdinalIgnoreCase)
                     ? "CLUSTERED COLUMNSTORE"
                     : "NONCLUSTERED COLUMNSTORE";
-                var columnstoreWithClause = BuildIndexWithClause("NONE", indexOptions.StatisticsIncremental);
+                var columnstoreWithClause = BuildIndexWithClause(indexOptions with { Compression = "NONE" });
                 var columnstoreOnClause = BuildIndexOnClause(index.DataSpace, indexOptions.PartitionColumn);
 
                 lines.Add($"CREATE {columnstoreType} INDEX [{index.Name}] ON {fullName}{columnstoreWithClause}{columnstoreOnClause}");
@@ -4086,7 +4226,7 @@ ORDER BY ic.key_ordinal, ic.index_column_id;";
             var type = string.Equals(index.TypeDesc, "CLUSTERED", StringComparison.OrdinalIgnoreCase) ? "CLUSTERED" : "NONCLUSTERED";
             var includeClause = includes.Count > 0 ? $" INCLUDE ({string.Join(", ", includes)})" : string.Empty;
             var filterClause = string.IsNullOrWhiteSpace(index.Filter) ? string.Empty : $" WHERE {index.Filter}";
-            var withClause = BuildIndexWithClause(indexOptions.Compression, indexOptions.StatisticsIncremental);
+            var withClause = BuildIndexWithClause(indexOptions);
             var onClause = BuildIndexOnClause(index.DataSpace, indexOptions.PartitionColumn);
 
             if (indexLineMap != null && indexLineMap.TryGetValue(index.Name, out var lineNonColumnstore))
@@ -4257,10 +4397,44 @@ WHERE s.object_id = @obj
 
     private static IndexScriptingOptions ReadIndexScriptingOptions(SqlConnection connection, int objectId, int indexId)
     {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT i.is_padded,
+       i.fill_factor,
+       i.ignore_dup_key,
+       i.allow_row_locks,
+       i.allow_page_locks
+FROM sys.indexes i
+WHERE i.object_id = @obj AND i.index_id = @idx;";
+        command.Parameters.AddWithValue("@obj", objectId);
+        command.Parameters.AddWithValue("@idx", indexId);
+
+        var padIndex = false;
+        byte fillFactor = 0;
+        var ignoreDupKey = false;
+        var allowRowLocks = true;
+        var allowPageLocks = true;
+        using (var reader = command.ExecuteReader())
+        {
+            if (reader.Read())
+            {
+                padIndex = !reader.IsDBNull(0) && reader.GetBoolean(0);
+                fillFactor = reader.IsDBNull(1) ? (byte)0 : reader.GetByte(1);
+                ignoreDupKey = !reader.IsDBNull(2) && reader.GetBoolean(2);
+                allowRowLocks = reader.IsDBNull(3) || reader.GetBoolean(3);
+                allowPageLocks = reader.IsDBNull(4) || reader.GetBoolean(4);
+            }
+        }
+
         return new IndexScriptingOptions(
             ReadIndexCompression(connection, objectId, indexId),
             ReadIndexPartitionColumn(connection, objectId, indexId),
-            ReadIndexStatisticsIncremental(connection, objectId, indexId));
+            ReadIndexStatisticsIncremental(connection, objectId, indexId),
+            padIndex,
+            fillFactor,
+            ignoreDupKey,
+            allowRowLocks,
+            allowPageLocks);
     }
 
     private static string ReadIndexCompression(SqlConnection connection, int objectId, int indexId)
@@ -4465,6 +4639,23 @@ ORDER BY pr.name, dp.permission_name;",
             $"SCHEMA::{QuoteIdentifier(schemaName)}",
             referenceLines);
 
+    private static IEnumerable<string> ReadPrincipalDatabasePermissions(
+        SqlConnection connection,
+        string principalName,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+WHERE dp.class_desc = 'DATABASE'
+  AND pr.name = @name
+ORDER BY dp.permission_name;",
+            command => command.Parameters.AddWithValue("@name", principalName),
+            string.Empty,
+            referenceLines);
+
     private static IEnumerable<string> ExecutePermissionQuery(
         SqlConnection connection,
         string commandText,
@@ -4521,11 +4712,15 @@ ORDER BY pr.name, dp.permission_name;",
         string targetClause,
         string principal)
     {
+        var onTarget = string.IsNullOrWhiteSpace(targetClause)
+            ? string.Empty
+            : $" ON {targetClause}";
+
         return normalizedState switch
         {
-            "GRANT_WITH_GRANT_OPTION" => $"GRANT {permission} ON {targetClause} TO [{principal}] WITH GRANT OPTION",
-            "DENY" => $"DENY {permission} ON {targetClause} TO [{principal}]",
-            _ => $"GRANT {permission} ON {targetClause} TO [{principal}]"
+            "GRANT_WITH_GRANT_OPTION" => $"GRANT {permission}{onTarget} TO [{principal}] WITH GRANT OPTION",
+            "DENY" => $"DENY {permission}{onTarget} TO [{principal}]",
+            _ => $"GRANT {permission}{onTarget} TO [{principal}]"
         };
     }
 
@@ -4825,7 +5020,8 @@ ORDER BY i.name, ep.name;";
         }
 
         if (string.Equals(obj.ObjectType, "StoredProcedure", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(obj.ObjectType, "Function", StringComparison.OrdinalIgnoreCase))
+            string.Equals(obj.ObjectType, "Function", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(obj.ObjectType, "Aggregate", StringComparison.OrdinalIgnoreCase))
         {
             command.CommandText = @"
 SELECT ep.name AS prop_name, ep.value AS prop_value, p.name AS param_name
@@ -5212,6 +5408,7 @@ ORDER BY fic.column_id;";
             "View" => "VIEW",
             "StoredProcedure" => "PROCEDURE",
             "Function" => "FUNCTION",
+            "Aggregate" => "AGGREGATE",
             "Trigger" => "TRIGGER",
             _ => null
         };
@@ -5398,6 +5595,32 @@ ORDER BY pr.name, dp.permission_name;",
                 command.Parameters.AddWithValue("@name", name);
             },
             $"XML SCHEMA COLLECTION::{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}",
+            referenceLines);
+
+    private static IEnumerable<string> ReadUserDefinedTypePermissions(
+        SqlConnection connection,
+        string schema,
+        string name,
+        string[]? referenceLines)
+        => ExecutePermissionQuery(
+            connection,
+            @"
+SELECT dp.permission_name, dp.state_desc, pr.name AS principal_name
+FROM sys.database_permissions dp
+JOIN sys.database_principals pr ON pr.principal_id = dp.grantee_principal_id
+JOIN sys.types t ON t.user_type_id = dp.major_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE dp.class_desc = 'TYPE'
+  AND s.name = @schema
+  AND t.name = @name
+  AND t.is_user_defined = 1
+ORDER BY pr.name, dp.permission_name;",
+            command =>
+            {
+                command.Parameters.AddWithValue("@schema", schema);
+                command.Parameters.AddWithValue("@name", name);
+            },
+            $"TYPE::{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}",
             referenceLines);
 
     private static IEnumerable<string> ReadXmlSchemaCollectionExtendedProperties(
@@ -6308,6 +6531,33 @@ WHERE object_id = OBJECT_ID(@table) AND name = @column;";
             {
                 lines[i] = refLine;
             }
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    internal static string RewriteModuleDeclarationLine(string definition, string schema, string name)
+    {
+        if (string.IsNullOrWhiteSpace(definition))
+        {
+            return definition;
+        }
+
+        var lines = definition.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var match = ModuleDeclarationLineRegex.Match(lines[i]);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            lines[i] =
+                match.Groups["indent"].Value +
+                match.Groups["prefix"].Value +
+                $"{QuoteIdentifier(schema)}.{QuoteIdentifier(name)}" +
+                match.Groups["suffix"].Value;
+            break;
         }
 
         return string.Join(Environment.NewLine, lines);

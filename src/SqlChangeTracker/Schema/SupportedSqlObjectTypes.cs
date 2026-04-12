@@ -19,6 +19,7 @@ internal static class SupportedSqlObjectTypes
         new("View", "Views", false, true),
         new("StoredProcedure", "Stored Procedures", false, true),
         new("Function", "Functions", false, true),
+        new("Aggregate", "Functions", false, true),
         new("Sequence", "Sequences", false, true),
         new("Schema", Path.Combine("Security", "Schemas"), true, true),
         new("Role", Path.Combine("Security", "Roles"), true, true),

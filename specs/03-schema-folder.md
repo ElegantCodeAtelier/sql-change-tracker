@@ -51,6 +51,7 @@ Defines the baseline `sqlct` schema-folder structure and naming rules.
 
 ## Naming Rules
 - Schema-scoped object scripts use `Schema.Object.sql` in their object-type folder (for example `Tables/`, `Views/`, `Functions/`, `Stored Procedures/`, `Sequences/`, `Synonyms/`, `Service Broker/Queues/`, `Types/XML Schema Collections/`, and `Types/User-defined Data Types/`).
+- `Functions/` stores both `Function` and `Aggregate` scripts.
 - `Types/User-defined Data Types/` stores both scalar alias types and table-valued types.
 - Data scripts use `Schema.Object_Data.sql` in `Data/`.
 - Data tracking uses `Data/` for scripts derived from tables explicitly listed in `data.trackedTables`.

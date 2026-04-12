@@ -114,6 +114,56 @@ public sealed class SqlServerScripterCompatibilityTests
     }
 
     [Fact]
+    public void RewriteModuleDeclarationLine_ReplacesStaleStoredProcedureNameWithCurrentObjectName()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE PROCEDURE [Accounting].[LegacyProcedure] @BatchId int",
+            "AS",
+            "SELECT @BatchId"
+        });
+
+        var rewritten = SqlServerScripter.RewriteModuleDeclarationLine(
+            definition,
+            "Accounting",
+            "CurrentProcedure__1_12_3_0");
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, new[]
+            {
+                "CREATE PROCEDURE [Accounting].[CurrentProcedure__1_12_3_0] @BatchId int",
+                "AS",
+                "SELECT @BatchId"
+            }),
+            rewritten);
+    }
+
+    [Fact]
+    public void RewriteModuleDeclarationLine_PreservesCreateOrAlterPrefix_WhenReplacingCurrentName()
+    {
+        var definition = string.Join(Environment.NewLine, new[]
+        {
+            "CREATE OR ALTER VIEW [Reporting].[LegacyView]",
+            "AS",
+            "SELECT 1"
+        });
+
+        var rewritten = SqlServerScripter.RewriteModuleDeclarationLine(
+            definition,
+            "Reporting",
+            "CurrentView");
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, new[]
+            {
+                "CREATE OR ALTER VIEW [Reporting].[CurrentView]",
+                "AS",
+                "SELECT 1"
+            }),
+            rewritten);
+    }
+
+    [Fact]
     public void ApplyDefinitionFormatting_PreservesCompatibleClrFunctionReferenceDefinition()
     {
         var definition = string.Join(Environment.NewLine, new[]
@@ -549,6 +599,24 @@ public sealed class SqlServerScripterCompatibilityTests
         var clause = SqlServerScripter.BuildIndexWithClause("PAGE", statisticsIncremental: true);
 
         Assert.Equal(" WITH (STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = PAGE)", clause);
+    }
+
+    [Fact]
+    public void BuildIndexWithClause_EmitsStablePersistedIndexOptionsInDeterministicOrder()
+    {
+        var clause = SqlServerScripter.BuildIndexWithClause(new SqlServerScripter.IndexScriptingOptions(
+            Compression: "PAGE",
+            PartitionColumn: null,
+            StatisticsIncremental: true,
+            PadIndex: true,
+            FillFactor: 80,
+            IgnoreDupKey: true,
+            AllowRowLocks: false,
+            AllowPageLocks: false));
+
+        Assert.Equal(
+            " WITH (PAD_INDEX = ON, FILLFACTOR = 80, IGNORE_DUP_KEY = ON, STATISTICS_INCREMENTAL=ON, DATA_COMPRESSION = PAGE, ALLOW_ROW_LOCKS = OFF, ALLOW_PAGE_LOCKS = OFF)",
+            clause);
     }
 
     [Fact]
