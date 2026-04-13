@@ -16,6 +16,7 @@ internal sealed class SqlctConfigWriter
         "#   dotnet tool update --global sqlct\n" +
         "#\n" +
         "# Usage:\n" +
+        "#   sqlct --help   - print help\n" +
         "#   sqlct init     - initialize this project\n" +
         "#   sqlct config   - validate and rewrite configuration\n" +
         "#   sqlct status   - compare database against schema folder\n" +
