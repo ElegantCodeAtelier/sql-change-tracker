@@ -11,7 +11,7 @@ internal static class ExitCodes
 
 internal static class ConfigFileNames
 {
-    public const string SqlctConfigFileName = "sqlct.config.json";
+    public const string SqlctConfigFileName = "sqlct.config.yaml";
 }
 
 internal static class ErrorCodes

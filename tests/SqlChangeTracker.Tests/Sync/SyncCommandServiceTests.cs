@@ -745,7 +745,7 @@ public sealed class SyncCommandServiceTests
         {
             var supportedTable = CreateFile(tempDir, Path.Combine("Tables", "dbo.Customer.sql"), "CREATE TABLE dbo.Customer;");
             var supportedView = CreateFile(tempDir, Path.Combine("Views", "dbo.CustomerView.sql"), "CREATE VIEW dbo.CustomerView AS SELECT 1;");
-            File.WriteAllText(Path.Combine(tempDir, "sqlct.config.json"), "{}");
+            File.WriteAllText(Path.Combine(tempDir, "sqlct.config.yaml"), "{}");
             File.WriteAllText(Path.Combine(tempDir, "notes.txt"), "ignored");
 
             var warnings = SyncCommandService.CollectUnsupportedFolderWarnings(tempDir, [supportedTable, supportedView]);
@@ -2786,25 +2786,22 @@ public sealed class SyncCommandServiceTests
     private static void WriteConfigWithAuth(string projectDir, string auth, string? user, string? password)
     {
         Directory.CreateDirectory(projectDir);
-        var configPath = Path.Combine(projectDir, "sqlct.config.json");
-        var userLine = user != null ? $"""
-                "user": "{user}",
-        """ : string.Empty;
-        var passwordLine = password != null ? $"""
-                "password": "{password}",
-        """ : string.Empty;
-        File.WriteAllText(configPath, $$"""
-            {
-              "database": {
-                "server": "non-existent-server-for-auth-test",
-                "name": "TestDb",
-                "auth": "{{auth}}",
-                {{userLine}}
-                {{passwordLine}}
-                "trustServerCertificate": true
-              }
-            }
-            """);
+        var configPath = Path.Combine(projectDir, "sqlct.config.yaml");
+        var userLine = user != null ? $"  user: '{user}'" : string.Empty;
+        var passwordLine = password != null ? $"  password: '{password}'" : string.Empty;
+        var lines = new List<string>
+        {
+            "database:",
+            "  server: non-existent-server-for-auth-test",
+            "  name: TestDb",
+            $"  auth: {auth}",
+        };
+        if (!string.IsNullOrEmpty(userLine))
+            lines.Add(userLine);
+        if (!string.IsNullOrEmpty(passwordLine))
+            lines.Add(passwordLine);
+        lines.Add("  trustServerCertificate: true");
+        File.WriteAllText(configPath, string.Join("\n", lines) + "\n");
     }
 
     private static string CreateFile(string root, string relativePath, string content)

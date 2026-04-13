@@ -1,4 +1,6 @@
-using System.Text.Json;
+using YamlDotNet.Core;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace SqlChangeTracker.Config;
 
@@ -20,13 +22,13 @@ internal sealed class SqlctConfigReader
 
         try
         {
-            var json = File.ReadAllText(configPath);
-            var config = JsonSerializer.Deserialize<SqlctConfig>(json, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                ReadCommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true
-            });
+            var yaml = File.ReadAllText(configPath);
+            var deserializer = new DeserializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .IgnoreUnmatchedProperties()
+                .Build();
+
+            var config = deserializer.Deserialize<SqlctConfig>(yaml);
 
             if (config == null)
             {
@@ -38,10 +40,10 @@ internal sealed class SqlctConfigReader
             SqlctConfigNormalizer.Normalize(config);
             return SqlctConfigReadResult.Ok(config);
         }
-        catch (JsonException ex)
+        catch (YamlException ex)
         {
             return SqlctConfigReadResult.Failure(
-                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid config file.", Detail: $"invalid JSON: {ex.Message}"),
+                new ErrorInfo(ErrorCodes.InvalidConfig, "invalid config file.", Detail: $"invalid YAML: {ex.Message}"),
                 ExitCodes.InvalidConfig);
         }
         catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)

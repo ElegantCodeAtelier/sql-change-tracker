@@ -19,7 +19,7 @@ public sealed class DataCommandTests
                 new DataTrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     [],
                     ["dbo.Customer"],
@@ -44,7 +44,7 @@ public sealed class DataCommandTests
                 new DataTrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     ["dbo.Customer", "dbo.Order"],
                     ["dbo.Customer"],
@@ -79,7 +79,7 @@ public sealed class DataCommandTests
                 new DataTrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     ["dbo.Customer"],
                     [],
@@ -114,7 +114,7 @@ public sealed class DataCommandTests
                 new DataUntrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "*.Missing",
                     [],
                     ["dbo.Customer"],
@@ -139,7 +139,7 @@ public sealed class DataCommandTests
                 new DataUntrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     ["dbo.Customer"],
                     ["dbo.Customer", "dbo.Order"],
@@ -181,7 +181,7 @@ public sealed class DataCommandTests
                 new DataTrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     ["dbo.Customer"],
                     [],
@@ -344,7 +344,7 @@ public sealed class DataCommandTests
                 new DataTrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     [],
                     [],
@@ -370,7 +370,7 @@ public sealed class DataCommandTests
                 new DataTrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "^dbo\\.",
                     [],
                     [],
@@ -435,7 +435,7 @@ public sealed class DataCommandTests
                 new DataUntrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "dbo.*",
                     [],
                     [],
@@ -461,7 +461,7 @@ public sealed class DataCommandTests
                 new DataUntrackPlan(
                     ".\\schema",
                     ".\\schema",
-                    ".\\schema\\sqlct.config.json",
+                    ".\\schema\\sqlct.config.yaml",
                     "^dbo\\.",
                     [],
                     [],
