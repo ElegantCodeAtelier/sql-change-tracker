@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-04-13
 
 ### Changed
 - Replace `sqlct.config.json` with `sqlct.config.yaml` as the project configuration file; config files are now written in YAML with a header comment block containing a tool introduction, installation instructions, usage instructions, and a link to the GitHub repository.
@@ -133,7 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Exit codes aligned with spec: `0` (no diffs), `1` (diffs present), `2`/`3`/`4` (failure categories).
 - NuGet CI publish workflow triggered on version tag push.
 
-[Unreleased]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ElegantCodeAtelier/sql-change-tracker/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ElegantCodeAtelier/sql-change-tracker/releases/tag/v0.2.0
