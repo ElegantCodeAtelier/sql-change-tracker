@@ -162,7 +162,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
         string? password = null;
         if (string.Equals(auth, "sql", StringComparison.OrdinalIgnoreCase))
         {
-            Console.WriteLine("  WARNING: password will be stored in plain text in sqlct.config.json.");
+            Console.WriteLine("  WARNING: password will be stored in plain text in sqlct.config.yaml.");
             Console.Write("  Username: ");
             user = Console.ReadLine()?.Trim();
             Console.Write("  Password: ");
@@ -225,7 +225,7 @@ internal sealed class InitCommand : Command<InitCommandSettings>
 
         return
         [
-            "Edit 'sqlct.config.json' to configure your database connection.",
+            "Edit 'sqlct.config.yaml' to configure your database connection.",
             "Run 'sqlct config' to validate your configuration.",
             "Run 'sqlct pull' to pull the current database schema into your folder.",
         ];

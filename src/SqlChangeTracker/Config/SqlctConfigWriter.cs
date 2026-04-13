@@ -1,9 +1,25 @@
-using System.Text.Json;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace SqlChangeTracker.Config;
 
 internal sealed class SqlctConfigWriter
 {
+    private const string HeaderComment =
+        "# SQL Change Tracker (sqlct)\n" +
+        "# https://github.com/ElegantCodeAtelier/sql-change-tracker\n" +
+        "#\n" +
+        "# Installation:\n" +
+        "#   dotnet tool install --global sqlct\n" +
+        "#\n" +
+        "# Usage:\n" +
+        "#   sqlct init     - initialize this project\n" +
+        "#   sqlct config   - validate and rewrite configuration\n" +
+        "#   sqlct status   - compare database against schema folder\n" +
+        "#   sqlct diff     - show textual schema differences\n" +
+        "#   sqlct pull     - pull database schema into folder\n" +
+        "#\n";
+
     public static string GetDefaultPath(string baseDirectory)
         => Path.Combine(baseDirectory, ConfigFileNames.SqlctConfigFileName);
 
@@ -24,13 +40,12 @@ internal sealed class SqlctConfigWriter
                 return ConfigWriteResult.Ok(Array.Empty<string>(), new[] { ConfigFileNames.SqlctConfigFileName });
             }
 
-            var options = new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            };
+            var serializer = new SerializerBuilder()
+                .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                .Build();
 
-            var payload = JsonSerializer.Serialize(config, options);
+            var yaml = serializer.Serialize(config);
+            var payload = HeaderComment + yaml;
             File.WriteAllText(configPath, payload);
 
             return ConfigWriteResult.Ok(new[] { ConfigFileNames.SqlctConfigFileName }, Array.Empty<string>());

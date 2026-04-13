@@ -26,7 +26,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 | Stream | Scope | Status | Notes |
 | --- | --- | --- | --- |
 | S1 | CLI foundation and command wiring | done | Command registration and global settings are in place. |
-| S2 | Config and init flows | done | `sqlct.config.json` read/write and project seeding are functional. |
+| S2 | Config and init flows | done | `sqlct.config.yaml` read/write and project seeding are functional. |
 | S3 | SQL adapter and schema mapping | done | Active object-type services are integrated into command runtime. |
 | S3b | Additional object-type activation | done | Active scope covers broker, full-text, XML schema collection, search-property-list, and assembly support needed for current compatibility work. |
 | S4 | Status/diff engine | done | End-to-end behavior implemented for active object types. |
@@ -164,7 +164,7 @@ Status values: `not_started`, `in_progress`, `blocked`, `done`.
 
 ## Cross-Cutting Rules
 - Specs are authoritative over inferred behavior.
-- `sqlct.config.json` is the primary runtime configuration source.
+- `sqlct.config.yaml` is the primary runtime configuration source.
 - Local artifacts under `local/` remain untracked.
 - Keep naming compatibility-neutral in code and docs.
 - Keep v1 runtime scope constrained to the active object types and simplified config contract.

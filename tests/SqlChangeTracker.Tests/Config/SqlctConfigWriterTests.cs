@@ -1,5 +1,4 @@
 using SqlChangeTracker.Config;
-using System.Text.Json;
 using Xunit;
 
 namespace SqlChangeTracker.Tests.Config;
@@ -35,6 +34,37 @@ public sealed class SqlctConfigWriterTests
     }
 
     [Fact]
+    public void Read_WhenLegacyJsonConfigExists_ReturnsMigrationHint()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            // Write the old JSON config file (no YAML file present).
+            var legacyPath = Path.Combine(tempDir, ConfigFileNames.SqlctConfigLegacyFileName);
+            File.WriteAllText(legacyPath, "{}");
+
+            var configPath = Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName);
+            var reader = new SqlctConfigReader();
+            var result = reader.Read(configPath);
+
+            Assert.False(result.Success);
+            Assert.Equal(ErrorCodes.MissingLink, result.Error!.Code);
+            Assert.NotNull(result.Error.Hint);
+            Assert.Contains(ConfigFileNames.SqlctConfigLegacyFileName, result.Error.Hint);
+            Assert.Contains(ConfigFileNames.SqlctConfigFileName, result.Error.Hint);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
     public void Write_CreatesConfigWithDefaults()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
@@ -52,12 +82,16 @@ public sealed class SqlctConfigWriterTests
             Assert.Contains(ConfigFileNames.SqlctConfigFileName, result.Created);
             Assert.True(File.Exists(configPath));
 
-            using var document = JsonDocument.Parse(File.ReadAllText(configPath));
-            var root = document.RootElement;
-            Assert.Equal(string.Empty, root.GetProperty("database").GetProperty("server").GetString());
-            Assert.Equal(string.Empty, root.GetProperty("database").GetProperty("name").GetString());
-            Assert.Equal("integrated", root.GetProperty("database").GetProperty("auth").GetString());
-            Assert.Equal(0, root.GetProperty("data").GetProperty("trackedTables").GetArrayLength());
+            var yamlText = File.ReadAllText(configPath);
+            Assert.StartsWith("#", yamlText);
+
+            // Deserialize to verify values via the reader.
+            var readResult = new SqlctConfigReader().Read(configPath);
+            Assert.True(readResult.Success);
+            Assert.Equal(string.Empty, readResult.Config!.Database.Server);
+            Assert.Equal(string.Empty, readResult.Config.Database.Name);
+            Assert.Equal("integrated", readResult.Config.Database.Auth);
+            Assert.Empty(readResult.Config.Data.TrackedTables);
         }
         finally
         {
@@ -77,25 +111,23 @@ public sealed class SqlctConfigWriterTests
         try
         {
             var configPath = SqlctConfigWriter.GetDefaultPath(tempDir);
+            // Write a YAML config that contains deprecated fields (IgnoreUnmatchedProperties drops them).
             File.WriteAllText(configPath, """
-                {
-                  "database": {
-                    "server": "localhost",
-                    "name": "MyDb",
-                    "auth": "integrated",
-                    "user": "",
-                    "password": "",
-                    "trustServerCertificate": false
-                  },
-                  "options": {
-                    "includeSchemas": ["dbo"],
-                    "excludeObjects": ["sys.*"],
-                    "orderByDependencies": false,
-                    "comparison": {
-                      "ignoreWhitespace": true
-                    }
-                  }
-                }
+                database:
+                  server: localhost
+                  name: MyDb
+                  auth: integrated
+                  user: ''
+                  password: ''
+                  trustServerCertificate: false
+                options:
+                  includeSchemas:
+                    - dbo
+                  excludeObjects:
+                    - sys.*
+                  orderByDependencies: false
+                  comparison:
+                    ignoreWhitespace: true
                 """);
 
             var reader = new SqlctConfigReader();
@@ -106,12 +138,17 @@ public sealed class SqlctConfigWriterTests
             var write = writer.Write(configPath, read.Config!, overwriteExisting: true);
             Assert.True(write.Success);
 
-            using var document = JsonDocument.Parse(File.ReadAllText(configPath));
-            var options = document.RootElement.GetProperty("options");
-            Assert.False(options.TryGetProperty("includeSchemas", out _));
-            Assert.False(options.TryGetProperty("excludeObjects", out _));
-            Assert.False(options.TryGetProperty("comparison", out _));
-            Assert.Equal(0, document.RootElement.GetProperty("data").GetProperty("trackedTables").GetArrayLength());
+            var yamlText = File.ReadAllText(configPath);
+            // Deprecated keys must not appear in the rewritten output.
+            Assert.DoesNotContain("includeSchemas", yamlText);
+            Assert.DoesNotContain("excludeObjects", yamlText);
+            Assert.DoesNotContain("orderByDependencies", yamlText);
+            Assert.DoesNotContain("comparison", yamlText);
+
+            // Re-read and verify the data section is empty.
+            var readAgain = new SqlctConfigReader().Read(configPath);
+            Assert.True(readAgain.Success);
+            Assert.Empty(readAgain.Config!.Data.TrackedTables);
         }
         finally
         {
@@ -139,15 +176,10 @@ public sealed class SqlctConfigWriterTests
 
             Assert.True(result.Success);
 
-            using var document = JsonDocument.Parse(File.ReadAllText(configPath));
-            var tracked = document.RootElement
-                .GetProperty("data")
-                .GetProperty("trackedTables")
-                .EnumerateArray()
-                .Select(item => item.GetString())
-                .ToArray();
-
-            Assert.Equal(new[] { "dbo.Customer", "sales.Order" }, tracked);
+            // Read back via the reader and verify normalization.
+            var readResult = new SqlctConfigReader().Read(configPath);
+            Assert.True(readResult.Success);
+            Assert.Equal(new[] { "dbo.Customer", "sales.Order" }, readResult.Config!.Data.TrackedTables.ToArray());
         }
         finally
         {
@@ -158,3 +190,4 @@ public sealed class SqlctConfigWriterTests
         }
     }
 }
+
