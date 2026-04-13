@@ -87,15 +87,6 @@ Validation rules:
 - Entries in `data.trackedTables` MUST be unique case-insensitively and persisted in stable sorted order.
 - When omitted, `data.trackedTables` defaults to an empty array.
 
-## Migration from JSON config
-Projects initialized with `sqlct` v0.3.0 or earlier use `sqlct.config.json`. To migrate:
-
-1. Rename `sqlct.config.json` to `sqlct.config.yaml`.
-2. Translate the JSON content to YAML (the field names are identical; the schema is the same).
-3. Run `sqlct config` to validate and normalize the migrated file.
-
-If `sqlct.config.yaml` is absent but `sqlct.config.json` is present in the project directory, `sqlct` exits with a targeted error and migration hint instead of a generic "not initialized" message.
-
 ## External interoperability
 - Compatibility-file presence may be detected for summary/reporting purposes.
 - Any future mapping from compatibility files into runtime config is a vNext item.

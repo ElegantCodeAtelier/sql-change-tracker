@@ -34,37 +34,6 @@ public sealed class SqlctConfigWriterTests
     }
 
     [Fact]
-    public void Read_WhenLegacyJsonConfigExists_ReturnsMigrationHint()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
-
-        try
-        {
-            // Write the old JSON config file (no YAML file present).
-            var legacyPath = Path.Combine(tempDir, ConfigFileNames.SqlctConfigLegacyFileName);
-            File.WriteAllText(legacyPath, "{}");
-
-            var configPath = Path.Combine(tempDir, ConfigFileNames.SqlctConfigFileName);
-            var reader = new SqlctConfigReader();
-            var result = reader.Read(configPath);
-
-            Assert.False(result.Success);
-            Assert.Equal(ErrorCodes.MissingLink, result.Error!.Code);
-            Assert.NotNull(result.Error.Hint);
-            Assert.Contains(ConfigFileNames.SqlctConfigLegacyFileName, result.Error.Hint);
-            Assert.Contains(ConfigFileNames.SqlctConfigFileName, result.Error.Hint);
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-            {
-                Directory.Delete(tempDir, true);
-            }
-        }
-    }
-
-    [Fact]
     public void Write_CreatesConfigWithDefaults()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "sqlct-tests", Guid.NewGuid().ToString("N"));

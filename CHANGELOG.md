@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Replace `sqlct.config.json` with `sqlct.config.yaml` as the project configuration file; config files are now written in YAML with a header comment block containing a tool introduction, installation instructions, usage instructions, and a link to the GitHub repository.
 
 ### Removed
-- `sqlct.config.json` is no longer created by `sqlct init`; existing users should rename the file to `sqlct.config.yaml` and run `sqlct config` to rewrite it in the new format.
+- `sqlct.config.json` is no longer supported; existing users should rename the file to `sqlct.config.yaml` and run `sqlct config` to rewrite it in the new format.
 
 ## [0.3.0] - 2026-04-12
 

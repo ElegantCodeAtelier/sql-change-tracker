@@ -10,24 +10,6 @@ internal sealed class SqlctConfigReader
     {
         if (!File.Exists(configPath))
         {
-            // Detect legacy JSON config to give a targeted migration hint.
-            var directory = Path.GetDirectoryName(configPath);
-            if (directory != null)
-            {
-                var legacyPath = Path.Combine(directory, ConfigFileNames.SqlctConfigLegacyFileName);
-                if (File.Exists(legacyPath))
-                {
-                    return SqlctConfigReadResult.Failure(
-                        new ErrorInfo(
-                            ErrorCodes.MissingLink,
-                            "no linked schema folder found.",
-                            File: configPath,
-                            Detail: $"found '{ConfigFileNames.SqlctConfigLegacyFileName}' but '{ConfigFileNames.SqlctConfigFileName}' is required.",
-                            Hint: $"rename '{ConfigFileNames.SqlctConfigLegacyFileName}' to '{ConfigFileNames.SqlctConfigFileName}' and run `sqlct config` to migrate."),
-                        ExitCodes.InvalidConfig);
-                }
-            }
-
             return SqlctConfigReadResult.Failure(
                 new ErrorInfo(
                     ErrorCodes.MissingLink,
